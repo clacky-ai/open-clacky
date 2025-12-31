@@ -112,6 +112,12 @@ module Clacky
       registry.register(Tools::Calculator.new)
       registry.register(Tools::Shell.new)
       registry.register(Tools::FileReader.new)
+      registry.register(Tools::Write.new)
+      registry.register(Tools::Edit.new)
+      registry.register(Tools::Glob.new)
+      registry.register(Tools::Grep.new)
+      registry.register(Tools::WebSearch.new)
+      registry.register(Tools::WebFetch.new)
 
       say "\n📦 Available Tools:\n\n", :green
 

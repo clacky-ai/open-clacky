@@ -275,6 +275,12 @@ module Clacky
       @tool_registry.register(Tools::Calculator.new)
       @tool_registry.register(Tools::Shell.new)
       @tool_registry.register(Tools::FileReader.new)
+      @tool_registry.register(Tools::Write.new)
+      @tool_registry.register(Tools::Edit.new)
+      @tool_registry.register(Tools::Glob.new)
+      @tool_registry.register(Tools::Grep.new)
+      @tool_registry.register(Tools::WebSearch.new)
+      @tool_registry.register(Tools::WebFetch.new)
     end
   end
 end
