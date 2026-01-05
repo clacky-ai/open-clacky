@@ -143,6 +143,9 @@ module Clacky
     def think(&block)
       emit_event(:thinking, { iteration: @iterations }, &block)
 
+      # Compress messages if needed to reduce cost
+      compress_messages_if_needed if @config.enable_compression
+
       # Always send tools definitions to allow multi-step tool calling
       tools_to_send = @tool_registry.allowed_definitions(@config.allowed_tools)
 
@@ -251,6 +254,69 @@ module Clacky
       input_cost = (usage[:prompt_tokens] / 1_000_000.0) * PRICING[:input]
       output_cost = (usage[:completion_tokens] / 1_000_000.0) * PRICING[:output]
       @total_cost += input_cost + output_cost
+    end
+
+    def compress_messages_if_needed
+      # Check if compression is enabled
+      return unless @config.enable_compression
+
+      # Only compress if we have more messages than threshold
+      threshold = @config.keep_recent_messages + 5 # +5 to avoid compressing too frequently
+      return if @messages.size <= threshold
+
+      puts "\n🗜️  Compressing conversation history (#{@messages.size} messages -> ~#{@config.keep_recent_messages + 2})" if @config.verbose
+
+      # Find the system message (should be first)
+      system_msg = @messages.find { |m| m[:role] == "system" }
+
+      # Get the most recent N messages
+      recent_messages = @messages.last(@config.keep_recent_messages)
+
+      # Get messages to compress (everything except system and recent)
+      messages_to_compress = @messages.reject { |m| m[:role] == "system" || recent_messages.include?(m) }
+
+      return if messages_to_compress.empty?
+
+      # Create summary of compressed messages
+      summary = summarize_messages(messages_to_compress)
+
+      # Rebuild messages array: [system, summary, recent_messages]
+      @messages = [system_msg, summary, *recent_messages].compact
+    end
+
+    def summarize_messages(messages)
+      # Count different message types
+      user_msgs = messages.count { |m| m[:role] == "user" }
+      assistant_msgs = messages.count { |m| m[:role] == "assistant" }
+      tool_msgs = messages.count { |m| m[:role] == "tool" }
+
+      # Extract key information
+      tools_used = messages
+        .select { |m| m[:role] == "assistant" && m[:tool_calls] }
+        .flat_map { |m| m[:tool_calls].map { |tc| tc.dig(:function, :name) } }
+        .compact
+        .uniq
+
+      # Count completed tasks from tool results
+      completed_todos = messages
+        .select { |m| m[:role] == "tool" }
+        .map { |m| JSON.parse(m[:content]) rescue nil }
+        .compact
+        .select { |data| data.is_a?(Hash) && data["message"]&.include?("completed") }
+        .size
+
+      summary_text = "Previous conversation summary (#{messages.size} messages compressed):\n"
+      summary_text += "- User requests: #{user_msgs}\n"
+      summary_text += "- Assistant responses: #{assistant_msgs}\n"
+      summary_text += "- Tool executions: #{tool_msgs}\n"
+      summary_text += "- Tools used: #{tools_used.join(', ')}\n" if tools_used.any?
+      summary_text += "- Completed tasks: #{completed_todos}\n" if completed_todos > 0
+      summary_text += "\nContinuing with recent conversation context..."
+
+      {
+        role: "user",
+        content: "[SYSTEM] " + summary_text
+      }
     end
 
     def emit_event(type, data, &block)

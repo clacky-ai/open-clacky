@@ -121,12 +121,32 @@ The agent will:
 #### Agent Options
 
 ```bash
---path PATH              # Project directory (defaults to current directory)
---mode MODE              # Permission mode
---tools TOOL1 TOOL2      # Allowed tools (or "all")
---max-iterations N       # Maximum iterations (default: 10)
---max-cost N             # Maximum cost in USD (default: 1.0)
---verbose                # Show detailed output
+--path PATH                    # Project directory (defaults to current directory)
+--mode MODE                    # Permission mode
+--tools TOOL1 TOOL2            # Allowed tools (or "all")
+--max-iterations N             # Maximum iterations (default: 50)
+--max-cost N                   # Maximum cost in USD (default: 5.0)
+--verbose                      # Show detailed output
+```
+
+#### Cost Control & Memory Management
+
+The agent includes intelligent cost control features:
+
+- **Automatic Message Compression**: When conversation history grows beyond 25 messages, the agent automatically compresses older messages into a summary, keeping only the system prompt and the most recent 20 messages. This dramatically reduces token costs for long-running tasks.
+
+- **Configurable Limits**:
+  - `max_iterations`: Maximum number of agent loops (default: 50)
+  - `max_cost_usd`: Maximum total cost in USD (default: $5.00)
+  - `timeout_seconds`: Maximum execution time (default: 600s)
+
+- **Compression Settings**:
+  - `enable_compression`: Enable/disable automatic compression (default: true)
+  - `keep_recent_messages`: Number of recent messages to preserve (default: 20)
+
+Example with custom limits:
+```bash
+clacky agent --max-iterations=100 --max-cost=10.0 --verbose
 ```
 
 ### List Available Tools
