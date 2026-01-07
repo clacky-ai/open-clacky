@@ -145,10 +145,19 @@ module Clacky
         todo[:completed_at] = Time.now.iso8601
         save_todos(todos)
 
-        {
+        # Build response with rules reminder
+        response = {
           message: "Task marked as completed",
           todo: todo
         }
+
+        # Add reminder to check project rules in system prompt
+        rules_file = File.join(@work_dir, ".clackyrules")
+        if File.exist?(rules_file)
+          response[:reminder] = "⚠️ REMINDER: Check the PROJECT-SPECIFIC RULES section in your system prompt before continuing to the next task!"
+        end
+
+        response
       end
 
       def remove_todo(id)

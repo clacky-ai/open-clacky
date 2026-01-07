@@ -3,6 +3,7 @@
 require "thor"
 require "tty-prompt"
 require "tty-spinner"
+require "readline"
 
 module Clacky
   class CLI < Thor
@@ -58,11 +59,19 @@ module Clacky
         confirm_all     - Confirm every tool use (default)
         plan_only       - Generate plan without executing
 
+      Session management:
+        -c, --continue  - Continue the most recent session for this directory
+        -l, --list      - List recent sessions
+        -a, --attach N  - Attach to session number N from the list
+
       Examples:
         $ clacky agent
         $ clacky agent "Create a README file"
         $ clacky agent --mode=auto_approve --path /path/to/project
         $ clacky agent --tools file_reader glob grep
+        $ clacky agent -c
+        $ clacky agent -l
+        $ clacky agent -a 2
     LONGDESC
     option :mode, type: :string, default: "confirm_edits",
            desc: "Permission mode: auto_approve, confirm_edits, confirm_all, plan_only"
@@ -71,6 +80,9 @@ module Clacky
     option :max_cost, type: :numeric, desc: "Maximum cost in USD (default: 5.0)"
     option :verbose, type: :boolean, default: false, desc: "Show detailed output"
     option :path, type: :string, desc: "Project directory path (defaults to current directory)"
+    option :continue, type: :boolean, aliases: "-c", desc: "Continue most recent session"
+    option :list, type: :boolean, aliases: "-l", desc: "List recent sessions"
+    option :attach, type: :numeric, aliases: "-a", desc: "Attach to session by number"
     def agent(message = nil)
       config = Clacky::Config.load
 
@@ -79,10 +91,15 @@ module Clacky
         exit 1
       end
 
-      # Handle Ctrl+C gracefully
+      # Handle session listing
+      if options[:list]
+        list_sessions
+        return
+      end
+
+      # Handle Ctrl+C gracefully - raise exception to be caught in the loop
       Signal.trap("INT") do
-        puts "\n\n⚠️  Interrupted by user (Ctrl+C)"
-        exit 130 # Standard exit code for SIGINT
+        Thread.main.raise(Clacky::AgentInterrupted, "Interrupted by user")
       end
 
       # Validate and get working directory
@@ -91,7 +108,19 @@ module Clacky
       # Build agent config
       agent_config = build_agent_config(config)
       client = Clacky::Client.new(config.api_key, base_url: config.base_url)
-      agent = Clacky::Agent.new(client, agent_config)
+
+      # Handle session loading/continuation
+      session_manager = Clacky::SessionManager.new
+      agent = nil
+
+      if options[:continue]
+        agent = load_latest_session(client, agent_config, session_manager, working_dir)
+      elsif options[:attach]
+        agent = load_session_by_number(client, agent_config, session_manager, working_dir, options[:attach])
+      end
+
+      # Create new agent if no session loaded
+      agent ||= Clacky::Agent.new(client, agent_config, working_dir: working_dir)
 
       # Change to working directory
       original_dir = Dir.pwd
@@ -100,7 +129,7 @@ module Clacky
 
       begin
         # Always run in interactive mode
-        run_agent_interactive(agent, working_dir, agent_config, message)
+        run_agent_interactive(agent, working_dir, agent_config, message, session_manager)
       rescue StandardError => e
         say "\n❌ Error: #{e.message}", :red
         say e.backtrace.first(5).join("\n"), :red if options[:verbose]
@@ -236,7 +265,19 @@ module Clacky
         end
       end
 
-      def run_agent_interactive(agent, working_dir, agent_config, initial_message = nil)
+      def run_agent_interactive(agent, working_dir, agent_config, initial_message = nil, session_manager = nil)
+        # Show session info if continuing
+        if agent.total_tasks > 0
+          say "📂 Continuing session: #{agent.session_id[0..7]}", :green
+          say "   Created: #{Time.parse(agent.created_at).strftime('%Y-%m-%d %H:%M')}", :cyan
+          say "   Tasks completed: #{agent.total_tasks}", :cyan
+          say "   Total cost: $#{agent.total_cost.round(4)}", :cyan
+          say ""
+
+          # Show recent conversation history
+          display_recent_messages(agent.messages, limit: 5)
+        end
+
         say "🤖 Starting interactive agent mode...", :green
         say "Working directory: #{working_dir}", :cyan
         say "Mode: #{agent_config.permission_mode}", :yellow
@@ -245,8 +286,8 @@ module Clacky
         say "\nType 'exit' or 'quit' to end the session.\n", :yellow
 
         prompt = TTY::Prompt.new
-        total_tasks = 0
-        total_cost = 0.0
+        total_tasks = agent.total_tasks
+        total_cost = agent.total_cost
 
         # Process initial message if provided
         current_message = initial_message
@@ -255,7 +296,10 @@ module Clacky
           # Get message from user if not provided
           unless current_message && !current_message.strip.empty?
             say "\n" if total_tasks > 0
-            current_message = prompt.ask("You:", required: false)
+
+            # Use Readline for better Unicode/CJK support
+            current_message = Readline.readline("You: ", true)
+
             break if current_message.nil? || %w[exit quit].include?(current_message&.downcase&.strip)
             next if current_message.strip.empty?
           end
@@ -270,6 +314,11 @@ module Clacky
 
             total_cost += result[:total_cost_usd]
 
+            # Save session after each task
+            if session_manager
+              session_manager.save(agent.to_session_data)
+            end
+
             # Show brief task completion
             say "\n" + ("-" * 60), :cyan
             say "✓ Task completed", :green
@@ -277,6 +326,15 @@ module Clacky
             say "  Cost: $#{result[:total_cost_usd].round(4)}", :white
             say "  Session total: #{total_tasks} tasks, $#{total_cost.round(4)}", :yellow
             say "-" * 60, :cyan
+          rescue Clacky::AgentInterrupted
+            # Save session on interruption
+            if session_manager
+              session_manager.save(agent.to_session_data)
+            end
+
+            # User pressed Ctrl+C - stop current task but don't exit
+            say "\n\n⚠️  Task interrupted by user (Ctrl+C)", :yellow
+            say "Session saved. You can start a new task or type 'exit' to quit.\n", :yellow
           rescue StandardError => e
             say "\n❌ Error: #{e.message}", :red
             say e.backtrace.first(3).join("\n"), :white if options[:verbose]
@@ -287,9 +345,112 @@ module Clacky
           current_message = nil
         end
 
+        # Save final session state
+        if session_manager
+          session_manager.save(agent.to_session_data)
+        end
+
         say "\n👋 Agent session ended", :green
         say "Total tasks completed: #{total_tasks}", :cyan
         say "Total cost: $#{total_cost.round(4)}", :cyan
+      end
+
+      def list_sessions
+        session_manager = Clacky::SessionManager.new
+        working_dir = validate_working_directory(options[:path])
+        sessions = session_manager.list(current_dir: working_dir, limit: 5)
+
+        if sessions.empty?
+          say "No sessions found.", :yellow
+          return
+        end
+
+        say "\n📋 Recent sessions:\n", :green
+        sessions.each_with_index do |session, index|
+          created_at = Time.parse(session[:created_at]).strftime("%Y-%m-%d %H:%M")
+          session_id = session[:session_id][0..7]
+          tasks = session.dig(:stats, :total_tasks) || 0
+          cost = session.dig(:stats, :total_cost_usd) || 0.0
+          first_msg = session[:first_user_message] || "No message"
+          is_current_dir = session[:working_dir] == working_dir
+
+          dir_marker = is_current_dir ? "📍" : "  "
+          say "#{dir_marker} #{index + 1}. [#{session_id}] #{created_at} (#{tasks} tasks, $#{cost.round(4)}) - #{first_msg}", :cyan
+        end
+        say ""
+      end
+
+      def load_latest_session(client, agent_config, session_manager, working_dir)
+        session_data = session_manager.latest_for_directory(working_dir)
+
+        if session_data.nil?
+          say "No previous session found for this directory.", :yellow
+          return nil
+        end
+
+        say "Loading latest session: #{session_data[:session_id][0..7]}", :green
+        Clacky::Agent.from_session(client, agent_config, session_data)
+      end
+
+      def load_session_by_number(client, agent_config, session_manager, working_dir, number)
+        sessions = session_manager.list(current_dir: working_dir, limit: 10)
+
+        if sessions.empty?
+          say "No sessions found.", :yellow
+          return nil
+        end
+
+        index = number - 1
+        if index < 0 || index >= sessions.size
+          say "Invalid session number. Use -l to list available sessions.", :red
+          exit 1
+        end
+
+        session_data = sessions[index]
+        say "Loading session: #{session_data[:session_id][0..7]}", :green
+        Clacky::Agent.from_session(client, agent_config, session_data)
+      end
+
+      def display_recent_messages(messages, limit: 5)
+        # Filter out user and assistant messages (exclude system and tool messages)
+        conversation_messages = messages.select { |m| m[:role] == "user" || m[:role] == "assistant" }
+
+        # Get the last N messages
+        recent = conversation_messages.last(limit * 2) # *2 to get user+assistant pairs
+
+        if recent.empty?
+          return
+        end
+
+        say "📜 Recent conversation history:\n", :yellow
+        say "-" * 60, :white
+
+        recent.each do |msg|
+          case msg[:role]
+          when "user"
+            content = truncate_message(msg[:content], 150)
+            say "\n👤 You: #{content}", :cyan
+          when "assistant"
+            content = truncate_message(msg[:content], 200)
+            say "🤖 Assistant: #{content}", :green
+          end
+        end
+
+        say "\n" + ("-" * 60), :white
+        say ""
+      end
+
+      def truncate_message(content, max_length)
+        return "" if content.nil? || content.empty?
+
+        # Remove excessive whitespace
+        cleaned = content.strip.gsub(/\s+/, ' ')
+
+        if cleaned.length > max_length
+          cleaned[0...max_length] + "..."
+        else
+          cleaned
+        end
       end
     end
 
@@ -319,10 +480,11 @@ module Clacky
         model: options[:model] || config.model,
         base_url: config.base_url
       )
-      prompt = TTY::Prompt.new
 
       loop do
-        message = prompt.ask("You:", required: false)
+        # Use Readline for better Unicode/CJK support
+        message = Readline.readline("You: ", true)
+
         break if message.nil? || %w[exit quit].include?(message.downcase.strip)
         next if message.strip.empty?
 

@@ -11,9 +11,9 @@ module Clacky
 
     def initialize(options = {})
       @model = options[:model] || "gpt-3.5-turbo"
-      @max_iterations = options[:max_iterations] || 50
+      @max_iterations = options[:max_iterations] || 200
       @max_cost_usd = options[:max_cost_usd] || 5.0
-      @timeout_seconds = options[:timeout_seconds] || 600
+      @timeout_seconds = options[:timeout_seconds] # nil means no timeout
       @permission_mode = validate_permission_mode(options[:permission_mode])
       @allowed_tools = options[:allowed_tools]
       @disallowed_tools = options[:disallowed_tools] || []

@@ -11,6 +11,7 @@ require_relative "clacky/hook_manager"
 require_relative "clacky/tool_registry"
 require_relative "clacky/thinking_verbs"
 require_relative "clacky/progress_indicator"
+require_relative "clacky/session_manager"
 require_relative "clacky/tools/base"
 require_relative "clacky/tools/calculator"
 require_relative "clacky/tools/shell"
@@ -28,4 +29,5 @@ require_relative "clacky/cli"
 
 module Clacky
   class Error < StandardError; end
+  class AgentInterrupted < StandardError; end
 end

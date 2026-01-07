@@ -54,7 +54,15 @@ module Clacky
       if verbose || ENV["CLACKY_DEBUG"]
         puts "\n[DEBUG] Current directory: #{Dir.pwd}"
         puts "[DEBUG] Request to API:"
-        puts JSON.pretty_generate(body)
+
+        # Create a simplified version of the body for display
+        display_body = body.dup
+        if display_body[:tools]&.any?
+          tool_names = display_body[:tools].map { |t| t.dig(:function, :name) }.compact
+          display_body[:tools] = "use tools: #{tool_names.join(', ')}"
+        end
+
+        puts JSON.pretty_generate(display_body)
       end
 
       response = connection.post("chat/completions") do |req|
@@ -98,6 +106,13 @@ module Clacky
         data = JSON.parse(response.body)
         message = data["choices"].first["message"]
         usage = data["usage"]
+
+        # Debug: show raw API response content
+        if ENV["CLACKY_DEBUG"]
+          puts "\n[DEBUG] Raw API response content:"
+          puts "  content: #{message["content"].inspect}"
+          puts "  content length: #{message["content"]&.length || 0}"
+        end
 
         {
           content: message["content"],

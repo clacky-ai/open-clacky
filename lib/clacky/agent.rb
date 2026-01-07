@@ -5,7 +5,7 @@ require "json"
 
 module Clacky
   class Agent
-    attr_reader :session_id, :messages, :iterations, :total_cost
+    attr_reader :session_id, :messages, :iterations, :total_cost, :working_dir, :created_at, :total_tasks
 
     # Pricing per 1M tokens (approximate - adjust based on actual model)
     PRICING = {
@@ -71,7 +71,7 @@ module Clacky
       Remember: You are an ACTION-ORIENTED agent. When users ask you to do something, DO IT using tools, don't just talk about it!
     PROMPT
 
-    def initialize(client, config = {})
+    def initialize(client, config = {}, working_dir: nil)
       @client = client
       @config = config.is_a?(AgentConfig) ? config : AgentConfig.new(config)
       @tool_registry = ToolRegistry.new
@@ -81,9 +81,29 @@ module Clacky
       @iterations = 0
       @total_cost = 0.0
       @start_time = nil
+      @working_dir = working_dir || Dir.pwd
+      @created_at = Time.now.iso8601
+      @total_tasks = 0
 
       # Register built-in tools
       register_builtin_tools
+    end
+
+    # Restore from a saved session
+    def self.from_session(client, config, session_data)
+      agent = new(client, config)
+      agent.restore_session(session_data)
+      agent
+    end
+
+    def restore_session(session_data)
+      @session_id = session_data[:session_id]
+      @messages = session_data[:messages]
+      @iterations = session_data.dig(:stats, :total_iterations) || 0
+      @total_cost = session_data.dig(:stats, :total_cost_usd) || 0.0
+      @working_dir = session_data[:working_dir]
+      @created_at = session_data[:created_at]
+      @total_tasks = session_data.dig(:stats, :total_tasks) || 0
     end
 
     def add_hook(event, &block)
@@ -95,10 +115,12 @@ module Clacky
 
       # Add system prompt as the first message if this is the first run
       if @messages.empty?
-        @messages << { role: "system", content: SYSTEM_PROMPT }
+        system_prompt = build_system_prompt
+        @messages << { role: "system", content: system_prompt }
       end
 
       @messages << { role: "user", content: user_input }
+      @total_tasks += 1
 
       emit_event(:on_start, { input: user_input }, &block)
       @hooks.trigger(:on_start, user_input)
@@ -114,17 +136,36 @@ module Clacky
           # Think: LLM reasoning with tool support
           response = think(&block)
 
+          # Debug: check for potential infinite loops
+          if @config.verbose
+            puts "[DEBUG] Iteration #{@iterations}: finish_reason=#{response[:finish_reason]}, tool_calls=#{response[:tool_calls]&.size || 'nil'}"
+          end
+
           # Check if done (no more tool calls needed)
-          if response[:finish_reason] == "stop" || response[:tool_calls].nil?
+          if response[:finish_reason] == "stop" || response[:tool_calls].nil? || response[:tool_calls].empty?
             emit_event(:answer, { content: response[:content] }, &block)
             break
           end
 
           # Act: Execute tool calls
-          tool_results = act(response[:tool_calls], &block)
+          action_result = act(response[:tool_calls], &block)
 
           # Observe: Add tool results to conversation context
-          observe(response, tool_results)
+          observe(response, action_result[:tool_results])
+
+          # Check if user denied any tool
+          if action_result[:denied]
+            # If user provided feedback, add it as a new user message and continue
+            if action_result[:feedback] && !action_result[:feedback].empty?
+              @messages << { role: "user", content: action_result[:feedback] }
+              # Continue loop to let agent respond to feedback
+              next
+            else
+              # User just said "no" without feedback - stop and wait
+              emit_event(:answer, { content: "Tool execution was denied. Please provide further instructions." }, &block)
+              break
+            end
+          end
         end
 
         result = build_result(:success)
@@ -138,7 +179,56 @@ module Clacky
       end
     end
 
+    # Generate session data for saving
+    def to_session_data
+      # Get first user message for preview
+      first_user_msg = @messages.find { |m| m[:role] == "user" }
+      first_message_preview = first_user_msg ? first_user_msg[:content][0..100] : "No messages"
+
+      {
+        session_id: @session_id,
+        created_at: @created_at,
+        updated_at: Time.now.iso8601,
+        working_dir: @working_dir,
+        config: {
+          model: @config.model,
+          permission_mode: @config.permission_mode.to_s,
+          max_iterations: @config.max_iterations,
+          max_cost_usd: @config.max_cost_usd
+        },
+        stats: {
+          total_tasks: @total_tasks,
+          total_iterations: @iterations,
+          total_cost_usd: @total_cost.round(4),
+          duration_seconds: @start_time ? (Time.now - @start_time).round(2) : 0
+        },
+        messages: @messages,
+        first_user_message: first_message_preview
+      }
+    end
+
     private
+
+    def build_system_prompt
+      prompt = SYSTEM_PROMPT.dup
+
+      # Load .clackyrules if exists
+      rules_file = File.join(@working_dir, ".clackyrules")
+      if File.exist?(rules_file)
+        rules_content = File.read(rules_file).strip
+        unless rules_content.empty?
+          prompt += "\n\n" + "=" * 80 + "\n"
+          prompt += "PROJECT-SPECIFIC RULES (from .clackyrules):\n"
+          prompt += "=" * 80 + "\n"
+          prompt += rules_content
+          prompt += "\n" + "=" * 80 + "\n"
+          prompt += "⚠️ IMPORTANT: Follow these project-specific rules at all times!\n"
+          prompt += "=" * 80
+        end
+      end
+
+      prompt
+    end
 
     def think(&block)
       emit_event(:thinking, { iteration: @iterations }, &block)
@@ -153,38 +243,42 @@ module Clacky
       progress = ProgressIndicator.new(verbose: @config.verbose)
       progress.start
 
-      response = @client.send_messages_with_tools(
-        @messages,
-        model: @config.model,
-        tools: tools_to_send,
-        max_tokens: @config.max_tokens,
-        verbose: @config.verbose
-      )
+      begin
+        response = @client.send_messages_with_tools(
+          @messages,
+          model: @config.model,
+          tools: tools_to_send,
+          max_tokens: @config.max_tokens,
+          verbose: @config.verbose
+        )
 
-      progress.finish
+        track_cost(response[:usage])
 
-      track_cost(response[:usage])
+        # Add assistant response to messages
+        msg = { role: "assistant" }
+        # Always include content field (some APIs require it even with tool_calls)
+        # Use empty string instead of null for better compatibility
+        msg[:content] = response[:content] || ""
+        msg[:tool_calls] = format_tool_calls_for_api(response[:tool_calls]) if response[:tool_calls]
+        @messages << msg
 
-      # Add assistant response to messages
-      msg = { role: "assistant" }
-      # Always include content field (some APIs require it even with tool_calls)
-      # Use empty string instead of null for better compatibility
-      msg[:content] = response[:content] || ""
-      msg[:tool_calls] = format_tool_calls_for_api(response[:tool_calls]) if response[:tool_calls]
-      @messages << msg
+        if @config.verbose
+          puts "\n[DEBUG] Assistant response added to messages:"
+          puts JSON.pretty_generate(msg)
+        end
 
-      if @config.verbose
-        puts "\n[DEBUG] Assistant response added to messages:"
-        puts JSON.pretty_generate(msg)
+        response
+      ensure
+        progress.finish
       end
-
-      response
     end
 
     def act(tool_calls, &block)
-      return [] unless tool_calls
+      return { denied: false, feedback: nil, tool_results: [] } unless tool_calls
 
-      tool_calls.map do |call|
+      denied = false
+      feedback = nil
+      results = tool_calls.map do |call|
         # Hook: before_tool_use
         hook_result = @hooks.trigger(:before_tool_use, call)
         if hook_result[:action] == :deny
@@ -199,8 +293,11 @@ module Clacky
             next build_planned_result(call)
           end
 
-          unless confirm_tool_use?(call, &block)
+          confirmation = confirm_tool_use?(call, &block)
+          unless confirmation[:approved]
             emit_event(:tool_denied, call, &block)
+            denied = true
+            feedback = confirmation[:feedback] if confirmation[:feedback]
             next build_denied_result(call)
           end
         end
@@ -224,6 +321,12 @@ module Clacky
           build_error_result(call, e.message)
         end
       end.compact
+
+      {
+        denied: denied,
+        feedback: feedback,
+        tool_results: results
+      }
     end
 
     def observe(response, tool_results)
@@ -248,7 +351,8 @@ module Clacky
         return true
       end
 
-      if Time.now - @start_time > @config.timeout_seconds
+      # Check timeout only if configured (nil means no timeout)
+      if @config.timeout_seconds && Time.now - @start_time > @config.timeout_seconds
         puts "\n⚠️  Reached timeout (#{@config.timeout_seconds}s)" if @config.verbose
         return true
       end
@@ -275,8 +379,8 @@ module Clacky
       # Find the system message (should be first)
       system_msg = @messages.find { |m| m[:role] == "system" }
 
-      # Get the most recent N messages
-      recent_messages = @messages.last(@config.keep_recent_messages)
+      # Get the most recent N messages, ensuring tool_use/tool_result pairs are kept together
+      recent_messages = get_recent_messages_with_tool_pairs(@messages, @config.keep_recent_messages)
 
       # Get messages to compress (everything except system and recent)
       messages_to_compress = @messages.reject { |m| m[:role] == "system" || recent_messages.include?(m) }
@@ -288,6 +392,40 @@ module Clacky
 
       # Rebuild messages array: [system, summary, recent_messages]
       @messages = [system_msg, summary, *recent_messages].compact
+    end
+
+    def get_recent_messages_with_tool_pairs(messages, count)
+      # Start from the end and work backwards
+      recent = []
+      i = messages.size - 1
+
+      while i >= 0 && recent.size < count
+        msg = messages[i]
+        recent.unshift(msg)
+
+        # If this is a tool result, make sure we include the corresponding assistant message with tool_calls
+        if msg[:role] == "tool"
+          # Find the previous assistant message with tool_calls
+          j = i - 1
+          while j >= 0
+            prev_msg = messages[j]
+            if prev_msg[:role] == "assistant" && prev_msg[:tool_calls]
+              # Check if this assistant message has the tool_call that matches our tool_result
+              has_matching_call = prev_msg[:tool_calls].any? { |tc| tc[:id] == msg[:tool_call_id] }
+              if has_matching_call && !recent.include?(prev_msg)
+                # Insert at the beginning to maintain order
+                recent.unshift(prev_msg)
+                break
+              end
+            end
+            j -= 1
+          end
+        end
+
+        i -= 1
+      end
+
+      recent
     end
 
     def summarize_messages(messages)
@@ -339,18 +477,59 @@ module Clacky
     def confirm_tool_use?(call, &block)
       emit_event(:tool_confirmation_required, call, &block)
 
-      puts "\n❓ Allow #{call[:name]}?"
-
-      # Show preview for editing tools
+      # Show preview first
       show_tool_preview(call)
 
-      print "\n   (y/n): "
+      # Then show the confirmation prompt with better formatting
+      prompt_text = format_tool_prompt(call)
+      puts "\n❓ #{prompt_text}"
+      print "   (Enter/y to approve, n to deny, or provide feedback): "
 
       response = $stdin.gets
-      return false if response.nil?  # Handle EOF/pipe input
+      if response.nil?  # Handle EOF/pipe input
+        return { approved: false, feedback: nil }
+      end
 
-      response = response.chomp.downcase
-      response == "y" || response == "yes"
+      response = response.chomp
+      response_lower = response.downcase
+
+      # Empty response (just Enter) or "y"/"yes" = approved
+      if response.empty? || response_lower == "y" || response_lower == "yes"
+        return { approved: true, feedback: nil }
+      end
+
+      # "n"/"no" = denied without feedback
+      if response_lower == "n" || response_lower == "no"
+        return { approved: false, feedback: nil }
+      end
+
+      # Any other input = denied with feedback
+      { approved: false, feedback: response }
+    end
+
+    def format_tool_prompt(call)
+      begin
+        args = JSON.parse(call[:arguments], symbolize_names: true)
+
+        case call[:name]
+        when "edit"
+          filename = File.basename(args[:file_path] || "unknown")
+          "Edit(#{filename})"
+        when "write"
+          filename = File.basename(args[:path] || "unknown")
+          if File.exist?(args[:path])
+            "Write(#{filename}) - overwrite existing"
+          else
+            "Write(#{filename}) - create new"
+          end
+        when "shell"
+          "Shell(#{args[:command]&.split&.first || 'command'})"
+        else
+          "Allow #{call[:name]}"
+        end
+      rescue JSON::ParserError
+        "Allow #{call[:name]}"
+      end
     end
 
     def show_tool_preview(call)
@@ -365,7 +544,7 @@ module Clacky
         when "shell"
           show_shell_preview(args)
         else
-          puts "   Args: #{call[:arguments]}"
+          puts "\nArgs: #{call[:arguments]}"
         end
       rescue JSON::ParserError
         puts "   Args: #{call[:arguments]}"
@@ -376,18 +555,18 @@ module Clacky
       path = args[:path]
       new_content = args[:content] || ""
 
-      puts "   File: #{path}"
+      puts "\n📝 File: #{path}"
 
       if File.exist?(path)
         old_content = File.read(path)
-        puts "   📝 Modifying existing file"
-        show_diff(old_content, new_content)
+        puts "Modifying existing file\n"
+        show_diff(old_content, new_content, max_lines: 50)
       else
-        puts "   📝 Creating new file"
-        puts "   Content preview (first 10 lines):"
-        preview_lines = new_content.lines.first(10)
+        puts "Creating new file"
+        puts "Content preview (first 20 lines):"
+        preview_lines = new_content.lines.first(20)
         preview_lines.each { |line| puts "   > #{line.chomp}" }
-        puts "   ... (#{new_content.lines.size} lines total)" if new_content.lines.size > 10
+        puts "   ... (#{new_content.lines.size} lines total)" if new_content.lines.size > 20
       end
     end
 
@@ -396,26 +575,31 @@ module Clacky
       old_string = args[:old_string] || ""
       new_string = args[:new_string] || ""
 
-      puts "   File: #{path}"
-      puts "   📝 Replacing text:"
-      puts "   - Old: #{old_string[0..100]}#{'...' if old_string.length > 100}"
-      puts "   + New: #{new_string[0..100]}#{'...' if new_string.length > 100}"
+      puts "\n📝 File: #{path}"
+
+      if File.exist?(path)
+        file_content = File.read(path)
+        new_content = file_content.sub(old_string, new_string)
+        show_diff(file_content, new_content, max_lines: 50)
+      else
+        puts "   ⚠️  File not found"
+      end
     end
 
     def show_shell_preview(args)
       command = args[:command] || ""
-      puts "   💻 Command: #{command}"
+      puts "\n💻 Command: #{command}"
     end
 
-    def show_diff(old_content, new_content)
+    def show_diff(old_content, new_content, max_lines: 50)
       require 'diffy'
 
       diff = Diffy::Diff.new(old_content, new_content, context: 3)
-      diff_lines = diff.to_s(:color).lines.first(20)
+      all_lines = diff.to_s(:color).lines
+      display_lines = all_lines.first(max_lines)
 
-      puts "   Diff preview:"
-      diff_lines.each { |line| puts "   #{line.chomp}" }
-      puts "   ... (diff truncated)" if diff.to_s.lines.size > 20
+      display_lines.each { |line| puts line.chomp }
+      puts "\n... (#{all_lines.size - max_lines} more lines, diff truncated)" if all_lines.size > max_lines
     rescue LoadError
       # Fallback if diffy is not available
       puts "   Old size: #{old_content.bytesize} bytes"
