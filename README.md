@@ -45,9 +45,9 @@ clacky config set
 ```
 
 You'll be prompted to enter:
-- **API Key**: Get your API key from [Claude Console](https://console.anthropic.com/)
-- **Model**: Default is `claude-3-5-sonnet-20241022`
-- **Base URL**: Default is `https://api.anthropic.com` (change this if using a proxy or custom endpoint)
+- **API Key**: Your API key from any OpenAI-compatible provider
+- **Model**: Model name (e.g., `gpt-4`, `deepseek-chat`)
+- **Base URL**: OpenAI-compatible API endpoint (e.g., `https://api.openai.com/v1`)
 
 To view your current configuration:
 

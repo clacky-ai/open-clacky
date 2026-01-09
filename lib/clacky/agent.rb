@@ -179,16 +179,13 @@ module Clacky
       # Get first user message for preview
       first_user_msg = @messages.find { |m| m[:role] == "user" }
 
-      # Extract preview text, handling both string and array content formats
+      # Extract preview text from first user message
       first_message_preview = if first_user_msg
         content = first_user_msg[:content]
         if content.is_a?(String)
           content[0..100]
-        elsif content.is_a?(Array)
-          # If content is an array of blocks (e.g., tool_result blocks), summarize it
-          "User message with #{content.size} content block(s)"
         else
-          "No messages"
+          "User message (non-string content)"
         end
       else
         "No messages"
@@ -204,7 +201,11 @@ module Clacky
           model: @config.model,
           permission_mode: @config.permission_mode.to_s,
           max_iterations: @config.max_iterations,
-          max_cost_usd: @config.max_cost_usd
+          max_cost_usd: @config.max_cost_usd,
+          enable_compression: @config.enable_compression,
+          keep_recent_messages: @config.keep_recent_messages,
+          max_tokens: @config.max_tokens,
+          verbose: @config.verbose
         },
         stats: {
           total_tasks: @total_tasks,
@@ -247,7 +248,10 @@ module Clacky
       if tool_name.to_s.downcase == 'shell' || tool_name.to_s.downcase == 'safe_shell'
         begin
           require_relative 'tools/safe_shell'
-          command = tool_params[:command] || tool_params['command']
+          
+          # Parse tool_params if it's a JSON string
+          params = tool_params.is_a?(String) ? JSON.parse(tool_params) : tool_params
+          command = params[:command] || params['command']
           return false unless command
 
           # Use SafeShell to analyze the command
@@ -483,7 +487,7 @@ module Clacky
       # Find the system message (should be first)
       system_msg = @messages.find { |m| m[:role] == "system" }
 
-      # Get the most recent N messages, ensuring tool_use/tool_result pairs are kept together
+      # Get the most recent N messages, ensuring tool_calls/tool results pairs are kept together
       recent_messages = get_recent_messages_with_tool_pairs(@messages, @config.keep_recent_messages)
 
       # Get messages to compress (everything except system and recent)
@@ -528,7 +532,7 @@ module Clacky
           while j >= 0
             prev_msg = messages[j]
             if prev_msg[:role] == "assistant" && prev_msg[:tool_calls]
-              # Check if this assistant message has the tool_call that matches our tool_result
+              # Check if this assistant message has the tool_call that matches our tool result message
               has_matching_call = prev_msg[:tool_calls].any? { |tc| tc[:id] == msg[:tool_call_id] }
               if has_matching_call && !recent.include?(prev_msg)
                 # Insert at the beginning to maintain order
