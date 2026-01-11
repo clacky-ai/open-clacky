@@ -550,7 +550,7 @@ module Clacky
       return unless @config.enable_compression
 
       # Only compress if we have more messages than threshold
-      threshold = @config.keep_recent_messages + 20 # +20 to avoid compressing too frequently
+      threshold = @config.keep_recent_messages + 80 # +80 to trigger at ~100 messages
       return if @messages.size <= threshold
 
       original_size = @messages.size

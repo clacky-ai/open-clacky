@@ -4,6 +4,7 @@ require "shellwords"
 require "json"
 require "fileutils"
 require_relative "shell"
+require_relative "../trash_directory"
 
 module Clacky
   module Tools
@@ -141,9 +142,11 @@ module Clacky
     class CommandSafetyReplacer
       def initialize(project_root)
         @project_root = File.expand_path(project_root)
-        @trash_dir = File.join(@project_root, '.ai_trash')
-        @backup_dir = File.join(@project_root, '.ai_backups')
-        setup_safety_dirs
+        
+        # Use global trash directory organized by project
+        trash_directory = Clacky::TrashDirectory.new(@project_root)
+        @trash_dir = trash_directory.trash_dir
+        @backup_dir = trash_directory.backup_dir
       end
 
       def make_command_safe(command)
@@ -325,6 +328,8 @@ module Clacky
       def create_delete_metadata(original_path, trash_path)
         metadata = {
           original_path: File.expand_path(original_path),
+          project_root: @project_root,
+          trash_directory: File.dirname(trash_path),
           deleted_at: Time.now.iso8601,
           deleted_by: 'AI_SafeShell',
           file_size: File.size(original_path),
@@ -339,16 +344,10 @@ module Clacky
         log_warning("Failed to create metadata for #{original_path}: #{e.message}")
       end
 
+      # setup_safety_dirs is now handled by TrashDirectory class
+      # Keep this method for backward compatibility but it does nothing
       def setup_safety_dirs
-        [@trash_dir, @backup_dir].each do |dir|
-          FileUtils.mkdir_p(dir) unless Dir.exist?(dir)
-
-          # Create .gitignore file to avoid trash files being committed
-          gitignore_path = File.join(dir, '.gitignore')
-          unless File.exist?(gitignore_path)
-            File.write(gitignore_path, "*\n!.gitignore\n")
-          end
-        end
+        # Directories are now setup by TrashDirectory class
       end
 
       def log_replacement(original, replacement, reason)

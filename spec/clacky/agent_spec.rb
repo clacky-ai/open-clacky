@@ -356,14 +356,16 @@ RSpec.describe Clacky::Agent do
         .and_return(mock_api_response(content: "done"))
 
       # Add many messages to trigger compression
+      # Threshold is keep_recent_messages + 80 = 5 + 80 = 85
+      # So we need 86+ messages to trigger compression
       messages = compression_agent.instance_variable_get(:@messages)
       messages << { role: "system", content: "System prompt" }
-      15.times do |i|
+      50.times do |i|
         messages << { role: "user", content: "Message #{i}" }
         messages << { role: "assistant", content: "Response #{i}" }
       end
 
-      initial_count = messages.size
+      initial_count = messages.size # Should be 101 (1 system + 100 user/assistant)
       compression_agent.send(:compress_messages_if_needed)
       final_count = compression_agent.instance_variable_get(:@messages).size
 

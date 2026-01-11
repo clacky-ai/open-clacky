@@ -20,7 +20,7 @@ module Clacky
       @max_tokens = options[:max_tokens] || 8192
       @verbose = options[:verbose] || false
       @enable_compression = options[:enable_compression].nil? ? true : options[:enable_compression]
-      @keep_recent_messages = options[:keep_recent_messages] || 10
+      @keep_recent_messages = options[:keep_recent_messages] || 20
     end
 
 

@@ -3,6 +3,7 @@
 require "json"
 require "fileutils"
 require_relative "base"
+require_relative "../trash_directory"
 
 module Clacky
   module Tools
@@ -32,7 +33,10 @@ module Clacky
 
       def execute(action:, file_path: nil, days_old: 7)
         project_root = Dir.pwd
-        trash_dir = File.join(project_root, '.ai_trash')
+        
+        # Use global trash directory organized by project
+        trash_directory = Clacky::TrashDirectory.new(project_root)
+        trash_dir = trash_directory.trash_dir
 
         unless Dir.exist?(trash_dir)
           return {
@@ -44,14 +48,14 @@ module Clacky
 
         case action.downcase
         when 'list'
-          list_deleted_files(trash_dir)
+          list_deleted_files(trash_dir, project_root)
         when 'restore'
           return { action: action, success: false, message: "file_path is required for restore action" } unless file_path
           restore_file(trash_dir, file_path, project_root)
         when 'status'
-          show_trash_status(trash_dir)
+          show_trash_status(trash_dir, project_root)
         when 'empty'
-          empty_trash(trash_dir, days_old)
+          empty_trash(trash_dir, days_old, project_root)
         when 'help'
           show_help
         else
@@ -59,8 +63,8 @@ module Clacky
         end
       end
 
-      def list_deleted_files(trash_dir)
-        deleted_files = get_deleted_files(trash_dir)
+      def list_deleted_files(trash_dir, project_root)
+        deleted_files = get_deleted_files(trash_dir, project_root)
 
         if deleted_files.empty?
           return {
@@ -86,7 +90,7 @@ module Clacky
       end
 
       def restore_file(trash_dir, file_path, project_root)
-        deleted_files = get_deleted_files(trash_dir)
+        deleted_files = get_deleted_files(trash_dir, project_root)
         expanded_path = File.expand_path(file_path, project_root)
 
         target_file = deleted_files.find { |f| f[:original_path] == expanded_path }
@@ -141,8 +145,8 @@ module Clacky
         end
       end
 
-      def show_trash_status(trash_dir)
-        deleted_files = get_deleted_files(trash_dir)
+      def show_trash_status(trash_dir, project_root)
+        deleted_files = get_deleted_files(trash_dir, project_root)
         total_size = deleted_files.sum { |f| f[:file_size] || 0 }
 
         if deleted_files.empty?
@@ -188,8 +192,8 @@ module Clacky
         }
       end
 
-      def empty_trash(trash_dir, days_old)
-        deleted_files = get_deleted_files(trash_dir)
+      def empty_trash(trash_dir, days_old, project_root)
+        deleted_files = get_deleted_files(trash_dir, project_root)
         cutoff_time = Time.now - (days_old * 24 * 60 * 60)
 
         old_files = deleted_files.select do |file|
@@ -266,7 +270,7 @@ module Clacky
         }
       end
 
-      def get_deleted_files(trash_dir)
+      def get_deleted_files(trash_dir, project_root)
         deleted_files = []
 
         Dir.glob(File.join(trash_dir, "*.metadata.json")).each do |metadata_file|

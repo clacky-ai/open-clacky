@@ -133,17 +133,17 @@ The agent will:
 
 The agent includes intelligent cost control features:
 
-- **Automatic Message Compression**: When conversation history grows beyond 30 messages, the agent automatically compresses older messages into a summary, keeping only the system prompt and the most recent 10 messages. This dramatically reduces token costs for long-running tasks (achieves ~60% compression ratio).
+- **Automatic Message Compression**: When conversation history grows beyond 100 messages, the agent automatically compresses older messages into a summary, keeping only the system prompt and the most recent 20 messages. This dramatically reduces token costs for long-running tasks (achieves ~60% compression ratio).
 
 - **Configurable Limits**:
-  - `max_iterations`: Maximum number of agent loops (default: 50)
+  - `max_iterations`: Maximum number of agent loops (default: 200)
   - `max_cost_usd`: Maximum total cost in USD (default: $5.00)
-  - `timeout_seconds`: Maximum execution time (default: 600s)
+  - `timeout_seconds`: Maximum execution time (default: none)
 
 - **Compression Settings**:
   - `enable_compression`: Enable/disable automatic compression (default: true)
-  - `keep_recent_messages`: Number of recent messages to preserve (default: 10)
-  - Compression triggers at: `keep_recent_messages + 20` messages
+  - `keep_recent_messages`: Number of recent messages to preserve (default: 20)
+  - Compression triggers at: ~100 messages (keep_recent_messages + 80)
 
 Example with custom limits:
 ```bash
