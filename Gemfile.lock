@@ -1,7 +1,7 @@
 PATH
   remote: .
   specs:
-    clacky (0.1.0)
+    clacky (0.5.0)
       diffy (~> 3.4)
       faraday (~> 2.0)
       thor (~> 1.3)
