@@ -3,13 +3,13 @@
 require_relative "lib/clacky/version"
 
 Gem::Specification.new do |spec|
-  spec.name = "clacky"
+  spec.name = "openclacky"
   spec.version = Clacky::VERSION
   spec.authors = ["windy"]
   spec.email = ["yafei@dao42.com"]
 
-  spec.summary = "A command-line interface for Claude AI"
-  spec.description = "Clacky is a Ruby CLI tool for interacting with Claude AI API, providing an easy way to have conversations with Claude from your terminal."
+  spec.summary = "A command-line interface for AI models (Claude, OpenAI, etc.)"
+  spec.description = "OpenClacky is a Ruby CLI tool for interacting with AI models via OpenAI-compatible APIs. It provides chat functionality and autonomous AI agent capabilities with tool use."
   spec.homepage = "https://github.com/yafeilee/clacky"
   spec.license = "MIT"
   spec.required_ruby_version = ">= 3.1.0"
@@ -27,8 +27,8 @@ Gem::Specification.new do |spec|
         f.start_with?(*%w[bin/ test/ spec/ features/ .git .github appveyor Gemfile])
     end
   end
-  spec.bindir = "exe"
-  spec.executables = spec.files.grep(%r{\Aexe/}) { |f| File.basename(f) }
+  spec.bindir = "bin"
+  spec.executables = ["clacky", "openclacky"]
   spec.require_paths = ["lib"]
 
   # Runtime dependencies

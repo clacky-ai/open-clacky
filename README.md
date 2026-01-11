@@ -1,6 +1,6 @@
-# Clacky
+# OpenClacky
 
-A command-line interface for interacting with AI models. Clacky supports OpenAI-compatible APIs, making it easy to chat with various AI models directly from your terminal.
+A command-line interface for interacting with AI models. OpenClacky supports OpenAI-compatible APIs, making it easy to chat with various AI models directly from your terminal.
 
 ## Features
 
@@ -18,20 +18,20 @@ A command-line interface for interacting with AI models. Clacky supports OpenAI-
 Install the gem by executing:
 
 ```bash
-gem install clacky
+gem install openclacky
 ```
 
 Or add it to your Gemfile:
 
 ```bash
-bundle add clacky
+bundle add openclacky
 ```
 
 For development from source:
 
 ```bash
-git clone https://github.com/yafeilee/clacky.git
-cd clacky
+git clone https://github.com/clacky-ai/open-clacky.git
+cd open-clacky
 bundle install
 bin/clacky
 ```
@@ -261,7 +261,7 @@ echo "Create a simple calculator project with index.html, style.css, and script.
 
 ## Contributing
 
-Bug reports and pull requests are welcome on GitHub at https://github.com/[USERNAME]/clacky. This project is intended to be a safe, welcoming space for collaboration, and contributors are expected to adhere to the [code of conduct](https://github.com/[USERNAME]/clacky/blob/main/CODE_OF_CONDUCT.md).
+Bug reports and pull requests are welcome on GitHub at https://github.com/clacky-ai/open-clacky. This project is intended to be a safe, welcoming space for collaboration, and contributors are expected to adhere to the [code of conduct](https://github.com/clacky-ai/open-clacky/blob/main/CODE_OF_CONDUCT.md).
 
 ## License
 
@@ -269,4 +269,4 @@ The gem is available as open source under the terms of the [MIT License](https:/
 
 ## Code of Conduct
 
-Everyone interacting in the Clacky project's codebases, issue trackers, chat rooms and mailing lists is expected to follow the [code of conduct](https://github.com/[USERNAME]/clacky/blob/main/CODE_OF_CONDUCT.md).
+Everyone interacting in the OpenClacky project's codebases, issue trackers, chat rooms and mailing lists is expected to follow the [code of conduct](https://github.com/clacky-ai/open-clacky/blob/main/CODE_OF_CONDUCT.md).

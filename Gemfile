@@ -2,7 +2,7 @@
 
 source "https://rubygems.org"
 
-# Specify your gem's dependencies in clacky.gemspec
+# Specify your gem's dependencies in openclacky.gemspec
 gemspec
 
 gem "irb"
