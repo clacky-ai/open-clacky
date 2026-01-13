@@ -38,12 +38,21 @@ module Clacky
         prompt_text = @pastel.bright_blue("#{prefix} ")
         input = read_with_readline(prompt_text)
 
-        # After input, just move cursor to the line after the input
-        # Don't move past the box - let the box stay visible
-        print "\r"      # Move to beginning of current line
-        print "\e[1B"   # Move down 1 line to bottom border line
-        print "\r"      # Move to beginning of that line
-        # Don't print the extra newline - let the user message appear right after
+        # After input, clear the input box completely
+        # Move cursor up 2 lines to the top of the box
+        print "\e[2A"
+        print "\r"
+        
+        # Clear all 3 lines of the box
+        3.times do
+          print "\e[2K"  # Clear entire line
+          print "\e[1B"  # Move down 1 line
+          print "\r"     # Move to beginning of line
+        end
+        
+        # Move cursor back up to where the box started
+        print "\e[3A"
+        print "\r"
         
         input
       end

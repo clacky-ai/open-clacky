@@ -82,6 +82,7 @@ module Clacky
       # Format thinking indicator
       def thinking
         symbol = @pastel.dim(SYMBOLS[:thinking])
+        # Output symbol on the same line, progress indicator will follow
         print "\n#{symbol} "
       end
 

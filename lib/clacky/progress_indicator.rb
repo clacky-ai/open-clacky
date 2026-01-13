@@ -14,9 +14,9 @@ module Clacky
     def start
       @start_time = Time.now
       @running = true
-      # Add a newline before the progress indicator to separate it from previous content
-      puts ""
-      print_status("#{@thinking_verb}… (ctrl+c to interrupt) ")
+      # Save cursor position after the [..] symbol
+      print "\e[s"  # Save cursor position
+      print_thinking_status("#{@thinking_verb}… (ctrl+c to interrupt)")
 
       # Start background thread to update elapsed time
       @update_thread = Thread.new do
@@ -31,26 +31,24 @@ module Clacky
       return unless @start_time
 
       elapsed = (Time.now - @start_time).to_i
-      print_status("#{@thinking_verb}… (ctrl+c to interrupt · #{elapsed}s) ")
+      print_thinking_status("#{@thinking_verb}… (ctrl+c to interrupt · #{elapsed}s)")
     end
 
     def finish
       @running = false
       @update_thread&.join
-      clear_line
-      # Add a newline after finishing to separate from next output
-      puts ""
+      # Restore cursor and clear to end of line
+      print "\e[u"     # Restore cursor position
+      print "\e[K"     # Clear to end of line
+      puts ""          # Add newline after finishing
     end
 
     private
 
-    def print_status(text)
-      print "\r\033[K#{text}" # \r moves to start of line, \033[K clears to end of line
-      $stdout.flush
-    end
-
-    def clear_line
-      print "\r\033[K" # Clear the entire line
+    def print_thinking_status(text)
+      print "\e[u"     # Restore cursor position (to after [..] symbol)
+      print "\e[K"     # Clear to end of line from cursor
+      print text
       $stdout.flush
     end
   end
