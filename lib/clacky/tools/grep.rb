@@ -291,24 +291,35 @@ module Clacky
 
       # Check if file should be ignored based on .gitignore or default patterns
       def should_ignore_file?(file, base_path, gitignore)
+        # Always calculate path relative to base_path for consistency
+        # Expand both paths to handle symlinks and relative paths correctly
+        expanded_file = File.expand_path(file)
+        expanded_base = File.expand_path(base_path)
+        
+        # For files, use the directory as base
+        expanded_base = File.dirname(expanded_base) if File.file?(expanded_base)
+        
         # Calculate relative path
-        if file.start_with?(base_path)
-          relative_path = file[base_path.length + 1..] || file
+        if expanded_file.start_with?(expanded_base)
+          relative_path = expanded_file[(expanded_base.length + 1)..-1] || File.basename(expanded_file)
         else
-          relative_path = file
+          # File is outside base path - use just the filename
+          relative_path = File.basename(expanded_file)
         end
+        
+        # Clean up relative path
         relative_path = relative_path.sub(/^\.\//, '') if relative_path
-        relative_path ||= file
         
         if gitignore
           # Use .gitignore rules
           gitignore.ignored?(relative_path)
         else
-          # Use default ignore patterns
+          # Use default ignore patterns - only match against relative path components
           DEFAULT_IGNORED_PATTERNS.any? do |pattern|
             if pattern.include?('*')
               File.fnmatch(pattern, relative_path, File::FNM_PATHNAME | File::FNM_DOTMATCH)
             else
+              # Match pattern as a path component (not substring of absolute path)
               relative_path.start_with?("#{pattern}/") || 
               relative_path.include?("/#{pattern}/") ||
               relative_path == pattern ||
