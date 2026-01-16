@@ -59,14 +59,14 @@ RSpec.describe Clacky::Tools::Grep do
       end
     end
 
-    it "respects max_matches limit" do
+    it "respects max_files limit" do
       Dir.mktmpdir do |dir|
         # Create many files with matches
         10.times do |i|
           File.write(File.join(dir, "file#{i}.txt"), "match")
         end
 
-        result = tool.execute(pattern: "match", path: dir, max_matches: 5)
+        result = tool.execute(pattern: "match", path: dir, max_files: 5)
 
         expect(result[:error]).to be_nil
         expect(result[:files_with_matches]).to eq(5)

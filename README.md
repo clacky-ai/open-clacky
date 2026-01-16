@@ -6,6 +6,8 @@ A command-line interface for interacting with AI models. OpenClacky supports Ope
 
 - 💬 Interactive chat sessions with AI models
 - 🤖 Autonomous AI agent with tool use capabilities
+- 📝 Enhanced input with multi-line support and Unicode (Chinese, etc.)
+- 🖼️ Paste images from clipboard (macOS/Linux)
 - 🚀 Single-message mode for quick queries
 - 🔐 Secure API key management
 - 📝 Multi-turn conversation support
