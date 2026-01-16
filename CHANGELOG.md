@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.4] - 2026-01-16
+
+### Added
+- **Automatic Paste Detection**: Rapid input detection automatically identifies paste operations
+- **Word Wrap Display**: Long input lines automatically wrap with scroll indicators (up to 15 visible lines)
+- **Full-width Terminal Display**: Enhanced prompt box uses full terminal width for better visibility
+
+### Improved
+- **Smart Ctrl+C Handling**: First press clears content, second press (within 2s) exits
+- **UTF-8 Encoding**: Better handling of multi-byte characters in clipboard operations
+- **Cursor Positioning**: Improved cursor tracking in wrapped lines
+- **Multi-line Paste**: Better display for pasted content with placeholder support
+
 ## [0.5.0] - 2026-01-11
 
 ### Added
