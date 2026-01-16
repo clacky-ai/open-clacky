@@ -259,18 +259,30 @@ module Clacky
       private
 
       # Find .gitignore file in the search path or parent directories
+      # Only searches within the search path and up to the current working directory
       def find_gitignore(path)
         search_path = File.directory?(path) ? path : File.dirname(path)
         
         # Look for .gitignore in current and parent directories
         current = File.expand_path(search_path)
+        cwd = File.expand_path(Dir.pwd)
         root = File.expand_path('/')
+        
+        # Limit search: only go up to current working directory
+        # This prevents finding .gitignore files from unrelated parent directories
+        # when searching in temporary directories (like /tmp in tests)
+        search_limit = if current.start_with?(cwd)
+                        cwd
+                      else
+                        current
+                      end
         
         loop do
           gitignore = File.join(current, '.gitignore')
           return gitignore if File.exist?(gitignore)
           
-          break if current == root
+          # Stop if we've reached the search limit or root
+          break if current == search_limit || current == root
           current = File.dirname(current)
         end
         
