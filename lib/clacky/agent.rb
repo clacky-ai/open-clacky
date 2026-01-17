@@ -611,28 +611,34 @@ module Clacky
 
     def track_cost(usage)
       # Priority 1: Use API-provided cost if available (OpenRouter, LiteLLM, etc.)
+      iteration_cost = nil
       if usage[:api_cost]
         @total_cost += usage[:api_cost]
         @cost_source = :api
         @task_cost_source = :api
+        iteration_cost = usage[:api_cost]
         puts "[DEBUG] Using API-provided cost: $#{usage[:api_cost]}" if @config.verbose
       else
         # Priority 2: Calculate from tokens using ModelPricing
         result = ModelPricing.calculate_cost(model: @config.model, usage: usage)
         cost = result[:cost]
         pricing_source = result[:source]
-        
+
         @total_cost += cost
+        iteration_cost = cost
         # Map pricing source to cost source: :price or :default
         @cost_source = pricing_source
         @task_cost_source = pricing_source
-        
+
         if @config.verbose
           source_label = pricing_source == :price ? "model pricing" : "default pricing"
           puts "[DEBUG] Calculated cost for #{@config.model} using #{source_label}: $#{cost.round(6)}"
           puts "[DEBUG] Usage breakdown: prompt=#{usage[:prompt_tokens]}, completion=#{usage[:completion_tokens]}, cache_write=#{usage[:cache_creation_input_tokens] || 0}, cache_read=#{usage[:cache_read_input_tokens] || 0}"
         end
       end
+
+      # Display token usage statistics for this iteration
+      display_iteration_tokens(usage, iteration_cost)
 
       # Track cache usage statistics
       @cache_stats[:total_requests] += 1
@@ -645,6 +651,42 @@ module Clacky
         @cache_stats[:cache_read_input_tokens] += usage[:cache_read_input_tokens]
         @cache_stats[:cache_hit_requests] += 1
       end
+    end
+
+    # Display token usage for current iteration
+    private def display_iteration_tokens(usage, cost)
+      prompt_tokens = usage[:prompt_tokens] || 0
+      completion_tokens = usage[:completion_tokens] || 0
+      total_tokens = usage[:total_tokens] || (prompt_tokens + completion_tokens)
+      cache_write = usage[:cache_creation_input_tokens] || 0
+      cache_read = usage[:cache_read_input_tokens] || 0
+
+      # Build token summary string
+      token_info = []
+
+      # Input tokens (with cache breakdown if available)
+      if cache_write > 0 || cache_read > 0
+        input_detail = "#{prompt_tokens} (cache: #{cache_read} read, #{cache_write} write)"
+        token_info << "Input: #{input_detail}"
+      else
+        token_info << "Input: #{prompt_tokens}"
+      end
+
+      # Output tokens
+      token_info << "Output: #{completion_tokens}"
+
+      # Total
+      token_info << "Total: #{total_tokens}"
+
+      # Cost for this iteration
+      if cost
+        token_info << "Cost: $#{cost.round(6)}"
+      end
+
+      # Display with color
+      require 'pastel'
+      pastel = Pastel.new
+      puts pastel.dim("    [Tokens] #{token_info.join(' | ')}")
     end
 
     def compress_messages_if_needed

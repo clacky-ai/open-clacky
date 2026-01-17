@@ -42,6 +42,9 @@ It provides chat functionality and autonomous AI agent capabilities with tool us
 - Maintain good test coverage
 - When modifying existing functionality, ensure related tests still pass
 - When adding new features, consider adding corresponding tests
+- **IMPORTANT**: When developing new features, write RSpec tests as needed and ensure they pass
+- **DO NOT** write custom test scripts unless explicitly requested by the user
+- **DO NOT** create markdown documentation unless explicitly requested by the user
 
 ### Tool Development
 When adding new tools:
