@@ -21,7 +21,7 @@ module Clacky
       # Start background thread to update elapsed time
       @update_thread = Thread.new do
         while @running
-          sleep 1
+          sleep 0.1
           update if @running
         end
       end
