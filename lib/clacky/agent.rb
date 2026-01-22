@@ -213,6 +213,9 @@ module Clacky
         @ui&.show_complete(iterations: result[:iterations], cost: result[:total_cost_usd])
         @hooks.trigger(:on_complete, result)
         result
+      rescue Clacky::AgentInterrupted
+        # Let CLI handle the interrupt message
+        raise
       rescue StandardError => e
         result = build_result(:error, error: e.message)
         @ui&.show_error("Error: #{e.message}")
@@ -369,7 +372,7 @@ module Clacky
     end
 
     def think
-      @ui&.show_progress("Thinking...")
+      @ui&.show_progress
 
       # Compress messages if needed to reduce cost
       compress_messages_if_needed

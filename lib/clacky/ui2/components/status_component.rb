@@ -55,8 +55,8 @@ module Clacky
         # @param message [String] Progress message
         # @return [String] Progress indicator
         def render_progress(message)
-          symbol = format_symbol(:progress)
-          text = format_text(message, :progress)
+          symbol = format_symbol(:thinking)  # Use [..] symbol
+          text = format_text(message, :thinking)  # Use dim color
           "#{symbol} #{text}"
         end
 

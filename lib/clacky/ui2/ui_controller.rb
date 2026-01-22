@@ -7,6 +7,7 @@ require_relative "components/input_area"
 require_relative "components/todo_area"
 require_relative "components/welcome_banner"
 require_relative "components/inline_input"
+require_relative "../thinking_verbs"
 
 module Clacky
   module UI2
@@ -188,16 +189,16 @@ module Clacky
       end
 
       # Show progress indicator with dynamic elapsed time
-      # @param message [String] Progress message
-      def show_progress(message)
+      # @param message [String] Progress message (optional, will use random thinking verb if nil)
+      def show_progress(message = nil)
         # Stop any existing progress thread
         stop_progress_thread
 
-        @progress_message = message
+        @progress_message = message || Clacky::THINKING_VERBS.sample
         @progress_start_time = Time.now
 
         # Show initial progress
-        output = @renderer.render_progress("#{message} (0s)")
+        output = @renderer.render_progress("#{@progress_message}… (ctrl+c to interrupt)")
         append_output(output)
 
         # Start background thread to update elapsed time
@@ -207,7 +208,7 @@ module Clacky
             next unless @progress_start_time
 
             elapsed = (Time.now - @progress_start_time).to_i
-            update_progress_line(@renderer.render_progress("#{@progress_message} (#{elapsed}s)"))
+            update_progress_line(@renderer.render_progress("#{@progress_message}… (ctrl+c to interrupt · #{elapsed}s)"))
           end
         rescue => e
           # Silently handle thread errors
