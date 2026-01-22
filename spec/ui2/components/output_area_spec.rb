@@ -6,136 +6,95 @@ require "clacky/ui2/components/output_area"
 RSpec.describe Clacky::UI2::Components::OutputArea do
   let(:output_area) { described_class.new(height: 10) }
 
+  before do
+    # Suppress actual terminal output during tests
+    allow(output_area).to receive(:print)
+    allow(output_area).to receive(:flush)
+  end
+
   describe "#append" do
-    it "adds single line to buffer" do
+    it "prints content to terminal" do
+      expect(output_area).to receive(:print).with("Hello, World!")
       output_area.append("Hello, World!")
-      expect(output_area.buffer).to eq(["Hello, World!"])
     end
 
-    it "splits multi-line content" do
-      output_area.append("Line 1\nLine 2\nLine 3")
-      expect(output_area.buffer).to eq(["Line 1", "Line 2", "Line 3"])
-    end
-
-    it "ignores nil or empty content" do
+    it "ignores nil content" do
       output_area.append(nil)
+      # Should not raise and should not print
+    end
+
+    it "ignores empty content" do
       output_area.append("")
-      expect(output_area.buffer).to be_empty
+      # Should not raise and should not print
+    end
+
+    it "truncates long lines" do
+      allow(TTY::Screen).to receive(:width).and_return(20)
+      # Expect truncated output with "..."
+      expect(output_area).to receive(:print) do |arg|
+        expect(arg).to include("...")
+        expect(arg.gsub(/\e\[[0-9;]*m/, "").length).to be <= 20
+      end
+      output_area.append("This is a very long line that exceeds the width")
     end
   end
 
-  describe "#scroll_up" do
-    before do
-      20.times { |i| output_area.append("Line #{i}") }
-    end
-
-    it "scrolls up to show older content" do
-      initial_offset = output_area.scroll_offset
-      output_area.scroll_up(5)
-      expect(output_area.scroll_offset).to eq(initial_offset + 5)
-    end
-
-    it "does not scroll beyond buffer size" do
-      output_area.scroll_up(100)
-      max_scroll = [output_area.buffer.size - output_area.height, 0].max
-      expect(output_area.scroll_offset).to eq(max_scroll)
-    end
-  end
-
-  describe "#scroll_down" do
-    before do
-      20.times { |i| output_area.append("Line #{i}") }
-      output_area.scroll_up(10)
-    end
-
-    it "scrolls down to show newer content" do
-      initial_offset = output_area.scroll_offset
-      output_area.scroll_down(5)
-      expect(output_area.scroll_offset).to eq(initial_offset - 5)
-    end
-
-    it "does not scroll below zero" do
-      output_area.scroll_down(100)
-      expect(output_area.scroll_offset).to eq(0)
-    end
-  end
-
-  describe "#at_bottom?" do
-    it "returns true when at bottom of buffer" do
-      output_area.append("Test")
-      expect(output_area).to be_at_bottom
-    end
-
-    it "returns false when scrolled up" do
-      20.times { |i| output_area.append("Line #{i}") }
-      output_area.scroll_up(5)
-      expect(output_area).not_to be_at_bottom
-    end
-  end
-
-  describe "#scroll_to_top" do
-    before do
-      20.times { |i| output_area.append("Line #{i}") }
-    end
-
-    it "scrolls to the top of buffer" do
-      output_area.scroll_to_top
-      max_scroll = [output_area.buffer.size - output_area.height, 0].max
-      expect(output_area.scroll_offset).to eq(max_scroll)
-    end
-  end
-
-  describe "#scroll_to_bottom" do
-    before do
-      20.times { |i| output_area.append("Line #{i}") }
-      output_area.scroll_up(10)
-    end
-
-    it "scrolls to the bottom of buffer" do
-      output_area.scroll_to_bottom
-      expect(output_area.scroll_offset).to eq(0)
+  describe "#render" do
+    it "is a no-op for natural scroll mode" do
+      # render should not raise or do anything
+      expect { output_area.render(start_row: 0) }.not_to raise_error
     end
   end
 
   describe "#clear" do
-    it "clears all content and resets scroll" do
-      10.times { |i| output_area.append("Line #{i}") }
-      output_area.scroll_up(5)
-
-      output_area.clear
-
-      expect(output_area.buffer).to be_empty
-      expect(output_area.scroll_offset).to eq(0)
+    it "is a no-op for natural scroll mode" do
+      expect { output_area.clear }.not_to raise_error
     end
   end
 
-  describe "#visible_range" do
-    before do
-      20.times { |i| output_area.append("Line #{i}") }
+  describe "legacy scroll methods" do
+    it "scroll_up is a no-op" do
+      expect { output_area.scroll_up(5) }.not_to raise_error
     end
 
-    it "returns correct range information" do
-      range = output_area.visible_range
-      expect(range[:total]).to eq(20)
-      expect(range[:end] - range[:start] + 1).to be <= output_area.height
+    it "scroll_down is a no-op" do
+      expect { output_area.scroll_down(5) }.not_to raise_error
+    end
+
+    it "scroll_to_top is a no-op" do
+      expect { output_area.scroll_to_top }.not_to raise_error
+    end
+
+    it "scroll_to_bottom is a no-op" do
+      expect { output_area.scroll_to_bottom }.not_to raise_error
+    end
+  end
+
+  describe "#at_bottom?" do
+    it "always returns true in natural scroll mode" do
+      expect(output_area).to be_at_bottom
     end
   end
 
   describe "#scroll_percentage" do
-    it "returns 0.0 when at bottom" do
-      20.times { |i| output_area.append("Line #{i}") }
+    it "always returns 0.0 in natural scroll mode" do
       expect(output_area.scroll_percentage).to eq(0.0)
     end
+  end
 
-    it "returns 100.0 when at top" do
-      20.times { |i| output_area.append("Line #{i}") }
-      output_area.scroll_to_top
-      expect(output_area.scroll_percentage).to eq(100.0)
+  describe "#visible_range" do
+    it "returns range based on height" do
+      range = output_area.visible_range
+      expect(range[:start]).to eq(1)
+      expect(range[:end]).to eq(10)
+      expect(range[:total]).to eq(10)
     end
+  end
 
-    it "returns 0.0 for buffer smaller than height" do
-      output_area.append("Line 1")
-      expect(output_area.scroll_percentage).to eq(0.0)
+  describe "#height" do
+    it "can be read and written" do
+      output_area.height = 20
+      expect(output_area.height).to eq(20)
     end
   end
 end

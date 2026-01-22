@@ -5,8 +5,8 @@ require "pastel"
 module Clacky
   module UI2
     module Components
-      # OutputArea writes content directly to terminal within scroll region
-      # Terminal handles scrolling natively
+      # OutputArea writes content directly to terminal
+      # Terminal handles scrolling natively via scrollback buffer
       class OutputArea
         attr_accessor :height
 
@@ -14,48 +14,31 @@ module Clacky
           @height = height
           @pastel = Pastel.new
           @width = TTY::Screen.width
-          @current_row = 0  # Current row within scroll region (0-indexed)
+          @last_line_row = nil  # Track last line position for updates
         end
 
-        # Append content directly to terminal (within scroll region)
-        # Terminal handles scrolling automatically
-        # @param content [String] Content to append (can be multi-line)
+        # Append single line content directly to terminal (no newline)
+        # Multi-line handling is done by LayoutManager
+        # @param content [String] Single line content to append
         def append(content)
           return if content.nil? || content.empty?
 
           update_width
-
-          content.split("\n").each do |line|
-            # Move to current position in scroll region
-            move_cursor(@current_row, 0)
-            clear_line
-            print truncate_line(line)
-
-            # Advance row, triggering scroll when at bottom
-            if @current_row < @height - 1
-              @current_row += 1
-            else
-              # At bottom - print newline to trigger scroll
-              print "\n"
-            end
-          end
-
+          print truncate_line(content)
           flush
         end
 
-        # Initial render - reset position
+        # Initial render - no-op, output flows naturally
         # @param start_row [Integer] Screen row (ignored)
         def render(start_row:)
-          @current_row = 0
-          move_cursor(0, 0)
+          # No-op - output flows naturally from current position
         end
 
         # Update the last line (for progress indicator)
+        # Uses carriage return to overwrite current line
         # @param content [String] New content for last line
         def update_last_line(content)
-          # Last written line is at @current_row - 1 (or @height - 1 if at bottom)
-          last_row = @current_row > 0 ? @current_row - 1 : @height - 1
-          move_cursor(last_row, 0)
+          print "\r"
           clear_line
           print truncate_line(content)
           flush
@@ -63,18 +46,14 @@ module Clacky
 
         # Remove the last line from output
         def remove_last_line
-          last_row = @current_row > 0 ? @current_row - 1 : @height - 1
-          move_cursor(last_row, 0)
+          print "\r"
           clear_line
-          # Move current row back
-          @current_row = last_row if @current_row > 0
           flush
         end
 
-        # Clear - reset position
+        # Clear - no-op for natural scroll mode
         def clear
-          @current_row = 0
-          move_cursor(0, 0)
+          # No-op
         end
 
         # Legacy scroll methods (no-op, terminal handles scrolling)

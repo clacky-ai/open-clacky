@@ -14,6 +14,7 @@ module Clacky
         @input_area = input_area
         @todo_area = todo_area
         @render_mutex = Mutex.new
+        @output_row = 0  # Track current output row position
 
         calculate_layout
         setup_resize_handler
@@ -71,7 +72,8 @@ module Clacky
       # Render just the input area
       def render_input
         @render_mutex.synchronize do
-          input_area.render(start_row: @input_row, width: screen.width)
+          input_row = fixed_area_start_row + 1 + (@todo_area&.height || 0)
+          input_area.render(start_row: input_row, width: screen.width)
           screen.flush
         end
       end
@@ -113,35 +115,47 @@ module Clacky
         end
       end
 
-      # Initialize the screen (setup scroll region, render initial content)
+      # Initialize the screen (render initial content)
       def initialize_screen
         screen.clear_screen
-        setup_scroll_region
         screen.hide_cursor
+        @output_row = 0
         render_all
       end
 
-      # Cleanup the screen (restore cursor, reset scroll region)
+      # Cleanup the screen (restore cursor)
       def cleanup_screen
-        screen.reset_scroll_region
         screen.move_cursor(screen.height - 1, 0)
         screen.show_cursor
       end
 
-      # Setup scroll region: output area scrolls, input area stays fixed
-      def setup_scroll_region
-        # Scroll region is the output area (1-indexed)
-        # Everything below (gap, todo, input) is outside scroll region
-        scroll_bottom = @output_height
-        screen.set_scroll_region(1, scroll_bottom)
-      end
-
       # Append content to output area
-      # Content is written directly to terminal, then fixed areas are re-rendered
+      # Track current row, scroll when reaching fixed area
       # @param content [String] Content to append
       def append_output(content)
+        return if content.nil? || content.empty?
+
         @render_mutex.synchronize do
-          output_area.append(content)
+          max_output_row = fixed_area_start_row - 1
+
+          content.split("\n").each do |line|
+            # If at max row, need to scroll before outputting
+            if @output_row > max_output_row
+              # Move to bottom of screen and print newline to trigger scroll
+              screen.move_cursor(screen.height - 1, 0)
+              print "\n"
+              # Stay at max_output_row for next output
+              @output_row = max_output_row
+            end
+
+            # Output line at current position
+            screen.move_cursor(@output_row, 0)
+            screen.clear_line
+            output_area.append(line)
+            @output_row += 1
+          end
+
+          # Re-render fixed areas at screen bottom
           render_fixed_areas
           screen.flush
         end
@@ -151,7 +165,11 @@ module Clacky
       # @param content [String] Content to update
       def update_last_line(content)
         @render_mutex.synchronize do
-          output_area.update_last_line(content)
+          # Last output line is at @output_row - 1
+          last_row = [@output_row - 1, 0].max
+          screen.move_cursor(last_row, 0)
+          screen.clear_line
+          output_area.append(content)
           render_fixed_areas
           screen.flush
         end
@@ -160,7 +178,10 @@ module Clacky
       # Remove the last line from output area
       def remove_last_line
         @render_mutex.synchronize do
-          output_area.remove_last_line
+          last_row = [@output_row - 1, 0].max
+          screen.move_cursor(last_row, 0)
+          screen.clear_line
+          @output_row = last_row if @output_row > 0
           render_fixed_areas
           screen.flush
         end
@@ -184,17 +205,45 @@ module Clacky
       def handle_resize
         screen.update_dimensions
         calculate_layout
+        # Adjust output_row if it exceeds new max
+        max_row = fixed_area_start_row - 1
+        @output_row = max_row if @output_row > max_row
         screen.clear_screen
         render_all
       end
 
       private
 
-      # Render fixed areas (gap, todo, input) - these stay outside scroll region
+      # Calculate fixed area height (gap + todo + input)
+      def fixed_area_height
+        todo_height = @todo_area&.height || 0
+        input_height = @input_area.required_height
+        1 + todo_height + input_height  # gap + todo + input
+      end
+
+      # Calculate the starting row for fixed areas (from screen bottom)
+      def fixed_area_start_row
+        screen.height - fixed_area_height
+      end
+
+      # Render fixed areas (gap, todo, input) at screen bottom
       def render_fixed_areas
-        render_gap_line
-        render_todo_internal
-        input_area.render(start_row: @input_row, width: screen.width)
+        start_row = fixed_area_start_row
+        gap_row = start_row
+        todo_row = gap_row + 1
+        input_row = todo_row + (@todo_area&.height || 0)
+
+        # Render gap line
+        screen.move_cursor(gap_row, 0)
+        screen.clear_line
+
+        # Render todo
+        if @todo_area&.visible?
+          @todo_area.render(start_row: todo_row)
+        end
+
+        # Render input
+        input_area.render(start_row: input_row, width: screen.width)
         unless input_area.paused?
           screen.show_cursor
         end
@@ -207,22 +256,10 @@ module Clacky
         screen.flush
       end
 
-      # Render blank gap line between output and input
-      def render_gap_line
-        screen.move_cursor(@gap_row, 0)
-        screen.clear_line
-      end
-
-      # Internal todo rendering (without mutex)
-      def render_todo_internal
-        return unless @todo_area&.visible?
-
-        @todo_area.render(start_row: @todo_row)
-      end
-
       # Restore cursor to input area
       def restore_cursor_to_input
-        input_area.position_cursor(@input_row)
+        input_row = fixed_area_start_row + 1 + (@todo_area&.height || 0)
+        input_area.position_cursor(input_row)
         screen.show_cursor
       end
 
