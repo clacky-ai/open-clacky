@@ -353,21 +353,31 @@ module Clacky
 
       # Show help text
       def show_help
-        help_text = <<~HELP
-          📖 Commands:
-            /help     - Show this help
-            /clear    - Clear session and start fresh
-            /exit     - Exit
+        theme = ThemeManager.current_theme
 
-          Keyboard shortcuts:
-            Ctrl+C    - Interrupt/Exit
-            Ctrl+L    - Clear output area
-            Ctrl+U    - Clear input line
-            Up/Down   - Scroll output (when input empty) or history
-            Left/Right - Move cursor in input
-            Home/End  - Jump to start/end of input
-        HELP
-        append_output(help_text)
+        # Separator line
+        separator = theme.format_text("─" * 60, :info)
+
+        lines = [
+          separator,
+          "",
+          theme.format_text("Commands:", :info),
+          "  #{theme.format_text("/clear", :success)}       - Clear output and restart session",
+          "  #{theme.format_text("/exit", :success)}        - Exit application",
+          "",
+          theme.format_text("Input:", :info),
+          "  #{theme.format_text("Shift+Enter", :success)}  - New line",
+          "  #{theme.format_text("Up/Down", :success)}      - History navigation",
+          "  #{theme.format_text("Ctrl+V", :success)}       - Paste image (Ctrl+D to delete, max 3)",
+          "  #{theme.format_text("Ctrl+C", :success)}       - Clear input (press 2x to exit)",
+          "",
+          theme.format_text("Other:", :info),
+          "  Supports Emacs-style shortcuts (Ctrl+A, Ctrl+E, etc.)",
+          "",
+          separator
+        ]
+
+        lines.each { |line| append_output(line) }
       end
 
       # Request confirmation from user (blocking)
@@ -562,6 +572,9 @@ module Clacky
           @layout.scroll_output_up
         when :scroll_down
           @layout.scroll_output_down
+        when :help
+          show_help
+          @input_area.clear
         end
 
         # Always re-render input area after key handling

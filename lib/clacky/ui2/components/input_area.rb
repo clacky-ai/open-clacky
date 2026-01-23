@@ -399,6 +399,8 @@ module Clacky
               set_tips("Unknown command: #{text} (Available: /clear, /help, /exit)", type: :warning)
               return { action: nil }
             end
+          elsif text == '?'
+            return { action: :help }
           elsif text == 'exit' || text == 'quit'
             return { action: :exit }
           end
