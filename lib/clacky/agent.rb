@@ -173,14 +173,12 @@ module Clacky
 
           # Check if done (no more tool calls needed)
           if response[:finish_reason] == "stop" || response[:tool_calls].nil? || response[:tool_calls].empty?
-            @ui&.clear_progress
             @ui&.show_assistant_message(response[:content]) if response[:content] && !response[:content].empty?
             break
           end
 
           # Show assistant message if there's content before tool calls
           if response[:content] && !response[:content].empty?
-            @ui&.clear_progress
             @ui&.show_assistant_message(response[:content])
           end
 
@@ -405,6 +403,9 @@ module Clacky
           raise Error, "Network connection failed after #{max_retries} retries: #{e.message}"
         end
       end
+
+      # Stop progress thread (but keep progress line visible)
+      @ui&.stop_progress_thread
 
       track_cost(response[:usage])
 

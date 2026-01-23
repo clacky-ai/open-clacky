@@ -142,6 +142,33 @@ module Clacky
         @layout.append_output(content)
       end
 
+      # Log message to output area (use instead of puts)
+      # @param message [String] Message to log
+      # @param level [Symbol] Log level (:debug, :info, :warning, :error)
+      def log(message, level: :info)
+        theme = ThemeManager.current_theme
+
+        output = case level
+        when :debug
+          # Gray dimmed text for debug messages
+          theme.format_text("    [DEBUG] #{message}", :thinking)
+        when :info
+          # Info symbol with normal text
+          "#{theme.format_symbol(:info)} #{message}"
+        when :warning
+          # Warning rendering
+          @renderer.render_warning(message)
+        when :error
+          # Error rendering
+          @renderer.render_error(message)
+        else
+          # Default to info
+          "#{theme.format_symbol(:info)} #{message}"
+        end
+
+        append_output(output)
+      end
+
       # Update the last line in output area (for progress indicator)
       # @param content [String] Content to update
       def update_progress_line(content)
