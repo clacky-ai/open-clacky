@@ -115,7 +115,7 @@ module Clacky
         # Get cursor column position
         # @return [Integer] Column position
         def cursor_col
-          cursor_column(@prompt.length)
+          cursor_column(@prompt)
         end
 
         # Deactivate inline input

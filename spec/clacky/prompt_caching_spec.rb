@@ -149,7 +149,7 @@ RSpec.describe "Prompt Caching Feature" do
     end
 
     describe "#apply_message_caching" do
-      it "converts system message content to array format with cache_control" do
+      it "adds cache_control to the last message" do
         messages = [
           { role: "system", content: "You are a helpful assistant." },
           { role: "user", content: "Hello" }
@@ -157,14 +157,16 @@ RSpec.describe "Prompt Caching Feature" do
 
         result = client.send(:apply_message_caching, messages)
 
-        system_msg = result.find { |m| m[:role] == "system" }
-        expect(system_msg[:content]).to be_an(Array)
-        expect(system_msg[:content].first[:type]).to eq("text")
-        expect(system_msg[:content].first[:text]).to eq("You are a helpful assistant.")
-        expect(system_msg[:content].first[:cache_control]).to eq({ type: "ephemeral" })
+        # Last message should have cache_control in content array
+        last_msg = result.last
+        expect(last_msg[:role]).to eq("user")
+        expect(last_msg[:content]).to be_an(Array)
+        expect(last_msg[:content].first[:type]).to eq("text")
+        expect(last_msg[:content].first[:text]).to eq("Hello")
+        expect(last_msg[:content].first[:cache_control]).to eq({ type: "ephemeral" })
       end
 
-      it "does not modify user messages" do
+      it "does not modify non-last messages" do
         messages = [
           { role: "system", content: "System prompt" },
           { role: "user", content: "User message" }
@@ -172,9 +174,10 @@ RSpec.describe "Prompt Caching Feature" do
 
         result = client.send(:apply_message_caching, messages)
 
-        user_msg = result.find { |m| m[:role] == "user" }
-        expect(user_msg[:content]).to eq("User message")
-        expect(user_msg[:cache_control]).to be_nil
+        # System message (not last) should remain unchanged
+        system_msg = result.find { |m| m[:role] == "system" }
+        expect(system_msg[:content]).to eq("System prompt")
+        expect(system_msg[:cache_control]).to be_nil
       end
 
       it "handles array content format" do

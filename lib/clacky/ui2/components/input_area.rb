@@ -45,7 +45,8 @@ module Clacky
             mode: nil,
             model: nil,
             tasks: 0,
-            cost: 0.0
+            cost: 0.0,
+            status: 'idle'  # Workspace status: 'idle' or 'working'
           }
         end
 
@@ -78,12 +79,14 @@ module Clacky
         # @param model [String] AI model name
         # @param tasks [Integer] Number of completed tasks
         # @param cost [Float] Total cost
-        def update_sessionbar(working_dir: nil, mode: nil, model: nil, tasks: nil, cost: nil)
+        # @param status [String] Workspace status ('idle' or 'working')
+        def update_sessionbar(working_dir: nil, mode: nil, model: nil, tasks: nil, cost: nil, status: nil)
           @sessionbar_info[:working_dir] = working_dir if working_dir
           @sessionbar_info[:mode] = mode if mode
           @sessionbar_info[:model] = model if model
           @sessionbar_info[:tasks] = tasks if tasks
           @sessionbar_info[:cost] = cost if cost
+          @sessionbar_info[:status] = status if status
         end
 
         def input_buffer
@@ -678,6 +681,12 @@ module Clacky
           parts = []
           separator = @pastel.dim(" │ ")
 
+          # Workspace status
+          if @sessionbar_info[:status]
+            status_theme_key = status_theme_key_for(@sessionbar_info[:status])
+            parts << theme.format_text(@sessionbar_info[:status], status_theme_key)
+          end
+
           # Working directory (shortened if too long)
           if @sessionbar_info[:working_dir]
             dir_display = shorten_path(@sessionbar_info[:working_dir])
@@ -740,6 +749,17 @@ module Clacky
             :bright_blue
           else
             :white
+          end
+        end
+
+        def status_theme_key_for(status)
+          case status.to_s.downcase
+          when 'idle'
+            :info  # Use info color for idle state
+          when 'working'
+            :progress  # Use progress color for working state
+          else
+            :info
           end
         end
 

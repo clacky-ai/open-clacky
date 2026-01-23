@@ -88,7 +88,8 @@ module Clacky
       # Update session bar with current stats
       # @param tasks [Integer] Number of completed tasks (optional)
       # @param cost [Float] Total cost (optional)
-      def update_sessionbar(tasks: nil, cost: nil)
+      # @param status [String] Workspace status ('idle' or 'working') (optional)
+      def update_sessionbar(tasks: nil, cost: nil, status: nil)
         @tasks_count = tasks if tasks
         @total_cost = cost if cost
         @input_area.update_sessionbar(
@@ -96,7 +97,8 @@ module Clacky
           mode: @config[:mode],
           model: @config[:model],
           tasks: @tasks_count,
-          cost: @total_cost
+          cost: @total_cost,
+          status: status
         )
         @layout.render_input
       end
@@ -341,6 +343,9 @@ module Clacky
       # @param cost [Float] Cost of this run
       # @param total_cost [Float, nil] Total accumulated cost (optional)
       def show_complete(iterations:, cost:, total_cost: nil)
+        # Update status back to 'idle' when task is complete
+        update_sessionbar(status: 'idle')
+        
         message = if total_cost
           "Task complete (#{iterations} iterations, $#{cost.round(4)}, total: $#{total_cost.round(4)})"
         else
@@ -355,6 +360,9 @@ module Clacky
       def show_progress(message = nil)
         # Stop any existing progress thread
         stop_progress_thread
+
+        # Update status to 'working'
+        update_sessionbar(status: 'working')
 
         @progress_message = message || Clacky::THINKING_VERBS.sample
         @progress_start_time = Time.now
@@ -411,6 +419,16 @@ module Clacky
       def show_error(message)
         output = @renderer.render_error(message)
         append_output(output)
+      end
+
+      # Set workspace status to idle (called when agent stops working)
+      def set_idle_status
+        update_sessionbar(status: 'idle')
+      end
+
+      # Set workspace status to working (called when agent starts working)
+      def set_working_status
+        update_sessionbar(status: 'working')
       end
 
       # Show help text

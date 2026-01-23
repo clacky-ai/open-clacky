@@ -65,7 +65,8 @@ module Clacky
         cache_creation_input_tokens: 0,
         cache_read_input_tokens: 0,
         total_requests: 0,
-        cache_hit_requests: 0
+        cache_hit_requests: 0,
+        raw_api_usage_samples: []  # Store raw API usage for debugging
       }
       @start_time = nil
       @working_dir = working_dir || Dir.pwd
@@ -405,7 +406,7 @@ module Clacky
       # Stop progress thread (but keep progress line visible)
       @ui&.stop_progress_thread
 
-      track_cost(response[:usage])
+      track_cost(response[:usage], raw_api_usage: response[:raw_api_usage])
 
       # Handle truncated responses (when max_tokens limit is reached)
       if response[:finish_reason] == "length"
@@ -618,7 +619,7 @@ module Clacky
       false
     end
 
-    def track_cost(usage)
+    def track_cost(usage, raw_api_usage: nil)
       # Priority 1: Use API-provided cost if available (OpenRouter, LiteLLM, etc.)
       iteration_cost = nil
       if usage[:api_cost]
@@ -659,6 +660,13 @@ module Clacky
       if usage[:cache_read_input_tokens]
         @cache_stats[:cache_read_input_tokens] += usage[:cache_read_input_tokens]
         @cache_stats[:cache_hit_requests] += 1
+      end
+
+      # Store raw API usage samples (keep last 3 for debugging)
+      if raw_api_usage
+        @cache_stats[:raw_api_usage_samples] ||= []
+        @cache_stats[:raw_api_usage_samples] << raw_api_usage
+        @cache_stats[:raw_api_usage_samples] = @cache_stats[:raw_api_usage_samples].last(3)
       end
     end
 

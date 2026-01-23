@@ -311,8 +311,25 @@ module Clacky
         # Set up interrupt handler
         ui_controller.on_interrupt do |input_was_empty:|
           if (not agent_thread&.alive?) && input_was_empty
-            ui_controller.stop
-            exit(1)
+            # Save final session state before exit
+            if session_manager && agent.total_tasks > 0
+              session_data = agent.to_session_data(status: :exited)
+              session_manager.save(session_data)
+              
+              # Show session saved message
+              ui_controller.stop
+              
+              # Format session info
+              session_id = session_data[:session_id][0..7]
+              say "\n📂 Session saved: #{session_id}", :green
+              say "   Tasks completed: #{agent.total_tasks}"
+              say "   Total cost: $#{agent.total_cost.round(4)}"
+              say "\n💡 To continue this session, run:", :yellow
+              say "   clacky -a #{session_id}", :cyan
+            else
+              ui_controller.stop
+            end
+            exit(0)
           end
 
           if agent_thread&.alive?
@@ -350,6 +367,9 @@ module Clacky
           # Run agent in background thread
           agent_thread = Thread.new do
             begin
+              # Set status to working when agent starts
+              ui_controller.set_working_status
+
               # Run agent (Agent will call @ui methods directly)
               # Agent internally tracks total_tasks and total_cost
               result = agent.run(input, images: images)
@@ -362,12 +382,18 @@ module Clacky
               # Update session bar with agent's cumulative stats
               ui_controller.update_sessionbar(tasks: agent.total_tasks, cost: agent.total_cost)
             rescue Clacky::AgentInterrupted
+              # Set status back to idle when interrupted
+              ui_controller.set_idle_status
+
               # Save session on interruption
               if session_manager
                 session_manager.save(agent.to_session_data(status: :interrupted))
               end
               ui_controller.show_warning("Task interrupted by user")
             rescue StandardError => e
+              # Set status back to idle when error occurs
+              ui_controller.set_idle_status
+
               # Save session on error
               if session_manager
                 session_manager.save(agent.to_session_data(status: :error, error_message: e.message))
@@ -391,6 +417,9 @@ module Clacky
           ui_controller.show_user_message(initial_message)
 
           begin
+            # Set status to working when agent starts
+            ui_controller.set_working_status
+
             result = agent.run(initial_message, images: [])
 
             if session_manager
@@ -400,6 +429,8 @@ module Clacky
             # Update session bar with agent's cumulative stats
             ui_controller.update_sessionbar(tasks: agent.total_tasks, cost: agent.total_cost)
           rescue StandardError => e
+            # Set status back to idle when error occurs
+            ui_controller.set_idle_status
             ui_controller.show_error("Error: #{e.message}")
           end
         end

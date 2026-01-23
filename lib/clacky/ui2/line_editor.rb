@@ -174,14 +174,27 @@ module Clacky
         width
       end
 
+      # Strip ANSI escape codes from a string
+      # @param text [String] Text with ANSI codes
+      # @return [String] Text without ANSI codes
+      def strip_ansi_codes(text)
+        text.gsub(/\e\[[0-9;]*m/, '')
+      end
+
       # Get cursor column position (considering multi-byte characters)
-      # @param prompt_length [Integer] Length of prompt before the line
+      # @param prompt [String] Prompt string before the line (may contain ANSI codes)
       # @return [Integer] Column position for cursor
-      def cursor_column(prompt_length = 0)
+      def cursor_column(prompt = "")
+        # Strip ANSI codes from prompt to get actual display width
+        visible_prompt = strip_ansi_codes(prompt)
+        prompt_display_width = calculate_display_width(visible_prompt)
+        
+        # Calculate display width of text before cursor
         chars = @line.chars
         text_before_cursor = chars[0...@cursor_position].join
-        display_width = calculate_display_width(text_before_cursor)
-        prompt_length + display_width
+        text_display_width = calculate_display_width(text_before_cursor)
+        
+        prompt_display_width + text_display_width
       end
     end
   end

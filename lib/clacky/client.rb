@@ -82,6 +82,13 @@ module Clacky
         end
       end
 
+      # Debug: Save request body to see what we're actually sending
+      if ENV['CLACKY_DEBUG_REQUEST']
+        debug_file = "/tmp/clacky_request_#{Time.now.to_i}.json"
+        File.write(debug_file, JSON.pretty_generate(body))
+        puts "DEBUG: Request saved to #{debug_file}"
+      end
+
       response = connection.post("chat/completions") do |req|
         req.body = body.to_json
       end
@@ -117,14 +124,16 @@ module Clacky
     end
 
     # Apply cache_control to messages for prompt caching
-    # Claude API requires cache_control inside content blocks, not at message level
-    # Strategy: Cache system prompt (stable) for maximum cache hits
+    # Strategy: Add cache_control on the LAST message before tools
+    # This ensures everything from start to the breakpoint gets cached
     def apply_message_caching(messages)
       return messages if messages.empty?
 
-      # Find system message and add cache_control
-      messages.map do |msg|
-        if msg[:role] == "system"
+      # Add cache_control to the last message (before tools are added)
+      # This will cache: system message + all conversation history
+      messages.map.with_index do |msg, idx|
+        if idx == messages.length - 1
+          # Last message: add cache_control in content block
           add_cache_control_to_message(msg)
         else
           msg
@@ -204,12 +213,8 @@ module Clacky
         message = data["choices"].first["message"]
         usage = data["usage"]
 
-        # Debug: show raw API response content
-        if ENV["CLACKY_DEBUG"]
-          puts "\n[DEBUG] Raw API response content:"
-          puts "  content: #{message["content"].inspect}"
-          puts "  content length: #{message["content"]&.length || 0}"
-        end
+        # Store raw API usage for debugging
+        raw_api_usage = usage.dup
 
         # Parse usage with cache information
         usage_data = {
@@ -246,7 +251,8 @@ module Clacky
           content: message["content"],
           tool_calls: parse_tool_calls(message["tool_calls"]),
           finish_reason: data["choices"].first["finish_reason"],
-          usage: usage_data
+          usage: usage_data,
+          raw_api_usage: raw_api_usage
         }
       when 401
         raise Error, "Invalid API key"
