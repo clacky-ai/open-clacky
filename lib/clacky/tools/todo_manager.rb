@@ -29,12 +29,17 @@ module Clacky
           id: {
             type: "integer",
             description: "The task ID (required for 'complete' and 'remove' actions)"
+          },
+          ids: {
+            type: "array",
+            items: { type: "integer" },
+            description: "Array of task IDs for batch removal (for 'remove' action). Example: [1, 3, 5]"
           }
         },
         required: ["action"]
       }
 
-      def execute(action:, task: nil, tasks: nil, id: nil, todos_storage: nil)
+      def execute(action:, task: nil, tasks: nil, id: nil, ids: nil, todos_storage: nil)
         # todos_storage is injected by Agent, stores todos in memory
         @todos = todos_storage || []
 
@@ -46,7 +51,12 @@ module Clacky
         when "complete"
           complete_todo(id)
         when "remove"
-          remove_todo(id)
+          # Support both single ID and batch IDs
+          if ids && ids.is_a?(Array)
+            remove_todos(ids)
+          else
+            remove_todo(id)
+          end
         when "clear"
           clear_todos
         else
@@ -65,7 +75,12 @@ module Clacky
         when 'list'
           "TodoManager(list)"
         when 'remove'
-          "TodoManager(remove ##{args[:id] || args['id']})"
+          ids = args[:ids] || args['ids']
+          if ids && ids.is_a?(Array) && !ids.empty?
+            "TodoManager(remove #{ids.size} tasks: #{ids.join(', ')})"
+          else
+            "TodoManager(remove ##{args[:id] || args['id']})"
+          end
         when 'clear'
           "TodoManager(clear all)"
         else
@@ -222,6 +237,38 @@ module Clacky
           message: "All TODOs cleared",
           cleared_count: count
         }
+      end
+
+      def remove_todos(ids)
+        return { error: "Task IDs array is required" } if ids.nil? || ids.empty?
+
+        todos = load_todos
+        removed_todos = []
+        not_found_ids = []
+
+        ids.each do |id|
+          todo = todos.find { |t| t[:id] == id }
+          if todo
+            removed_todos << todo
+          else
+            not_found_ids << id
+          end
+        end
+
+        # Remove all found todos
+        todos.reject! { |t| ids.include?(t[:id]) }
+        save_todos(todos)
+
+        result = {
+          message: "#{removed_todos.size} task(s) removed",
+          removed: removed_todos,
+          remaining: todos.size
+        }
+
+        # Add warning about not found IDs
+        result[:not_found] = not_found_ids unless not_found_ids.empty?
+
+        result
       end
     end
   end

@@ -183,6 +183,50 @@ RSpec.describe Clacky::Tools::TodoManager do
 
         expect(result[:error]).to eq("Task ID is required")
       end
+
+      it "removes multiple todos at once with ids array" do
+        storage = []
+        tool.execute(action: "add", tasks: ["Task 1", "Task 2", "Task 3", "Task 4"], todos_storage: storage)
+        result = tool.execute(action: "remove", ids: [1, 3], todos_storage: storage)
+
+        expect(result[:message]).to eq("2 task(s) removed")
+        expect(result[:removed].size).to eq(2)
+        expect(result[:removed][0][:id]).to eq(1)
+        expect(result[:removed][1][:id]).to eq(3)
+        expect(result[:remaining]).to eq(2)
+        expect(storage.size).to eq(2)
+        expect(storage.map { |t| t[:id] }).to eq([2, 4])
+      end
+
+      it "handles batch remove with some non-existent IDs" do
+        storage = []
+        tool.execute(action: "add", tasks: ["Task 1", "Task 2"], todos_storage: storage)
+        result = tool.execute(action: "remove", ids: [1, 999, 2, 888], todos_storage: storage)
+
+        expect(result[:message]).to eq("2 task(s) removed")
+        expect(result[:removed].size).to eq(2)
+        expect(result[:not_found]).to eq([999, 888])
+        expect(result[:remaining]).to eq(0)
+      end
+
+      it "returns error when ids array is empty" do
+        storage = []
+        result = tool.execute(action: "remove", ids: [], todos_storage: storage)
+
+        expect(result[:error]).to eq("Task IDs array is required")
+      end
+
+      it "prefers ids array over id when both provided" do
+        storage = []
+        tool.execute(action: "add", tasks: ["Task 1", "Task 2", "Task 3"], todos_storage: storage)
+        result = tool.execute(action: "remove", id: 1, ids: [2, 3], todos_storage: storage)
+
+        expect(result[:message]).to eq("2 task(s) removed")
+        expect(result[:removed].size).to eq(2)
+        expect(result[:removed].map { |t| t[:id] }).to eq([2, 3])
+        expect(storage.size).to eq(1)
+        expect(storage[0][:id]).to eq(1)
+      end
     end
 
     describe "clear action" do

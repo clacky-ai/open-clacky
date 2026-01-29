@@ -570,7 +570,16 @@ module Clacky
             args[:todos_storage] = @todos
           end
 
+          # Show progress for potentially slow tools (no prefix newline)
+          if potentially_slow_tool?(call[:name], args)
+            progress_message = build_tool_progress_message(call[:name], args)
+            @ui&.show_progress(progress_message, prefix_newline: false)
+          end
+
           result = tool.execute(**args)
+
+          # Clear progress if shown
+          @ui&.clear_progress if potentially_slow_tool?(call[:name], args)
 
           # Hook: after_tool_use
           @hooks.trigger(:after_tool_use, call, result)
@@ -648,6 +657,53 @@ module Clacky
 
 
       false
+    end
+
+    # Check if a tool is potentially slow and should show progress
+    private def potentially_slow_tool?(tool_name, args)
+      case tool_name.to_s.downcase
+      when 'shell', 'safe_shell'
+        # Check if the command is a slow command
+        command = args[:command] || args['command']
+        return false unless command
+        
+        # List of slow command patterns
+        slow_patterns = [
+          /bundle\s+(install|exec\s+rspec|exec\s+rake)/,
+          /npm\s+(install|run\s+test|run\s+build)/,
+          /yarn\s+(install|test|build)/,
+          /pnpm\s+install/,
+          /cargo\s+(build|test)/,
+          /go\s+(build|test)/,
+          /make\s+(test|build)/,
+          /pytest/,
+          /jest/
+        ]
+        
+        slow_patterns.any? { |pattern| command.match?(pattern) }
+      when 'web_fetch', 'web_search'
+        true  # Network operations can be slow
+      else
+        false  # Most file operations are fast
+      end
+    end
+
+    # Build progress message for tool execution
+    private def build_tool_progress_message(tool_name, args)
+      case tool_name.to_s.downcase
+      when 'shell', 'safe_shell'
+        command = args[:command] || args['command']
+        # Extract the main command for display
+        cmd_parts = command.to_s.split
+        main_cmd = cmd_parts.first(2).join(' ')
+        "Running #{main_cmd}"
+      when 'web_fetch'
+        "Fetching web page"
+      when 'web_search'
+        "Searching web"
+      else
+        "Executing #{tool_name}"
+      end
     end
 
     def track_cost(usage, raw_api_usage: nil)

@@ -370,7 +370,8 @@ module Clacky
 
       # Show progress indicator with dynamic elapsed time
       # @param message [String] Progress message (optional, will use random thinking verb if nil)
-      def show_progress(message = nil)
+      # @param prefix_newline [Boolean] Whether to add a blank line before progress (default: true)
+      def show_progress(message = nil, prefix_newline: true)
         # Stop any existing progress thread
         stop_progress_thread
 
@@ -381,7 +382,7 @@ module Clacky
         @progress_start_time = Time.now
 
         # Show initial progress (yellow, active)
-        append_output("")
+        append_output("") if prefix_newline
         output = @renderer.render_working("#{@progress_message}… (ctrl+c to interrupt)")
         append_output(output)
 
