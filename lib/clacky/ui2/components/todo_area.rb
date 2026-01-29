@@ -10,7 +10,7 @@ module Clacky
         attr_accessor :height
         attr_reader :todos
 
-        MAX_DISPLAY_TASKS = 2  # Show at most 2 tasks (Next + After)
+        MAX_DISPLAY_TASKS = 2  # Show current + next task
 
         def initialize
           @todos = []
@@ -27,14 +27,9 @@ module Clacky
           @completed_count = @todos.count { |t| t[:status] == "completed" }
           @total_count = @todos.size
 
-          # Height: 1 line for header + min(pending_count, MAX_DISPLAY_TASKS) lines for tasks
           # Hide TODO area when there are no pending tasks
-          if @pending_todos.empty?
-            @height = 0
-          else
-            display_count = [@pending_todos.size, MAX_DISPLAY_TASKS].min
-            @height = 1 + display_count
-          end
+          # Show single line for current task + next task
+          @height = @pending_todos.empty? ? 0 : 1
         end
 
         # Check if there are todos to display
@@ -49,22 +44,46 @@ module Clacky
 
           update_width
 
-          # Render header: [##] Tasks [0/4]: ████
           move_cursor(start_row, 0)
           clear_line
-          header = render_header
-          print header
 
-          # Render tasks (Next and After)
-          @pending_todos.take(MAX_DISPLAY_TASKS).each_with_index do |todo, i|
-            move_cursor(start_row + i + 1, 0)
-            clear_line
+          # Build single line: [##] Task [2/4]: #3 - Current task (Next: #4 - Next task)
+          progress = "#{@completed_count}/#{@total_count}"
+          current_task = @pending_todos[0]
+          next_task = @pending_todos[1]
 
-            label = i == 0 ? "Next" : "After"
-            task_text = truncate_text("##{todo[:id]} - #{todo[:task]}", @width - 12)
-            line = "  #{@pastel.dim("->")} #{@pastel.yellow(label)}: #{task_text}"
-            print line
+          # Calculate available width for task text
+          prefix = "[##] Task [#{progress}]: "
+          prefix_length = prefix.length
+          available_width = @width - prefix_length - 2
+
+          # Build current task text
+          current_text = "##{current_task[:id]} - #{current_task[:task]}"
+          
+          # Build next task text if exists
+          next_text = next_task ? " (Next: ##{next_task[:id]} - #{next_task[:task]})" : ""
+          
+          # Combine and truncate
+          combined_text = current_text + next_text
+          if combined_text.length > available_width
+            # Truncate, prioritize current task
+            if current_text.length > available_width - 3
+              combined_text = truncate_text(current_text, available_width)
+            else
+              # Show current task + truncated next
+              remaining = available_width - current_text.length
+              if remaining > 10  # Only show next if we have space
+                next_text = truncate_text(next_text, remaining)
+                combined_text = current_text + next_text
+              else
+                combined_text = current_text
+              end
+            end
           end
+
+          # Build final line with colors
+          line = "#{@pastel.cyan("[##]")} Task [#{progress}]: #{combined_text}"
+          print line
 
           flush
         end
@@ -79,28 +98,6 @@ module Clacky
         end
 
         private
-
-        # Render header line with progress bar
-        def render_header
-          progress = "#{@completed_count}/#{@total_count}"
-          progress_bar = render_progress_bar(@completed_count, @total_count)
-
-          "#{@pastel.cyan("[##]")} Tasks [#{progress}]: #{progress_bar}"
-        end
-
-        # Render a simple progress bar
-        def render_progress_bar(completed, total)
-          return "" if total == 0
-
-          bar_width = 10
-          filled = total > 0 ? (completed.to_f / total * bar_width).round : 0
-          empty = bar_width - filled
-
-          filled_bar = @pastel.green("█" * filled)
-          empty_bar = @pastel.dim("░" * empty)
-
-          "#{filled_bar}#{empty_bar}"
-        end
 
         # Truncate text to fit width
         def truncate_text(text, max_width)
