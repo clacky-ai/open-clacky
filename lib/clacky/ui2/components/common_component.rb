@@ -65,22 +65,22 @@ module Clacky
           lines << @pastel.dim("─" * 60)
           lines << render_success("Task Complete")
           lines << ""
-          
+
           # Display each stat on a separate line
           lines << "  Iterations: #{iterations}"
           lines << "  Cost: $#{cost.round(4)}"
           lines << "  Duration: #{duration.round(1)}s" if duration
-          
+
           # Display cache information if available
           if cache_tokens && cache_tokens > 0
             lines << "  Cache Tokens: #{cache_tokens} tokens"
           end
-          
+
           if cache_requests && cache_requests > 0
             hit_rate = cache_hits > 0 ? ((cache_hits.to_f / cache_requests) * 100).round(1) : 0
             lines << "  Cache Requests: #{cache_requests} (#{cache_hits} hits, #{hit_rate}% hit rate)"
           end
-          
+
           lines.join("\n")
         end
       end

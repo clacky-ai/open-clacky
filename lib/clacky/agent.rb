@@ -202,7 +202,7 @@ module Clacky
               next
             else
               # User just said "no" without feedback - stop and wait
-              @ui&.show_assistant_message("Tool execution was denied. Please provide further instructions.")
+              @ui&.show_assistant_message("Tool execution was denied. Please give more instructions...")
               break
             end
           end

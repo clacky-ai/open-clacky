@@ -351,7 +351,7 @@ module Clacky
         cache_tokens = cache_stats&.dig(:cache_read_input_tokens)
         cache_requests = cache_stats&.dig(:total_requests)
         cache_hits = cache_stats&.dig(:cache_hit_requests)
-        
+
         output = @renderer.render_task_complete(
           iterations: iterations,
           cost: cost,
@@ -484,7 +484,7 @@ module Clacky
 
         # Create InlineInput with styled prompt
         inline_input = Components::InlineInput.new(
-          prompt: theme.format_text("  (y/n, or provide feedback): ", :thinking),
+          prompt: "  Press Enter to approve, 'n' to reject, or provide feedback: ",
           default: nil
         )
         @inline_input = inline_input
