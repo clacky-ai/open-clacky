@@ -342,10 +342,13 @@ module Clacky
 
         # Remove <think>...</think> blocks (multiline, case-insensitive)
         # Also handles variations like <thinking>...</thinking>
-        filtered = content.gsub(%r{<think(?:ing)?>\s*.*?\s*</think(?:ing)?>}mi, '')
+        filtered = content.gsub(%r{<think(?:ing)?>[\s\S]*?</think(?:ing)?>}mi, '')
 
-        # Clean up extra whitespace left behind
-        filtered.gsub(/\n{3,}/, "\n\n").strip
+        # Clean up multiple empty lines left behind (max 2 consecutive newlines)
+        filtered.gsub!(/\n{3,}/, "\n\n")
+
+        # Remove leading and trailing whitespace
+        filtered.strip
       end
 
       # Show tool call

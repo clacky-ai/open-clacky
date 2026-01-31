@@ -112,6 +112,9 @@ module Clacky
         cache_hit_requests: 0
       }
 
+      # Restore previous_total_tokens for accurate delta calculation across sessions
+      @previous_total_tokens = session_data.dig(:stats, :previous_total_tokens) || 0
+
       # Check if the session ended with an error
       last_status = session_data.dig(:stats, :last_status)
       last_error = session_data.dig(:stats, :last_error)
@@ -299,7 +302,8 @@ module Clacky
         duration_seconds: @start_time ? (Time.now - @start_time).round(2) : 0,
         last_status: status.to_s,
         cache_stats: @cache_stats,
-        debug_logs: @debug_logs
+        debug_logs: @debug_logs,
+        previous_total_tokens: @previous_total_tokens
       }
 
       # Add error message if status is error

@@ -497,6 +497,8 @@ module Clacky
         if is_session_load
           recent_user_messages = agent.get_recent_user_messages(limit: 5)
           ui_controller.initialize_and_show_banner(recent_user_messages: recent_user_messages)
+          # Update session bar with restored agent stats
+          ui_controller.update_sessionbar(tasks: agent.total_tasks, cost: agent.total_cost)
         else
           ui_controller.initialize_and_show_banner
         end
