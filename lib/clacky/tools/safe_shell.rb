@@ -32,20 +32,26 @@ module Clacky
         required: ["command"]
       }
 
-      def execute(command:, timeout: nil, max_output_lines: 1000)
+      def execute(command:, timeout: nil, max_output_lines: 1000, skip_safety_check: false)
         # Get project root directory
         project_root = Dir.pwd
 
         begin
           # 1. Extract timeout from command if it starts with "timeout N"
           command, extracted_timeout = extract_timeout_from_command(command)
-          
+
           # Use extracted timeout if not explicitly provided
           timeout ||= extracted_timeout
 
-          # 2. Use safety replacer to process command
-          safety_replacer = CommandSafetyReplacer.new(project_root)
-          safe_command = safety_replacer.make_command_safe(command)
+          # 2. Use safety replacer to process command (skip if user already confirmed)
+          if skip_safety_check
+            # User has confirmed, execute command as-is (no safety modifications)
+            safe_command = command
+            safety_replacer = nil
+          else
+            safety_replacer = CommandSafetyReplacer.new(project_root)
+            safe_command = safety_replacer.make_command_safe(command)
+          end
 
           # 3. Calculate timeouts: soft_timeout is fixed at 5s, hard_timeout from timeout parameter
           soft_timeout = 5
@@ -55,7 +61,7 @@ module Clacky
           result = super(command: safe_command, soft_timeout: soft_timeout, hard_timeout: hard_timeout, max_output_lines: max_output_lines)
 
           # 5. Enhance result information
-          enhance_result(result, command, safe_command)
+          enhance_result(result, command, safe_command, safety_replacer)
 
         rescue SecurityError => e
           # Security error, return friendly error message
@@ -145,9 +151,9 @@ module Clacky
         end
       end
 
-      def enhance_result(result, original_command, safe_command)
+      def enhance_result(result, original_command, safe_command, safety_replacer = nil)
         # If command was replaced, add security information
-        if original_command != safe_command
+        if safety_replacer && original_command != safe_command
           result[:security_enhanced] = true
           result[:original_command] = original_command
           result[:safe_command] = safe_command
