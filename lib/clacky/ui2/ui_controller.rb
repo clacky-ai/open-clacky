@@ -557,7 +557,7 @@ module Clacky
 
         # Create InlineInput with styled prompt
         inline_input = Components::InlineInput.new(
-          prompt: "  Press Enter to approve, 'n' to reject, or provide feedback: ",
+          prompt: "  Press Enter/y to approve, 'n' to reject, Shift+Tab for all later, or type feedback: ",
           default: nil
         )
         @inline_input = inline_input
