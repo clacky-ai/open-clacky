@@ -90,8 +90,10 @@ RSpec.describe Clacky::Tools::Grep do
       Dir.mktmpdir do |dir|
         # Create a text file
         File.write(File.join(dir, "text.txt"), "hello")
-        # Create a binary file (with null bytes)
-        File.write(File.join(dir, "binary.bin"), "hello\x00world")
+        # Create a binary file with high ratio of non-printable characters (>= 512 bytes)
+        # Using control characters that exceed 30% non-printable threshold
+        binary_content = "\x00\x01\x02\x03hello\x00\x01\x02\x03" * 100 # ~1100 bytes
+        File.write(File.join(dir, "binary.bin"), binary_content)
 
         result = tool.execute(pattern: "hello", path: dir, file_pattern: "*")
 

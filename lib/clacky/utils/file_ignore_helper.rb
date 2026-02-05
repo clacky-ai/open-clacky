@@ -108,17 +108,6 @@ module Clacky
         CONFIG_FILE_PATTERNS.any? { |pattern| file.match?(pattern) }
       end
 
-      # Check if file is binary (contains null bytes)
-      def self.binary_file?(file)
-        # Simple heuristic: check if file contains null bytes in first 8KB
-        return false unless File.exist?(file)
-        return false if File.size(file).zero?
-
-        sample = File.read(file, 8192, encoding: "ASCII-8BIT")
-        sample.include?("\x00")
-      rescue StandardError
-        true
-      end
     end
   end
 end

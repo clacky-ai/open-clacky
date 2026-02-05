@@ -137,7 +137,7 @@ module Clacky
             end
 
             # Skip binary files
-            if Clacky::Utils::FileIgnoreHelper.binary_file?(file)
+            if Clacky::Utils::FileProcessor.binary_file_path?(file)
               skipped[:binary] += 1
               next
             end

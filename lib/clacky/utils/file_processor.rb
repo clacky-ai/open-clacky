@@ -169,8 +169,8 @@ module Clacky
         # @param data [String] File content
         # @param sample_size [Integer] Number of bytes to check (default: 8192)
         # @return [Boolean] True if file appears to be binary
-        def binary_file?(data, sample_size: 8192)
-          # Check first N bytes for null bytes or high ratio of non-printable characters
+        def binary_file?(data, sample_size: 8192, min_binary_length: 512)
+          # Check first N bytes for binary content
           sample = data[0, sample_size] || ""
           return false if sample.empty?
 
@@ -184,8 +184,9 @@ module Clacky
             return true
           end
 
-          # If contains null bytes, it's binary
-          return true if sample.include?("\x00")
+          # Only check non-printable ratio for samples above minimum length
+          # This prevents short outputs from being incorrectly flagged as binary
+          return false if sample.size < min_binary_length
 
           # Count non-printable characters (excluding common whitespace)
           non_printable = sample.bytes.count do |byte|
@@ -194,6 +195,21 @@ module Clacky
 
           # If more than 30% non-printable, consider it binary
           (non_printable.to_f / sample.size) > 0.3
+        end
+
+        # Check if a file at the given path is binary (not text)
+        # @param path [String] File path
+        # @return [Boolean] True if file appears to be binary
+        def binary_file_path?(path)
+          return false unless File.exist?(path)
+
+          File.open(path, "rb") do |file|
+            sample = file.read(8192) || ""
+            binary_file?(sample)
+          end
+        rescue StandardError
+          # If we can't read the file, assume it's not binary
+          false
         end
       end
     end

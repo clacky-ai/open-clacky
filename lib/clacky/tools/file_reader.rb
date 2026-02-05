@@ -66,7 +66,7 @@ module Clacky
 
         begin
           # Check if file is binary
-          if binary_file?(expanded_path)
+          if Utils::FileProcessor.binary_file_path?(expanded_path)
             return handle_binary_file(expanded_path)
           end
 
@@ -260,17 +260,6 @@ module Clacky
         end
       end
 
-      private def binary_file?(path)
-        # Use FileProcessor to detect binary files
-        File.open(path, 'rb') do |file|
-          sample = file.read(8192) || ""
-          Utils::FileProcessor.binary_file?(sample)
-        end
-      rescue StandardError
-        # If we can't read the file, assume it's not binary
-        false
-      end
-      
       private def handle_binary_file(path)
         # Check if it's a supported format using FileProcessor
         if Utils::FileProcessor.supported_binary_file?(path)

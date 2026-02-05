@@ -355,7 +355,8 @@ RSpec.describe Clacky::Tools::FileReader do
       it "returns error for unsupported binary files" do
         Dir.mktmpdir do |dir|
           bin_file = File.join(dir, "test.bin")
-          File.binwrite(bin_file, "\x00\x01\x02\x03".b * 100)
+          # Use >= 512 bytes to trigger binary detection (min_binary_length threshold)
+          File.binwrite(bin_file, "\x00\x01\x02\x03".b * 200)
 
           result = tool.execute(path: bin_file)
 
