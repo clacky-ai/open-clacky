@@ -13,11 +13,6 @@ module Clacky
     # Set agent as the default command
     default_task :agent
 
-    desc "version", "Show clacky version"
-    def version
-      say "Clacky version #{Clacky::VERSION}"
-    end
-
     desc "agent [MESSAGE]", "Run agent in interactive mode with autonomous tool use (default)"
     long_desc <<-LONGDESC
       Run an AI agent in interactive mode that can autonomously use tools to complete tasks.
@@ -61,18 +56,6 @@ module Clacky
         return
       end
       config = Clacky::Config.load
-
-      # Show message when using ClaudeCode environment variables
-      if config.config_source == "claude_code"
-        say "🔑 Using API key from ClaudeCode environment variables", :cyan
-        say "   (#{config.base_url})", :white
-        say ""
-      end
-
-      unless config.api_key
-        say "Error: API key not found. Please run 'clacky config set' first.", :red
-        exit 1
-      end
 
       # Handle session listing
       if options[:list]
@@ -140,458 +123,44 @@ module Clacky
       end
     end
 
-    desc "new PROJECT_NAME", "Create a new Rails project from the official template"
-    long_desc <<-LONGDESC
-      Create a new Rails project from the official template.
-
-      This command will:
-        1. Clone the template from git@github.com:clacky-ai/rails-template-7x-starter.git
-        2. Change into the project directory
-        3. Run bin/setup to install dependencies and configure the project
-
-      Example:
-        $ clacky new my_rails_app
-    LONGDESC
-    def new(project_name = nil)
-      unless project_name
-        say "Error: Project name is required.", :red
-        say "Usage: clacky new <project_name>", :yellow
-        exit 1
-      end
-
-      # Validate project name
-      unless project_name.match?(/^[a-zA-Z][a-zA-Z0-9_-]*$/)
-        say "Error: Invalid project name. Use only letters, numbers, underscores, and hyphens.", :red
-        exit 1
-      end
-
-      template_repo = "git@github.com:clacky-ai/rails-template-7x-starter.git"
-      current_dir = Dir.pwd
-      target_dir = File.join(current_dir, project_name)
-
-      # Check if target directory already exists
-      if Dir.exist?(target_dir)
-        say "Error: Directory '#{project_name}' already exists.", :red
-        exit 1
-      end
-
-      say "Creating new Rails project: #{project_name}", :green
-
-      # Clone the template repository
-      say "\n📦 Cloning template repository...", :cyan
-      clone_command = "git clone #{template_repo} #{project_name}"
-
-      clone_result = system(clone_command)
-
-      unless clone_result
-        say "\n❌ Failed to clone repository. Please check your git configuration and network connection.", :red
-        exit 1
-      end
-
-      say "✓ Repository cloned successfully", :green
-
-      # Run bin/setup
-      say "\n⚙️  Running bin/setup...", :cyan
-
-      Dir.chdir(target_dir)
-
-      setup_command = "./bin/setup"
-
-      setup_result = system(setup_command)
-
-      Dir.chdir(current_dir)
-
-      unless setup_result
-        say "\n❌ Failed to run bin/setup. Please check the setup script for errors.", :red
-        say "You can try running it manually:", :yellow
-        say "  cd #{project_name} && ./bin/setup", :cyan
-        exit 1
-      end
-
-      say "\n✅ Project '#{project_name}' created successfully!", :green
-      say "\nNext steps:", :green
-      say "  cd #{project_name}", :cyan
-      say "  clacky agent", :cyan
-    end
-
-    desc "price", "Show pricing information for AI models"
-    def price
-      say "\n💰 Model Pricing Information\n\n", :green
-
-      say "Clacky supports three pricing modes when calculating API costs:\n\n", :white
-
-      say "  1. ", :cyan
-      say "API-provided cost", :bold
-      say " (", :white
-      say ":api", :yellow
-      say ")", :white
-      say "\n     The most accurate - uses actual cost data from the API response", :white
-      say "\n     Supported by: OpenRouter, LiteLLM, and other compatible proxies\n\n"
-
-      say "  2. ", :cyan
-      say "Model-specific pricing", :bold
-      say " (", :white
-      say ":price", :yellow
-      say ")", :white
-      say "\n     Uses official pricing from model providers (Claude models)", :white
-      say "\n     Includes tiered pricing and prompt caching discounts\n\n"
-
-      say "  3. ", :cyan
-      say "Default fallback pricing", :bold
-      say " (", :white
-      say ":default", :yellow
-      say ")", :white
-      say "\n     Conservative estimates for unknown models", :white
-      say "\n     Input: $0.50/MTok, Output: $1.50/MTok\n\n"
-
-      say "Priority order: API cost > Model pricing > Default pricing\n\n", :yellow
-
-      say "Supported models with official pricing:\n", :green
-      say "  • claude-opus-4.5\n", :cyan
-      say "  • claude-sonnet-4.5\n", :cyan
-      say "  • claude-haiku-4.5\n", :cyan
-      say "  • claude-3-5-sonnet-20241022\n", :cyan
-      say "  • claude-3-5-sonnet-20240620\n", :cyan
-      say "  • claude-3-5-haiku-20241022\n\n", :cyan
-
-      say "For detailed pricing information, visit:\n", :white
-      say "https://www.anthropic.com/pricing\n\n", :blue
-    end
-
-    desc "skills", "Manage and list skills"
-    long_desc <<-LONGDESC
-      Manage and list skills that extend Claude's capabilities.
-
-      Skills are reusable prompts with YAML frontmatter that define
-      when and how Claude should use them. Skills can be invoked
-      directly with /skill-name or loaded automatically based on context.
-
-      Skill locations (in priority order):
-        - .clacky/skills/     (project, highest priority)
-        - ~/.clacky/skills/   (user global)
-        - .claude/skills/     (project, compatibility)
-        - ~/.claude/skills/   (user global, compatibility)
-
-      Subcommands:
-        list        - List all available skills
-        show <name> - Show details of a specific skill
-
-      Examples:
-        $ clacky skills list
-        $ clacky skills show explain-code
-    LONGDESC
-    subcommand_option_names = []
-
-    # Main skills command - delegates to subcommands or shows help
-    def skills(*args)
-      if args.empty?
-        invoke :help, ["skills"]
-      else
-        subcommand = args.shift
-        case subcommand
-        when "list"
-          skills_list
-        when "show"
-          skills_show(args.first)
-        when "create"
-          # Parse options for create
-          name = args.first
-          opts = {}
-          i = 1
-          while i < args.length
-            if args[i] == "--description"
-              opts[:description] = args[i + 1]
-              i += 2
-            elsif args[i] == "--content"
-              opts[:content] = args[i + 1]
-              i += 2
-            elsif args[i] == "--project"
-              opts[:project] = true
-              i += 1
-            else
-              i += 1
-            end
-          end
-          skills_create_with_opts(name, opts)
-        when "delete"
-          skills_delete(args.first)
-        else
-          say "Unknown skill subcommand: #{subcommand}", :red
-          invoke :help, ["skills"]
-        end
-      end
-    end
-
-    desc "skills list", "List all available skills"
-    long_desc <<-LONGDESC
-      List all available skills from all configured locations:
-        - Project skills (.clacky/skills/)
-        - Global skills (~/.clacky/skills/)
-        - Compatible skills (.claude/skills/, ~/.claude/skills/)
-
-      Each skill shows:
-        - Name and slash command
-        - Description
-        - Whether it can be auto-invoked by Claude
-        - Whether it supports user invocation
-    LONGDESC
-    def skills_list
-      loader = Clacky::SkillLoader.new(Dir.pwd)
-      all_skills = loader.load_all
-
-      if all_skills.empty?
-        say "\n📚 No skills found.\n", :yellow
-        say "\nCreate your first skill:", :cyan
-        say "  ~/.clacky/skills/<skill-name>/SKILL.md", :white
-        say "  or .clacky/skills/<skill-name>/SKILL.md\n", :white
-        return
-      end
-
-      say "\n📚 Available Skills (#{all_skills.size})\n\n", :green
-
-      all_skills.each do |skill|
-        # Build status indicators
-        indicators = []
-        indicators << "🤖" if skill.model_invocation_allowed?
-        indicators << "👤" if skill.user_invocable?
-        indicators << "🔀" if skill.forked_context?
-
-        say "  /#{skill.identifier}", :cyan
-        say " #{indicators.join(' ')}" unless indicators.empty?
-        say "\n"
-
-        # Show description (truncated if too long)
-        desc = skill.context_description
-        if desc.length > 60
-          desc = desc[0..57] + "..."
-        end
-        say "     #{desc}\n", :white
-
-        # Show location with priority indicator
-        location = case loader.loaded_from[skill.identifier]
-        when :default
-          "built-in"
-        when :project_clacky
-          "project .clacky"
-        when :project_claude
-          "project .claude (compat)"
-        when :global_clacky
-          "global .clacky"
-        when :global_claude
-          "global .claude (compat)"
-        else
-          "unknown"
-        end
-        say "     [#{location}]\n", :yellow
-
-        say "\n"
-      end
-
-      # Show errors if any
-      if loader.errors.any?
-        say "\n⚠️  Warnings:\n", :yellow
-        loader.errors.each do |error|
-          say "  - #{error}\n", :red
-        end
-      end
-    end
-
-    desc "skills show NAME", "Show details of a specific skill"
-    long_desc <<-LONGDESC
-      Show the full content and metadata of a specific skill.
-
-      NAME is the skill name (without the leading /).
-
-      Examples:
-        $ clacky skills show explain-code
-    LONGDESC
-    def skills_show(name = nil)
-      unless name
-        say "Error: Skill name required.\n", :red
-        say "Usage: clacky skills show <name>\n", :yellow
-        exit 1
-      end
-
-      loader = Clacky::SkillLoader.new(Dir.pwd)
-      all_skills = loader.load_all
-
-      # Try to find the skill
-      skill = all_skills.find { |s| s.identifier == name }
-
-      unless skill
-        # Try prefix matching
-        matching = all_skills.select { |s| s.identifier.start_with?(name) }
-        if matching.size == 1
-          skill = matching.first
-        else
-          say "\n❌ Skill '#{name}' not found.\n", :red
-          say "\nAvailable skills:\n", :yellow
-          all_skills.each { |s| say "  /#{s.identifier}\n", :cyan }
-          exit 1
-        end
-      end
-
-      # Display skill details
-      say "\n📖 Skill: /#{skill.identifier}\n\n", :green
-
-      say "Description:\n", :yellow
-      say "  #{skill.context_description}\n\n", :white
-
-      say "Status:\n", :yellow
-      say "  Auto-invokable: #{skill.model_invocation_allowed? ? 'Yes' : 'No'}\n", :white
-      say "  User-invokable: #{skill.user_invocable? ? 'Yes' : 'No'}\n", :white
-      say "  Forked context: #{skill.forked_context? ? 'Yes' : 'No'}\n", :white
-
-      if skill.allowed_tools
-        say "  Allowed tools: #{skill.allowed_tools.join(', ')}\n", :white
-      end
-
-      say "\nLocation: #{skill.source_path}\n\n", :yellow
-
-      say "Content:\n", :yellow
-      say "-" * 60 + "\n", :white
-      say skill.content, :white
-      say "\n" + "-" * 60 + "\n", :white
-
-      # Show supporting files if any
-      if skill.has_supporting_files?
-        say "\nSupporting files:\n", :yellow
-        skill.supporting_files.each do |file|
-          say "  - #{file.relative_path_from(Pathname.new(Dir.pwd))}\n", :cyan
-        end
-      end
-    end
-
-    desc "skills create NAME", "Create a new skill"
-    long_desc <<-LONGDESC
-      Create a new skill in the global skills directory.
-
-      NAME is the skill name (lowercase letters, numbers, and hyphens only).
-
-      This creates a new directory at ~/.clacky/skills/NAME/SKILL.md
-      with a template skill file.
-
-      Options:
-        --description  Set the skill description
-        --content      Set the skill content (use - for stdin)
-        --project      Create in project .clacky/skills/ instead
-
-      Examples:
-        $ clacky skills create explain-code --description "Explain code with diagrams"
-        $ clacky skills create deploy --description "Deploy application" --project
-    LONGDESC
-    option :description, type: :string, desc: "Skill description"
-    option :content, type: :string, desc: "Skill content (use - for stdin)"
-    option :project, type: :boolean, desc: "Create in project directory"
-    def skills_create(name = nil)
-      unless name
-        say "Error: Skill name required.\n", :red
-        say "Usage: clacky skills create <name>\n", :yellow
-        exit 1
-      end
-
-      # Validate name
-      unless name.match?(/^[a-z0-9][a-z0-9-]*$/)
-        say "Error: Invalid skill name '#{name}'.\n", :red
-        say "Use lowercase letters, numbers, and hyphens only.\n", :yellow
-        exit 1
-      end
-
-      # Get description
-      description = options[:description] || ask("Skill description: ").to_s
-
-      # Get content
-      if options[:content] == "-"
-        say "Enter skill content (end with Ctrl+D):\n", :yellow
-        content = STDIN.read
-      elsif options[:content]
-        content = options[:content]
-      else
-        content = "Describe the skill here..."
-      end
-
-      # Determine location
-      location = options[:project] ? :project : :global
-
-      # Create the skill
-      loader = Clacky::SkillLoader.new(Dir.pwd)
-      skill = loader.create_skill(name, content, description, location: location)
-
-      skill_path = skill.directory
-      say "\n✅ Skill created at: #{skill_path}\n", :green
-      say "\nYou can invoke it with: /#{name}\n", :cyan
-    end
-
-    # Helper method for skills command dispatcher
     no_commands do
-      def skills_create_with_opts(name, opts = {})
-        unless name
-          say "Error: Skill name required.\n", :red
-          say "Usage: clacky skills create <name>\n", :yellow
-          exit 1
+      private def handle_config_command(ui_controller, client, agent_config)
+        config = Clacky::Config.load
+
+        # Show modal dialog for configuration
+        result = ui_controller.show_config_modal(config)
+
+        # If user cancelled, return early
+        if result.nil?
+          ui_controller.show_warning("Configuration cancelled")
+          return
         end
 
-        # Validate name
-        unless name.match?(/^[a-z0-9][a-z0-9-]*$/)
-          say "Error: Invalid skill name '#{name}'.\n", :red
-          say "Use lowercase letters, numbers, and hyphens only.\n", :yellow
-          exit 1
-        end
+        # Update config with non-empty values
+        config.api_key = result[:api_key] unless result[:api_key].to_s.empty?
+        config.model = result[:model] unless result[:model].to_s.empty?
+        config.base_url = result[:base_url] unless result[:base_url].to_s.empty?
 
-        description = opts[:description] || ask("Skill description: ").to_s
-        content = opts[:content] || "Describe the skill here..."
-        location = opts[:project] ? :project : :global
+        # Save configuration
+        config.save
 
-        loader = Clacky::SkillLoader.new(Dir.pwd)
-        skill = loader.create_skill(name, content, description, location: location)
+        # Update client with new config
+        client.instance_variable_set(:@api_key, config.api_key)
+        client.instance_variable_set(:@base_url, config.base_url)
 
-        skill_path = skill.directory
-        say "\n✅ Skill created at: #{skill_path}\n", :green
-        say "\nYou can invoke it with: /#{name}\n", :cyan
-      end
-    end
+        # Update agent config model
+        agent_config.model = config.model
 
-    desc "skills delete NAME", "Delete a skill"
-    long_desc <<-LONGDESC
-      Delete a skill by name.
-
-      NAME is the skill name (without the leading /).
-
-      Examples:
-        $ clacky skills delete explain-code
-    LONGDESC
-    def skills_delete(name = nil)
-      unless name
-        say "Error: Skill name required.\n", :red
-        say "Usage: clacky skills delete <name>\n", :yellow
-        exit 1
+        # Show success message in output
+        masked_key = "#{config.api_key[0..7]}#{'*' * 20}#{config.api_key[-4..]}"
+        ui_controller.show_success("Configuration saved successfully!")
+        ui_controller.append_output("  API Key: #{masked_key}")
+        ui_controller.append_output("  Model: #{config.model}")
+        ui_controller.append_output("  Base URL: #{config.base_url}")
+        ui_controller.append_output("")
       end
 
-      loader = Clacky::SkillLoader.new(Dir.pwd)
-      all_skills = loader.load_all
-
-      # Find the skill
-      skill = all_skills.find { |s| s.identifier == name }
-
-      unless skill
-        say "Error: Skill '#{name}' not found.\n", :red
-        exit 1
-      end
-
-      # Confirm deletion
-      prompt = TTY::Prompt.new
-      unless prompt.yes?("Delete skill '/#{name}' at #{skill.directory}?")
-        say "Cancelled.\n", :yellow
-        exit 0
-      end
-
-      # Delete the skill
-      loader.delete_skill(name)
-      say "\n✅ Skill '/#{name}' deleted.\n", :green
-    end
-
-    no_commands do
-      def build_agent_config(config)
+      private def build_agent_config(config)
         AgentConfig.new(
           model: options[:model] || config.model,
           permission_mode: options[:mode].to_sym,
@@ -789,6 +358,9 @@ module Clacky
         ui_controller.on_input do |input, images|
           # Handle commands
           case input.downcase.strip
+          when "/config"
+            handle_config_command(ui_controller, client, agent_config)
+            next
           when "/clear"
             # Clear session by creating a new agent
             agent = Clacky::Agent.new(client, agent_config, working_dir: working_dir, ui: ui_controller)
@@ -879,49 +451,4 @@ module Clacky
 
     end
   end
-
-  class ConfigCommand < Thor
-    desc "set", "Set configuration values"
-    def set
-      prompt = TTY::Prompt.new
-
-      config = Clacky::Config.load
-
-      # API Key
-      api_key = prompt.mask("Enter your Claude API key:")
-      config.api_key = api_key
-
-      # Model
-      model = prompt.ask("Enter model:", default: config.model)
-      config.model = model
-
-      # Base URL
-      base_url = prompt.ask("Enter base URL:", default: config.base_url)
-      config.base_url = base_url
-
-      config.save
-
-      say "\nConfiguration saved successfully!", :green
-      say "API Key: #{api_key[0..7]}#{'*' * 20}#{api_key[-4..]}", :cyan
-      say "Model: #{config.model}", :cyan
-      say "Base URL: #{config.base_url}", :cyan
-    end
-
-    desc "show", "Show current configuration"
-    def show
-      config = Clacky::Config.load
-
-      if config.api_key
-        masked_key = config.api_key[0..7] + ("*" * 20) + config.api_key[-4..]
-        say "API Key: #{masked_key}", :cyan
-        say "Model: #{config.model}", :cyan
-        say "Base URL: #{config.base_url}", :cyan
-      else
-        say "No configuration found. Run 'clacky config set' to configure.", :yellow
-      end
-    end
-  end
-
-  # Register subcommands after all classes are defined
-  CLI.register(ConfigCommand, "config", "config SUBCOMMAND", "Manage configuration")
 end
