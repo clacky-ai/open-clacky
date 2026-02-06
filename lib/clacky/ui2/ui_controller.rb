@@ -685,6 +685,18 @@ module Clacky
           mode: @config[:mode]
         )
         append_output(content)
+
+        # Check if API key is configured
+        check_api_key_configuration
+      end
+
+      # Check if API key is configured and show warning if missing
+      private def check_api_key_configuration
+        config = Clacky::Config.load
+        
+        if config.api_key.nil? || config.api_key.empty?
+          show_warning("API key is not configured! Please run /config to set up your API key.")
+        end
       end
 
       # Display recent user messages when loading session
