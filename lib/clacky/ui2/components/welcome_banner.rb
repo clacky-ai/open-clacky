@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "pastel"
+require_relative "../../version"
 
 module Clacky
   module UI2
@@ -47,6 +48,7 @@ module Clacky
           lines << @pastel.bright_green(LOGO)
           lines << ""
           lines << @pastel.bright_cyan(TAGLINE)
+          lines << @pastel.dim("    Version #{Clacky::VERSION}")
           lines << ""
           TIPS.each do |tip|
             lines << @pastel.dim(tip)

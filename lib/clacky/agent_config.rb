@@ -14,7 +14,7 @@ module Clacky
       @permission_mode = validate_permission_mode(options[:permission_mode])
       @max_tokens = options[:max_tokens] || 8192
       @verbose = options[:verbose] || false
-      @enable_compression = options[:enable_compression].nil? ? false : options[:enable_compression]
+      @enable_compression = options[:enable_compression].nil? ? true : options[:enable_compression]
       @keep_recent_messages = options[:keep_recent_messages] || 20
       # Enable prompt caching by default for cost savings
       @enable_prompt_caching = options[:enable_prompt_caching].nil? ? true : options[:enable_prompt_caching]
