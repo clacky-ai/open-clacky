@@ -127,8 +127,21 @@ module Clacky
       private def handle_config_command(ui_controller, client, agent_config)
         config = Clacky::Config.load
 
-        # Show modal dialog for configuration
-        result = ui_controller.show_config_modal(config)
+        # Create test callback
+        test_callback = lambda do |test_config|
+          # Create a temporary client with new config to test
+          test_client = Clacky::Client.new(
+            test_config.api_key, 
+            base_url: test_config.base_url, 
+            anthropic_format: test_config.anthropic_format?
+          )
+          
+          # Test connection
+          test_client.test_connection(model: test_config.model)
+        end
+
+        # Show modal dialog for configuration with test callback
+        result = ui_controller.show_config_modal(config, test_callback: test_callback)
 
         # If user cancelled, return early
         if result.nil?
@@ -141,7 +154,7 @@ module Clacky
         config.model = result[:model] unless result[:model].to_s.empty?
         config.base_url = result[:base_url] unless result[:base_url].to_s.empty?
 
-        # Save configuration
+        # Save configuration (only reached if test passed)
         config.save
 
         # Update client with new config

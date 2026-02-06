@@ -22,6 +22,42 @@ module Clacky
       @use_anthropic_format
     end
 
+    # Test API connection by sending a minimal request
+    # Returns { success: true } on success, { success: false, error: "message" } on failure
+    def test_connection(model:)
+      if anthropic_format?(model)
+        response = anthropic_connection.post("v1/messages") do |req|
+          req.body = {
+            model: model,
+            max_tokens: 10,
+            messages: [
+              {
+                role: "user",
+                content: "hi"
+              }
+            ]
+          }.to_json
+        end
+        handle_test_response(response)
+      else
+        response = openai_connection.post("chat/completions") do |req|
+          req.body = {
+            model: model,
+            max_tokens: 10,
+            messages: [
+              {
+                role: "user",
+                content: "hi"
+              }
+            ]
+          }.to_json
+        end
+        handle_test_response(response)
+      end
+    rescue => e
+      { success: false, error: e.message }
+    end
+
     def send_message(content, model:, max_tokens:)
       if anthropic_format?(model)
         response = anthropic_connection.post("v1/messages") do |req|
@@ -500,14 +536,28 @@ module Clacky
     # Apply cache_control to messages for prompt caching
     # Strategy: Add cache_control on the LAST message before tools
     # This ensures everything from start to the breakpoint gets cached
+    #
+    # Special case: When compression instruction is the last message
+    # (identified by system_injected: true), we place cache_control
+    # on the second-to-last message instead. This avoids cache write
+    # for the compression instruction, saving ~31K tokens per compression.
     def apply_message_caching(messages)
       return messages if messages.empty?
 
-      # Add cache_control to the last message (before tools are added)
-      # This will cache: system message + all conversation history
+      # Determine cache breakpoint index
+      # If last message is a compression instruction, use second-to-last
+      cache_index = if is_compression_instruction?(messages.last)
+        messages.length - 2
+      else
+        messages.length - 1
+      end
+
+      # Safety check: ensure cache_index is valid
+      cache_index = [0, cache_index].max
+
+      # Add cache_control to the target message
       messages.map.with_index do |msg, idx|
-        if idx == messages.length - 1
-          # Last message: add cache_control in content block
+        if idx == cache_index
           add_cache_control_to_message(msg)
         else
           msg
@@ -538,6 +588,12 @@ module Clacky
       end
 
       msg.merge(content: content_array)
+    end
+
+    # Check if message is a compression instruction (from MessageCompressor)
+    # Compression instructions are marked with system_injected: true
+    private def is_compression_instruction?(message)
+      message.is_a?(Hash) && message[:system_injected] == true
     end
 
     # Deep clone a hash/array structure (for tool definitions)
@@ -575,6 +631,22 @@ module Clacky
         conn.options.timeout = 120
         conn.options.open_timeout = 10
         conn.adapter Faraday.default_adapter
+      end
+    end
+
+    def handle_test_response(response)
+      case response.status
+      when 200
+        { success: true }
+      else
+        # Extract error details for better user feedback
+        error_body = begin
+          JSON.parse(response.body)
+        rescue JSON::ParserError
+          nil
+        end
+        error_message = extract_error_message(error_body, response.body)
+        { success: false, error: error_message }
       end
     end
 
