@@ -298,6 +298,15 @@ module Clacky
         # Let CLI handle the interrupt message
         raise
       rescue StandardError => e
+        # Log complete error information to debug_logs for troubleshooting
+        @debug_logs << {
+          timestamp: Time.now.iso8601,
+          event: "agent_run_error",
+          error_class: e.class.name,
+          error_message: e.message,
+          backtrace: e.backtrace&.first(30) # Keep first 30 lines of backtrace
+        }
+        
         # Build error result for session data, but let CLI handle error display
         result = build_result(:error, error: e.message)
         raise
@@ -550,8 +559,14 @@ module Clacky
     def think
       @ui&.show_progress
 
-      # Compress messages if needed to reduce cost
-      compression_message = compress_messages_if_needed
+      # Check if compression is needed
+      compression_context = compress_messages_if_needed
+
+      # If compression is triggered, insert compression message and handle it
+      if compression_context
+        # Insert compression message into conversation
+        @messages << compression_context[:compression_message]
+      end
 
       # Always send tools definitions to allow multi-step tool calling
       tools_to_send = @tool_registry.all_definitions
@@ -584,8 +599,12 @@ module Clacky
       # Clear progress indicator (change to gray and show final time)
       @ui&.clear_progress
 
-      # Show compression message after clearing progress (so it doesn't get deleted)
-      @ui&.show_info(compression_message) if compression_message
+      # If this was a compression call, rebuild message list with compressed content
+      if compression_context
+        handle_compression_response(response, compression_context)
+        # Return early - don't process as normal response
+        return nil
+      end
 
       track_cost(response[:usage], raw_api_usage: response[:raw_api_usage])
 
@@ -1022,7 +1041,7 @@ module Clacky
 
     def compress_messages_if_needed
       # Check if compression is enabled
-      return unless @config.enable_compression
+      return nil unless @config.enable_compression
 
       # Calculate total tokens and message count
       token_counts = total_message_tokens
@@ -1035,7 +1054,7 @@ module Clacky
       message_count_exceeded = message_count >= MESSAGE_COUNT_THRESHOLD
 
       # Only compress if we exceed at least one threshold
-      return unless token_threshold_exceeded || message_count_exceeded
+      return nil unless token_threshold_exceeded || message_count_exceeded
 
       # Calculate how much we need to reduce
       reduction_needed = total_tokens - TARGET_COMPRESSED_TOKENS
@@ -1043,7 +1062,7 @@ module Clacky
       # Don't compress if reduction is minimal (< 10% of current size)
       # Only apply this check when triggered by token threshold
       if token_threshold_exceeded && reduction_needed < (total_tokens * 0.1)
-        return
+        return nil
       end
 
       # If only message count threshold is exceeded, force compression
@@ -1055,42 +1074,58 @@ module Clacky
       # Increment compression level for progressive summarization
       @compression_level += 1
 
-      original_tokens = total_tokens
-
-      # Find the system message (should be first)
-      system_msg = @messages.find { |m| m[:role] == "system" }
-
       # Get the most recent N messages, ensuring tool_calls/tool results pairs are kept together
       recent_messages = get_recent_messages_with_tool_pairs(@messages, target_recent_count)
       recent_messages = [] if recent_messages.nil?
 
-      # Get messages to compress (everything except system and recent)
-      messages_to_compress = @messages.reject { |m| m[:role] == "system" || recent_messages.include?(m) }
+      # Build compression instruction message (to be inserted into conversation)
+      compression_message = @message_compressor.build_compression_message(@messages, recent_messages: recent_messages)
 
-      return if messages_to_compress.empty?
+      return nil if compression_message.nil?
 
-      original_count = @messages.length
+      # Return compression context for agent to handle
+      {
+        compression_message: compression_message,
+        recent_messages: recent_messages,
+        original_token_count: total_tokens,
+        original_message_count: @messages.length,
+        compression_level: @compression_level
+      }
+    end
 
-      # Use MessageCompressor for LLM-based intelligent compression
-      # The compressor sends messages to LLM with compression instructions
-      # and receives back compressed content with recent messages preserved
-      compressed_messages = @message_compressor.compress(@messages, recent_messages: recent_messages)
+    # Handle compression response and rebuild message list
+    def handle_compression_response(response, compression_context)
+      # Extract compressed content from response
+      compressed_content = response[:content]
 
-      # Replace original messages with compressed result
-      @messages = compressed_messages
+      # Track cost for compression call
+      track_cost(response[:usage], raw_api_usage: response[:raw_api_usage])
+
+      # Rebuild message list with compression
+      # Note: we need to remove the compression instruction message we just added
+      original_messages = @messages[0..-2]  # All except the last (compression instruction)
+      
+      @messages = @message_compressor.rebuild_with_compression(
+        compressed_content,
+        original_messages: original_messages,
+        recent_messages: compression_context[:recent_messages]
+      )
 
       # Track this compression
       @compressed_summaries << {
-        level: @compression_level,
-        message_count: original_count,
+        level: compression_context[:compression_level],
+        message_count: compression_context[:original_message_count],
         timestamp: Time.now.iso8601,
-        strategy: :llm_compression
+        strategy: :insert_then_compress
       }
 
       final_tokens = total_message_tokens[:total]
 
-      # Return compression message (to be shown after clearing progress)
-      "History compressed (~#{original_tokens} -> ~#{final_tokens} tokens, level #{@compression_level})"
+      # Show compression info
+      @ui&.show_info(
+        "History compressed (~#{compression_context[:original_token_count]} -> ~#{final_tokens} tokens, " \
+        "level #{compression_context[:compression_level]})"
+      )
     end
 
     # Calculate how many recent messages to keep based on how much we need to compress

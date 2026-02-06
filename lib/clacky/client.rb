@@ -464,25 +464,9 @@ module Clacky
       when 200
         data = JSON.parse(response.body)
         content_blocks = data["content"] || []
-        usage = data["usage"] || {}
 
-        # Extract text content
-        content = content_blocks.select { |b| b["type"] == "text" }.map { |b| b["text"] }.join("")
-
-        # Build usage data
-        usage_data = {
-          prompt_tokens: usage["input_tokens"],
-          completion_tokens: usage["output_tokens"],
-          total_tokens: usage["input_tokens"].to_i + usage["output_tokens"].to_i
-        }
-
-        {
-          content: content,
-          tool_calls: [],
-          finish_reason: "stop",
-          usage: usage_data,
-          raw_api_usage: usage
-        }
+        # Extract and return text content only (simple format, consistent with OpenAI)
+        content_blocks.select { |b| b["type"] == "text" }.map { |b| b["text"] }.join("")
       else
         raise_error(response)
       end
@@ -492,13 +476,13 @@ module Clacky
     # Currently only Claude 3.5+ models support this feature
     def supports_prompt_caching?(model)
       model_str = model.to_s.downcase
-      
+
       # Only Claude models support prompt caching
       return false unless model_str.include?("claude")
-      
+
       # Pattern matching for supported Claude versions:
       # - claude-3.5-*, claude-3-5-*, claude-3.5.*
-      # - claude-3.7-*, claude-3-7-*, claude-3.7.*  
+      # - claude-3.7-*, claude-3-7-*, claude-3.7.*
       # - claude-4*, claude-sonnet-4*
       # - anthropic/claude-sonnet-4* (OpenRouter format)
       cache_pattern = /
@@ -509,7 +493,7 @@ module Clacky
           (?:-sonnet-[34])           # OpenRouter: claude-sonnet-3, claude-sonnet-4
         )
       /x
-      
+
       model_str.match?(cache_pattern)
     end
 
@@ -620,12 +604,12 @@ module Clacky
           completion_tokens: usage["completion_tokens"],
           total_tokens: usage["total_tokens"]
         }
-        
+
         # Add OpenRouter cost information if present
         if usage["cost"]
           usage_data[:api_cost] = usage["cost"]
         end
-        
+
         # Add cache metrics if present (Claude API with prompt caching)
         if usage["cache_creation_input_tokens"]
           usage_data[:cache_creation_input_tokens] = usage["cache_creation_input_tokens"]
@@ -633,7 +617,7 @@ module Clacky
         if usage["cache_read_input_tokens"]
           usage_data[:cache_read_input_tokens] = usage["cache_read_input_tokens"]
         end
-        
+
         # Add OpenRouter cache information from prompt_tokens_details
         if usage["prompt_tokens_details"]
           details = usage["prompt_tokens_details"]
@@ -644,7 +628,7 @@ module Clacky
             usage_data[:cache_creation_input_tokens] = details["cache_write_tokens"]
           end
         end
-        
+
         {
           content: message["content"],
           tool_calls: parse_tool_calls(message["tool_calls"]),
@@ -721,11 +705,14 @@ module Clacky
       return nil if tool_calls.nil? || tool_calls.empty?
 
       tool_calls.map do |call|
+        # Handle cases where function might be nil or missing
+        function_data = call["function"] || {}
+
         {
           id: call["id"],
           type: call["type"],
-          name: call["function"]["name"],
-          arguments: call["function"]["arguments"]
+          name: function_data["name"],
+          arguments: function_data["arguments"]
         }
       end
     end
