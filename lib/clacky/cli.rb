@@ -411,10 +411,9 @@ module Clacky
         # Set skill loader for command suggestions
         ui_controller.set_skill_loader(agent.skill_loader)
 
-        # Track agent thread, idle compression thread, and idle timer
-        agent_thread = nil
-        idle_compression_thread = nil
-        idle_timer_thread = nil
+        # Track current working thread (agent, idle timer, or idle compression)
+        # Only one of these can be active at a time
+        current_task_thread = nil
 
         # Set up mode toggle handler
         ui_controller.on_mode_toggle do |new_mode|
@@ -423,7 +422,7 @@ module Clacky
 
         # Set up interrupt handler
         ui_controller.on_interrupt do |input_was_empty:|
-          if (not agent_thread&.alive?) && input_was_empty
+          if (not current_task_thread&.alive?) && input_was_empty
             # Save final session state before exit
             if session_manager && agent.total_tasks > 0
               session_data = agent.to_session_data(status: :exited)
@@ -448,8 +447,8 @@ module Clacky
             exit(0)
           end
 
-          if agent_thread&.alive?
-            agent_thread.raise(Clacky::AgentInterrupted, "User interrupted")
+          if current_task_thread&.alive?
+            current_task_thread.raise(Clacky::AgentInterrupted, "User interrupted")
           end
           ui_controller.clear_input
           ui_controller.set_input_tips("Press Ctrl+C again to exit.", type: :info)
@@ -457,19 +456,6 @@ module Clacky
 
         # Set up input handler
         ui_controller.on_input do |input, images, display: nil|
-          # Kill idle timer thread if exists (user has new input)
-          if idle_timer_thread&.alive?
-            idle_timer_thread.kill
-            idle_timer_thread = nil
-          end
-
-          # Kill idle compression thread if running (user input interrupts compression)
-          if idle_compression_thread&.alive?
-            idle_compression_thread.kill
-            idle_compression_thread = nil
-            ui_controller.log("Idle compression interrupted by user input", level: :info)
-          end
-
           # Handle commands
           case input.downcase.strip
           when "/config"
@@ -500,52 +486,45 @@ module Clacky
             next
           end
 
-          # If agent is already running, interrupt it first
-          if agent_thread&.alive?
-            agent_thread.raise(Clacky::AgentInterrupted, "New input received")
-            agent_thread.join(2) # Wait up to 2 seconds for graceful shutdown
+          # If any task thread is running, interrupt it first
+          if current_task_thread&.alive?
+            current_task_thread.raise(Clacky::AgentInterrupted, "New input received")
+            current_task_thread.join(2) # Wait up to 2 seconds for graceful shutdown
+            ui_controller.set_idle_status
           end
 
           # Helper method to start idle timer after agent completes
           start_idle_timer = lambda do
-            # Kill existing idle timer if any
-            if idle_timer_thread&.alive?
-              idle_timer_thread.kill
-              idle_timer_thread = nil
-            end
-
             # Start idle timer - trigger compression after 60 seconds of inactivity
-            idle_timer_thread = Thread.new do
-              sleep 60 # Wait for 60 seconds (1 minute)
+            current_task_thread = Thread.new do
+              begin
+                sleep 60 # Wait for 60 seconds (1 minute)
 
-              # After 60 seconds, check if agent is idle and trigger compression
-              if agent_thread.nil? || !agent_thread.alive?
-                idle_compression_thread = Thread.new do
-                  begin
-                    ui_controller.set_working_status
-                    success = agent.trigger_idle_compression
+                # After 60 seconds, start idle compression
+                ui_controller.set_working_status
+                success = agent.trigger_idle_compression
 
-                    if success
-                      # Update session bar after compression
-                      ui_controller.update_sessionbar(tasks: agent.total_tasks, cost: agent.total_cost)
-                      # Save session after compression
-                      session_manager&.save(agent.to_session_data(status: :success))
-                    end
-                  rescue => e
-                    ui_controller.log("Idle compression error: #{e.message}", level: :error)
-                  ensure
-                    ui_controller.set_idle_status
-                    idle_compression_thread = nil
-                  end
+                if success
+                  # Update session bar after compression
+                  ui_controller.update_sessionbar(tasks: agent.total_tasks, cost: agent.total_cost)
+                  # Save session after compression
+                  session_manager&.save(agent.to_session_data(status: :success))
                 end
+              rescue Clacky::AgentInterrupted
+                # Task was interrupted by user
+                ui_controller.append_output("")
+                ui_controller.show_info("Idle compression cancelled")
+              rescue => e
+                ui_controller.log("Idle compression error: #{e.message}", level: :error)
+              ensure
+                ui_controller.set_idle_status
+                current_task_thread = nil
               end
-            rescue => e
-              # Silently handle timer errors (e.g., if killed)
             end
           end
 
           # Run agent in background thread
-          agent_thread = Thread.new do
+          current_task_thread = Thread.new do
             begin
               # Set status to working when agent starts
               ui_controller.set_working_status
@@ -564,7 +543,7 @@ module Clacky
             rescue Clacky::AgentInterrupted, StandardError => e
               handle_agent_exception(ui_controller, agent, session_manager, e)
             ensure
-              agent_thread = nil
+              current_task_thread = nil
               # Start idle timer after agent completes
               start_idle_timer.call
             end
@@ -584,10 +563,8 @@ module Clacky
         # Start input loop (blocks until exit)
         ui_controller.start_input_loop
 
-        # Cleanup: kill any running threads
-        idle_timer_thread&.kill
-        idle_compression_thread&.kill
-        agent_thread&.kill
+        # Cleanup: kill any running thread
+        current_task_thread&.kill
 
         # Save final session state
         if session_manager && agent.total_tasks > 0
