@@ -7,6 +7,11 @@ module Clacky
     # LineEditor module provides single-line text editing functionality
     # Shared by InputArea and InlineInput components
     module LineEditor
+      # Maximum content width ratio (percentage of terminal width)
+      # Use 90% of terminal width for better readability on wide screens
+      # This dynamically adjusts based on terminal size
+      MAX_CONTENT_WIDTH_RATIO = 0.9
+
       attr_reader :cursor_position
 
       def initialize_line_editor
@@ -200,8 +205,9 @@ module Clacky
       # Get cursor position considering line wrapping
       # @param prompt [String] Prompt string before the line (may contain ANSI codes)
       # @param width [Integer] Terminal width for wrapping
+      # @param continuation_prompt [String] Prompt for continuation lines (default: "> ")
       # @return [Array<Integer>] Row and column position (0-indexed)
-      def cursor_position_with_wrap(prompt = "", width = TTY::Screen.width)
+      def cursor_position_with_wrap(prompt = "", width = TTY::Screen.width, continuation_prompt = "> ")
         return [0, cursor_column(prompt)] if width <= 0
 
         prompt_width = calculate_display_width(strip_ansi_codes(prompt))
@@ -232,7 +238,15 @@ module Clacky
         text_in_segment_before_cursor = chars[segment_start...(segment_start + cursor_pos_in_segment)].join
         display_width = calculate_display_width(text_in_segment_before_cursor)
 
-        col = prompt_width + display_width
+        # Use appropriate prompt width based on which segment (row) we're on
+        # First line uses original prompt, subsequent lines use continuation prompt
+        actual_prompt_width = if cursor_segment_idx == 0
+          prompt_width
+        else
+          calculate_display_width(strip_ansi_codes(continuation_prompt))
+        end
+
+        col = actual_prompt_width + display_width
         row = cursor_segment_idx
 
         [row, col]
@@ -307,6 +321,13 @@ module Clacky
         else
           1
         end
+      end
+
+      # Calculate effective content width (respecting MAX_CONTENT_WIDTH_RATIO)
+      # @param screen_width [Integer] Terminal screen width
+      # @return [Integer] Effective content width to use
+      private def effective_content_width(screen_width)
+        (screen_width * MAX_CONTENT_WIDTH_RATIO).to_i
       end
 
       # Render a segment of a line with cursor if cursor is in this segment

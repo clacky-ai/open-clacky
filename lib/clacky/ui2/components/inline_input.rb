@@ -20,6 +20,7 @@ module Clacky
           @result_queue = nil
           @paste_counter = 0
           @paste_placeholders = {}
+          @continuation_prompt = "> "  # Continuation prompt for wrapped lines
         end
 
         # Activate inline input and wait for user input
@@ -110,8 +111,10 @@ module Clacky
         # @return [String] Rendered line (may wrap to multiple lines)
         def render
           width = TTY::Screen.width
+          # Use effective content width (respecting MAX_CONTENT_WIDTH_RATIO)
+          content_width = effective_content_width(width)
           prompt_width = calculate_display_width(strip_ansi_codes(@prompt))
-          available_width = width - prompt_width
+          available_width = content_width - prompt_width
 
           # Get wrapped segments
           wrapped_segments = wrap_line(@line, available_width)
@@ -142,12 +145,23 @@ module Clacky
           cursor_column(@prompt)
         end
 
+        # Get cursor position for display (considering line wrapping and continuation prompt)
+        # @param width [Integer] Terminal width
+        # @return [Array<Integer>] Row and column position (0-indexed)
+        def cursor_position_for_display(width = TTY::Screen.width)
+          # Use effective content width (respecting MAX_CONTENT_WIDTH_RATIO)
+          content_width = effective_content_width(width)
+          cursor_position_with_wrap(@prompt, content_width, @continuation_prompt)
+        end
+
         # Get the number of lines this input will occupy when rendered
         # @param width [Integer] Terminal width
         # @return [Integer] Number of lines
         def line_count(width = TTY::Screen.width)
+          # Use effective content width (respecting MAX_CONTENT_WIDTH_RATIO)
+          content_width = effective_content_width(width)
           prompt_width = calculate_display_width(strip_ansi_codes(@prompt))
-          available_width = width - prompt_width
+          available_width = content_width - prompt_width
           return 1 if available_width <= 0
 
           segments = wrap_line(@line, available_width)

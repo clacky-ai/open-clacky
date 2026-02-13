@@ -92,10 +92,9 @@ module Clacky
       def position_inline_input_cursor(inline_input)
         return unless inline_input
 
-        # Use the shared method from LineEditor to calculate cursor position with wrap
-        prompt = inline_input.prompt
+        # Use InlineInput's method to calculate cursor position (handles continuation prompt correctly)
         width = screen.width
-        wrap_row, wrap_col = inline_input.cursor_position_with_wrap(prompt, width)
+        wrap_row, wrap_col = inline_input.cursor_position_for_display(width)
 
         # Get the number of lines InlineInput occupies (considering wrapping)
         line_count = inline_input.line_count(width)

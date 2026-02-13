@@ -101,6 +101,8 @@ module Clacky
           height += @images.size
           
           # Calculate height considering wrapped lines
+          # Use effective content width (respecting MAX_CONTENT_WIDTH_RATIO)
+          content_width = effective_content_width(@width)
           @lines.each_with_index do |line, idx|
             prefix = if idx == 0
               prompt
@@ -108,7 +110,7 @@ module Clacky
               " " * prompt.length
             end
             prefix_width = calculate_display_width(strip_ansi_codes(prefix))
-            available_width = [@width - prefix_width, 20].max  # At least 20 chars
+            available_width = [content_width - prefix_width, 20].max  # At least 20 chars
             wrapped_segments = wrap_line(line, available_width)
             height += wrapped_segments.size
           end
@@ -319,6 +321,8 @@ module Clacky
         def position_cursor(start_row)
           # Calculate which wrapped line the cursor is on
           cursor_row = start_row + 2 + @images.size  # session_bar + separator + images
+          # Use effective content width (respecting MAX_CONTENT_WIDTH_RATIO)
+          content_width = effective_content_width(@width)
           
           # Add rows for lines before current line
           @lines[0...@line_index].each_with_index do |line, idx|
@@ -328,7 +332,7 @@ module Clacky
               " " * prompt.length
             end
             prefix_width = calculate_display_width(strip_ansi_codes(prefix))
-            available_width = [@width - prefix_width, 20].max
+            available_width = [content_width - prefix_width, 20].max
             wrapped_segments = wrap_line(line, available_width)
             cursor_row += wrapped_segments.size
           end
@@ -341,7 +345,7 @@ module Clacky
             " " * prompt.length
           end
           prefix_width = calculate_display_width(strip_ansi_codes(prefix))
-          available_width = [@width - prefix_width, 20].max
+          available_width = [content_width - prefix_width, 20].max
           wrapped_segments = wrap_line(current, available_width)
           
           # Find cursor segment and position within segment
@@ -629,11 +633,13 @@ module Clacky
         # @return [Integer] Next available row after rendering all lines
         def render_input_lines(start_row)
           current_row = start_row
+          # Use effective content width (respecting MAX_CONTENT_WIDTH_RATIO)
+          content_width = effective_content_width(@width)
           
           @lines.each_with_index do |line, line_idx|
             prefix = calculate_line_prefix(line_idx)
             prefix_width = calculate_display_width(strip_ansi_codes(prefix))
-            available_width = @width - prefix_width
+            available_width = content_width - prefix_width
             wrapped_segments = wrap_line(line, available_width)
 
             wrapped_segments.each_with_index do |segment_info, wrap_idx|
