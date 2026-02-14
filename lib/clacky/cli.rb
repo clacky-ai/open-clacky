@@ -140,16 +140,16 @@ module Clacky
         client.instance_variable_set(:@api_key, config.api_key)
         client.instance_variable_set(:@base_url, config.base_url)
         client.instance_variable_set(:@use_anthropic_format, config.anthropic_format?)
-        
+
         # Update agent's client (agent has its own @client instance variable)
         agent.instance_variable_set(:@client, Clacky::Client.new(
           config.api_key,
           base_url: config.base_url,
           anthropic_format: config.anthropic_format?
         ))
-        
+
         # Update agent's message compressor with new client
-        agent.instance_variable_set(:@message_compressor, 
+        agent.instance_variable_set(:@message_compressor,
           Clacky::MessageCompressor.new(agent.instance_variable_get(:@client), model: config.model_name)
         )
 
@@ -491,7 +491,7 @@ module Clacky
             # Start idle timer - trigger compression after 60 seconds of inactivity
             idle_timer_thread = Thread.new do
               # Sleep outside of rescue block - if interrupted here, let it propagate and exit
-              sleep 5 # Wait for 60 seconds (1 minute)
+              sleep 60 * 3
 
               # After sleep completes, switch to current_task_thread for compression
               # (so it can be interrupted by Ctrl+C)
