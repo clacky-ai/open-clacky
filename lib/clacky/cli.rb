@@ -488,10 +488,12 @@ module Clacky
 
           # Helper method to start idle timer after agent completes
           start_idle_timer = lambda do
-            # Start idle timer - trigger compression after 60 seconds of inactivity
+            # Start idle timer - trigger compression after 180 seconds of inactivity
             idle_timer_thread = Thread.new do
+              ui_controller.log("Idle timer started, will trigger compression in 180 seconds", level: :debug)
               # Sleep outside of rescue block - if interrupted here, let it propagate and exit
-              sleep 60 * 3
+              sleep 60
+              ui_controller.log("Idle timer sleep completed, starting compression", level: :debug)
 
               # After sleep completes, switch to current_task_thread for compression
               # (so it can be interrupted by Ctrl+C)
