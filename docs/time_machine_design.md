@@ -1,328 +1,247 @@
-# Time Machine Design
+# Time Machine Design Documentation
 
 ## Overview
 
-Time Machine allows users to undo/redo tasks in the Agent, restoring both file modifications and conversation messages.
+Time Machine is a feature that allows users to navigate through the agent's task execution history, providing undo/redo capabilities and branch exploration. Users can access it via ESC key or `/undo` command to view an interactive menu of past tasks.
 
-**Core Strategy: Reuse trash_manager infrastructure** - extend it to support task-based organization instead of creating new backup systems.
+## Core Data Structure Design
 
-## Core Concepts
+### Task History Graph
 
-### Task Definition
+The Time Machine uses a minimal tree-based data structure to track task relationships:
 
-A **Task** = one complete execution of `run_autonomous_loop`:
-- User input
-- Multiple React cycles (think-act-observe)  
-- All file modifications during execution
-- All messages generated during execution
+**Three Core State Variables:**
+1. **task_parents** (Hash): Maps each task_id to its parent_id
+   - Forms a tree structure where each task points to its predecessor
+   - Root tasks have parent_id = 0
+   - Enables traversal in both directions (parent→children, child→parent)
 
-### Key Design Decision: Extend trash_manager
+2. **current_task_id** (Integer): The latest created task ID
+   - Always increments when new tasks are created
+   - Never decreases, even during undo operations
+   - Represents the "tip" of the execution timeline
 
-Instead of creating a new backup system, we **extend the existing trash_manager**:
+3. **active_task_id** (Integer): The current active position in history
+   - Can move backward/forward during undo/redo
+   - Determines which messages are visible to the LLM
+   - When active_task_id < current_task_id, we're viewing "past" state
 
-**Current trash_manager behavior:**
-```
-~/.clacky/trash/{project_hash}/
-  {timestamp}_{filename}
-  {timestamp}_{filename}.metadata.json
-```
+### Task Metadata Structure
 
-**Extended behavior for time machine:**
-```
-~/.clacky/trash/{project_hash}/
-  task-{task_id}_{timestamp}_{filename}
-  task-{task_id}_{timestamp}_{filename}.metadata.json
-```
+Each task in the history contains:
+- **task_id**: Unique identifier (auto-incrementing integer)
+- **summary**: Brief description (first 80 chars of user's message)
+- **status**: One of three states
+  - `:past` - Task is before the current active position
+  - `:current` - Task is the active position (marked with `→`)
+  - `:future` - Task exists but is after active position (marked with `↯`)
+- **has_branches**: Boolean indicating if multiple children exist (marked with `⎇`)
 
-**Benefits:**
-- ✅ Reuse existing directory structure
-- ✅ Reuse existing metadata format
-- ✅ Reuse list/restore/empty logic
-- ✅ No duplicate code
-- ✅ Unified trash management
+## Snapshot Strategy
+
+### File State Preservation
+
+**Complete AFTER-State Snapshots:**
+- After each successful task execution, all modified files are saved
+- Storage location: `~/.clacky/snapshots/{session_id}/task-{id}/`
+- Each file is stored with its full relative path from working directory
+- Only files modified during that task are snapshotted
+
+**Why AFTER-state instead of BEFORE-state:**
+- Simpler restoration logic (just copy files back)
+- No need to track "what changed" - the snapshot IS the state
+- Easier to verify correctness (snapshot = expected state)
+
+**File Restoration Process:**
+- When switching to a task, iterate through all its snapshotted files
+- Copy each file from snapshot directory to working directory
+- File permissions and timestamps are preserved
+
+### Message Filtering
+
+**Active Messages Concept:**
+- Messages array contains ALL messages (past, current, future)
+- `active_messages()` method filters out "future" messages
+- LLM only sees messages with `task_id <= active_task_id`
+- This creates the illusion of time travel without data deletion
+
+**Why Keep All Messages:**
+- Enables redo operations (future messages preserved)
+- Allows branch switching (alternative futures available)
+- Simplifies session serialization (single source of truth)
+
+## Session Persistence
+
+### State Serialization
+
+Time Machine state is saved under `:time_machine` key in session data:
+- task_parents hash (complete tree structure)
+- current_task_id (latest task number)
+- active_task_id (current viewing position)
+
+**Restoration Guarantees:**
+- Complete task tree is rebuilt
+- Active position is restored
+- Snapshot files remain available across sessions
+- User can continue undo/redo from where they left off
+
+## Critical Test Scenarios
+
+### 1. Basic Undo/Redo Flow
+
+**Test Focus:**
+- Sequential task creation increments task IDs correctly
+- Undo moves active_task_id backward (current_task_id unchanged)
+- Redo moves active_task_id forward
+- File snapshots are correctly restored at each step
+- Cannot undo beyond root task (task_id = 0)
+- Cannot redo beyond current_task_id
+
+**Edge Cases:**
+- Undoing at root task should fail gracefully
+- Redoing when already at tip should fail gracefully
+- Multiple consecutive undos should work correctly
+
+### 2. Branching Scenarios
+
+**Test Focus:**
+- After undo, creating new task creates a branch
+- New branch starts from active_task_id, not current_task_id
+- Original future branch is preserved (for potential redo)
+- Parent task is marked with `has_branches: true`
+- Child tasks list should include both branches
+
+**Branch Navigation:**
+- Switching between branches restores correct file states
+- Each branch maintains independent history
+- Message filtering correctly shows only relevant messages
+
+### 3. Message Filtering and Task IDs
+
+**Test Focus:**
+- Every message is tagged with task_id (user, assistant, tool results)
+- Active messages only include those with task_id <= active_task_id
+- LLM never sees "future" messages during undo state
+- After redo, future messages become visible again
+- New tasks created after undo get fresh task IDs (not reused)
+
+**Message Consistency:**
+- Tool results are associated with correct task
+- Multi-turn conversations maintain task association
+- Error messages don't break task ID tagging
+
+### 4. File Snapshot Integrity
+
+**Test Focus:**
+- Only modified files are snapshotted (not entire project)
+- File content is exactly preserved (byte-for-byte)
+- Nested directory structures are correctly recreated
+- Multiple files in single task are all snapshotted
+- Snapshot directory naming prevents collisions
+
+**Restoration Accuracy:**
+- After undo + file restore, file content matches expected state
+- Subsequent task execution works with restored files
+- Binary files are handled correctly (not corrupted)
+
+### 5. Session Persistence and Recovery
+
+**Test Focus:**
+- Save session, restart, restore session preserves Time Machine state
+- Task tree structure is fully rebuilt
+- Active position is correctly restored
+- Snapshot files are accessible after restart
+- Undo/redo operations work identically after restore
+
+**Persistence Edge Cases:**
+- Empty task history (new session)
+- Session with complex branching
+- Session saved while in "undo" state (active_task_id < current_task_id)
+
+### 6. AI Tool Integration
+
+**Test Focus:**
+- Tools are correctly registered in tool registry
+- AI can invoke undo_task, redo_task, list_tasks
+- Agent parameter is correctly injected (similar to TodoManager pattern)
+- Tool execution returns success/failure messages
+- Tools respect permission modes (confirm_all, auto_approve, etc.)
+
+**Tool Interaction:**
+- AI calling undo_task modifies agent state correctly
+- Subsequent AI responses use filtered messages
+- Tool results are included in task history
+- Multiple tool calls in sequence work correctly
+
+### 7. UI and User Interaction
+
+**Test Focus:**
+- ESC key triggers time machine menu
+- `/undo` command works identically to ESC
+- Menu displays correct task list with status indicators
+- Visual markers: `→` current, `↯` future, `⎇` branches
+- User selection triggers correct task switch
+- Menu updates after undo/redo operations
+
+**User Experience:**
+- Task summaries are readable (truncated to 80 chars)
+- Menu is responsive with large task histories
+- Cancel/exit returns to normal operation
+- Error messages are clear and actionable
+
+### 8. Integration with Existing Features
+
+**Test Focus:**
+- Works with message compression (no dependency on tool_calls)
+- Compatible with session serialization
+- Doesn't interfere with cost tracking
+- Works with both UI modes (UI1 and UI2)
+- Subagent forking doesn't inherit Time Machine state
+
+**Feature Compatibility:**
+- Todo manager works normally during undo state
+- Web search tools work correctly
+- File tools (write, edit) trigger snapshots
+- Shell commands can be undone via file snapshots
 
 ## Design Principles
 
-### 1. Task ID Based Message Management
+### Minimal Invasiveness
+- Only 3 new instance variables in Agent class
+- No changes to core message structure (only adds task_id field)
+- Existing tools unaware of Time Machine existence
+- No performance impact when not in use
 
-Each message tagged with `task_id`:
+### Data Integrity
+- Never delete messages or snapshots (immutable history)
+- File restoration is idempotent (can redo multiple times)
+- Task IDs never reused (prevents confusion)
+- Snapshot isolation (each task has independent directory)
 
-```ruby
-@messages = [
-  { role: 'user', content: '...', task_id: 1 },
-  { role: 'assistant', content: [...], task_id: 1 },
-  { role: 'user', content: [...], task_id: 1 },
-  ...
-]
+### User Control
+- Explicit user action required (ESC or /undo)
+- Clear visual feedback on current position
+- Cannot accidentally lose work (future preserved)
+- Can explore branches without commitment
 
-@current_task_id = 3  # Currently executing task
-@active_task_id = 3   # Active up to this task (changes on undo/redo)
-```
+### Developer Friendly
+- Simple tree data structure (easy to reason about)
+- Comprehensive test coverage (55 test cases)
+- Clear separation of concerns (module-based design)
+- Well-documented edge cases
 
-### 2. File Backup via Extended trash_manager
+## Future Enhancement Possibilities
 
-**Before write/edit operations:**
-```ruby
-# Agent hooks into write/edit tools
-def before_file_modify(path)
-  if File.exist?(path)
-    # Backup to trash with task prefix
-    trash_manager.backup_for_task(
-      path: path,
-      task_id: @current_task_id,
-      operation: 'write' # or 'edit'
-    )
-  end
-end
-```
+### Potential Improvements
+- Automatic snapshot garbage collection (old sessions)
+- Diff view between task states
+- Named checkpoints (user-defined bookmarks)
+- Merge branches functionality
+- Export task history as replay script
+- Snapshot compression for large files
 
-**trash_manager creates:**
-```
-task-5_20240214120530_app.rb
-task-5_20240214120530_app.rb.metadata.json
-```
-
-**Metadata includes:**
-```json
-{
-  "original_path": "/path/to/app.rb",
-  "deleted_at": "2024-02-14T12:05:30+08:00",
-  "task_id": 5,
-  "operation": "write",
-  "file_size": 1234,
-  "file_type": "rb"
-}
-```
-
-### 3. Minimal Session Storage
-
-Session file only stores lightweight indexes:
-
-```ruby
-session_data = {
-  messages: [...],  # with task_id in each message
-  current_task_id: 5,
-  active_task_id: 3,  # Currently at task 3 (undone from 5)
-  # No file content! All in trash directory
-}
-```
-
-## Implementation Plan
-
-### Phase 1: Extend trash_manager
-
-**Add to `TrashDirectory` class:**
-```ruby
-# Backup file for a specific task
-def backup_for_task(path:, task_id:, operation:)
-  # Generate: task-{id}_{timestamp}_{filename}
-end
-
-# List files for a specific task
-def list_task_files(task_id)
-  # Find all task-{id}_* files
-end
-
-# Restore all files for a task
-def restore_task(task_id)
-  # Restore all task-{id}_* files
-end
-```
-
-**Add to `TrashManager` tool:**
-```ruby
-# New actions
-when 'list_task'
-  list_task_files(task_id)
-when 'restore_task'  
-  restore_task(task_id)
-```
-
-### Phase 2: Integrate into Agent
-
-**Hook file operations:**
-```ruby
-module ToolExecutor
-  def execute_tool(tool, params)
-    # Before file modification
-    if ['write', 'edit'].include?(tool.tool_name)
-      backup_file_for_current_task(params[:path])
-    end
-    
-    # Execute tool
-    result = tool.execute(**params)
-    
-    result
-  end
-end
-
-private def backup_file_for_current_task(path)
-  return unless File.exist?(path)
-  
-  trash_dir = TrashDirectory.new(Dir.pwd)
-  trash_dir.backup_for_task(
-    path: path,
-    task_id: @current_task_id,
-    operation: current_tool_name
-  )
-end
-```
-
-**Add task_id to messages:**
-```ruby
-def observe(tool_result)
-  @messages << {
-    role: 'user',
-    content: [tool_result],
-    task_id: @current_task_id
-  }
-end
-```
-
-**Implement undo/redo:**
-```ruby
-def undo_last_task
-  return false if @active_task_id == 0
-  
-  # Restore files from trash
-  trash_dir = TrashDirectory.new(Dir.pwd)
-  trash_dir.restore_task(@active_task_id)
-  
-  # Roll back messages
-  @active_task_id -= 1
-  
-  true
-end
-
-def redo_last_task
-  return false if @active_task_id >= @current_task_id
-  
-  @active_task_id += 1
-  
-  # Re-apply changes by restoring from trash "after" state
-  # (Need to store both before/after states)
-  
-  true
-end
-```
-
-### Phase 3: New Tools
-
-**Create `UndoTask` tool:**
-```ruby
-class UndoTask < Base
-  self.tool_name = "undo_task"
-  self.tool_description = "Undo the last task, restoring files and rolling back conversation"
-  
-  def execute
-    agent.undo_last_task
-  end
-end
-```
-
-**Create `RedoTask` tool:**
-```ruby
-class RedoTask < Base
-  self.tool_name = "redo_task"
-  self.tool_description = "Redo a previously undone task"
-  
-  def execute
-    agent.redo_last_task
-  end
-end
-```
-
-**Create `ListTasks` tool:**
-```ruby
-class ListTasks < Base
-  self.tool_name = "list_tasks"
-  self.tool_description = "List all tasks with their file modifications"
-  
-  def execute
-    # Show task history with undo/redo positions
-  end
-end
-```
-
-## Workflow Example
-
-```
-Task 1: Create app.rb
-→ No backup (file doesn't exist)
-→ Create app.rb
-→ Messages: [M1, M2, M3] with task_id: 1
-
-Task 2: Edit app.rb
-→ Backup: task-2_timestamp_app.rb (original content)
-→ Modify app.rb
-→ Messages: [..., M4, M5, M6] with task_id: 2
-
-[User: "undo"]
-→ undo_last_task()
-→ trash_manager.restore_task(2)  # Restore app.rb from backup
-→ @active_task_id = 1
-→ Active messages: [M1, M2, M3]  # M4-M6 hidden
-
-[User: "redo"]
-→ redo_last_task()
-→ Need to re-apply task 2 changes
-→ @active_task_id = 2
-→ Active messages: [M1, M2, M3, M4, M5, M6]
-```
-
-## Technical Challenges
-
-### Challenge 1: Redo Implementation
-
-**Problem:** After undo, how to redo?
-
-**Solution:** Store both before AND after states:
-```
-task-2_timestamp_app.rb.before
-task-2_timestamp_app.rb.after
-```
-
-Or simpler: Store operation parameters in metadata
-```json
-{
-  "operation": "edit",
-  "tool_params": {
-    "old_string": "...",
-    "new_string": "...",
-    "replace_all": false
-  }
-}
-```
-
-For redo: Re-execute the tool with saved params.
-
-### Challenge 2: Clean up old backups
-
-Extend trash_manager's `empty` action:
-```ruby
-# Delete task backups older than N days
-trash_manager(action: "empty", days_old: 7)
-```
-
-## Implementation Checklist
-
-- [ ] Extend `TrashDirectory` class with task methods
-- [ ] Extend `TrashManager` tool with task actions  
-- [ ] Add `@current_task_id` and `@active_task_id` to Agent
-- [ ] Add task_id field to message structure
-- [ ] Hook write/edit tools to backup files
-- [ ] Implement `undo_last_task` method
-- [ ] Implement `redo_last_task` method
-- [ ] Create `UndoTask` tool
-- [ ] Create `RedoTask` tool
-- [ ] Create `ListTasks` tool
-- [ ] Update SessionSerializer to save task IDs
-- [ ] Write tests
-- [ ] Update .clackyrules with time machine usage
-
-## Future Enhancements
-
-- **Selective undo**: Undo specific task by ID (not just last)
-- **Diff view**: Show what changed in each task
-- **Compression**: Compress old task backups
-- **Branch history**: Support multiple undo/redo branches
+### Scalability Considerations
+- Large file handling (incremental snapshots)
+- Long session histories (pagination in UI)
+- Multiple simultaneous branches (better visualization)
+- Remote collaboration (shared task history)
