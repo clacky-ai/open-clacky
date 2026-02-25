@@ -1,5 +1,11 @@
 # OpenClacky
 
+[![Build](https://img.shields.io/github/actions/workflow/status/clacky-ai/open-clacky/main.yml?label=build&style=flat-square)](https://github.com/clacky-ai/open-clacky/actions)
+[![Release](https://img.shields.io/gem/v/openclacky?label=release&style=flat-square&color=blue)](https://rubygems.org/gems/openclacky)
+[![Ruby](https://img.shields.io/badge/ruby-%3E%3D%203.1.0-red?style=flat-square)](https://www.ruby-lang.org)
+[![Downloads](https://img.shields.io/gem/dt/openclacky?label=downloads&style=flat-square&color=brightgreen)](https://rubygems.org/gems/openclacky)
+[![License](https://img.shields.io/badge/license-MIT-lightgrey?style=flat-square)](LICENSE.txt)
+
 OpenClacky = Lovable + Supabase
 
 ## Features
