@@ -111,17 +111,7 @@ install_macos_dependencies() {
     print_step "Installing macOS dependencies and Ruby..."
     echo ""
 
-    # Install Xcode Command Line Tools
-    print_info "Installing Xcode Command Line Tools..."
-    if ! xcode-select -p &>/dev/null; then
-        xcode-select --install
-        print_warning "Please complete Xcode Command Line Tools installation and run this script again."
-        exit 1
-    else
-        print_success "Xcode Command Line Tools already installed"
-    fi
-
-    # Install Homebrew
+    # Install Homebrew (it will automatically install Xcode Command Line Tools if needed)
     print_info "Checking Homebrew installation..."
     if ! command_exists brew; then
         print_info "Installing Homebrew..."
@@ -138,38 +128,47 @@ install_macos_dependencies() {
 
     # Install build dependencies
     print_info "Installing build dependencies..."
-    brew install openssl@3 libyaml gmp rust
-    print_success "Build dependencies installed"
+    if brew install openssl@3 libyaml gmp rust; then
+        print_success "Build dependencies installed"
+    else
+        print_error "Failed to install build dependencies"
+        return 1
+    fi
 
     # Install mise for Ruby version management
     print_info "Installing mise..."
     if ! command_exists mise; then
-        curl https://mise.run | sh
-        
-        # Add mise to shell
-        if [ -f ~/.zshrc ]; then
-            echo 'eval "$(~/.local/bin/mise activate bash)"' >> ~/.zshrc
+        if curl https://mise.run | sh; then
+            # Add mise to shell
+            if [ -f ~/.zshrc ]; then
+                echo 'eval "$(~/.local/bin/mise activate bash)"' >> ~/.zshrc
+            fi
+            if [ -f ~/.bash_profile ]; then
+                echo 'eval "$(~/.local/bin/mise activate bash)"' >> ~/.bash_profile
+            fi
+            
+            export PATH="$HOME/.local/bin:$PATH"
+            eval "$(~/.local/bin/mise activate bash)"
+            
+            print_success "mise installed successfully"
+        else
+            print_error "Failed to install mise"
+            return 1
         fi
-        if [ -f ~/.bash_profile ]; then
-            echo 'eval "$(~/.local/bin/mise activate bash)"' >> ~/.bash_profile
-        fi
-        
-        export PATH="$HOME/.local/bin:$PATH"
-        eval "$(~/.local/bin/mise activate bash)"
-        
-        print_success "mise installed successfully"
     else
         print_success "mise already installed"
     fi
 
     # Install Ruby 3 via mise
     print_info "Installing Ruby 3 via mise..."
-    ~/.local/bin/mise use -g ruby@3
-    
-    # Reload mise
-    eval "$(~/.local/bin/mise activate bash)"
-    
-    print_success "Ruby 3 installed successfully"
+    if ~/.local/bin/mise use -g ruby@3; then
+        # Reload mise
+        eval "$(~/.local/bin/mise activate bash)"
+        print_success "Ruby 3 installed successfully"
+    else
+        print_error "Failed to install Ruby 3"
+        return 1
+    fi
     
     # Verify Ruby installation
     if check_ruby; then
@@ -187,40 +186,53 @@ install_ubuntu_dependencies() {
 
     # Update package list
     print_info "Updating package list..."
-    sudo apt update
-    print_success "Package list updated"
+    if sudo apt update; then
+        print_success "Package list updated"
+    else
+        print_error "Failed to update package list"
+        return 1
+    fi
 
     # Install build dependencies
     print_info "Installing build dependencies..."
-    sudo apt install -y build-essential rustc libssl-dev libyaml-dev zlib1g-dev libgmp-dev git
-    print_success "Build dependencies installed"
+    if sudo apt install -y build-essential rustc libssl-dev libyaml-dev zlib1g-dev libgmp-dev git; then
+        print_success "Build dependencies installed"
+    else
+        print_error "Failed to install build dependencies"
+        return 1
+    fi
 
     # Install mise for Ruby version management
     print_info "Installing mise..."
     if ! command_exists mise; then
-        curl https://mise.run | sh
-        
-        # Add mise to shell
-        if [ -f ~/.bashrc ]; then
-            echo 'eval "$(~/.local/bin/mise activate bash)"' >> ~/.bashrc
+        if curl https://mise.run | sh; then
+            # Add mise to shell
+            if [ -f ~/.bashrc ]; then
+                echo 'eval "$(~/.local/bin/mise activate bash)"' >> ~/.bashrc
+            fi
+            
+            export PATH="$HOME/.local/bin:$PATH"
+            eval "$(~/.local/bin/mise activate bash)"
+            
+            print_success "mise installed successfully"
+        else
+            print_error "Failed to install mise"
+            return 1
         fi
-        
-        export PATH="$HOME/.local/bin:$PATH"
-        eval "$(~/.local/bin/mise activate bash)"
-        
-        print_success "mise installed successfully"
     else
         print_success "mise already installed"
     fi
 
     # Install Ruby 3 via mise
     print_info "Installing Ruby 3 via mise..."
-    ~/.local/bin/mise use -g ruby@3
-    
-    # Reload mise
-    eval "$(~/.local/bin/mise activate bash)"
-    
-    print_success "Ruby 3 installed successfully"
+    if ~/.local/bin/mise use -g ruby@3; then
+        # Reload mise
+        eval "$(~/.local/bin/mise activate bash)"
+        print_success "Ruby 3 installed successfully"
+    else
+        print_error "Failed to install Ruby 3"
+        return 1
+    fi
     
     # Verify Ruby installation
     if check_ruby; then
@@ -241,7 +253,7 @@ suggest_ruby_installation() {
         echo "  This script can automatically install Ruby and dependencies for you."
         echo "  Uses mise - a fast, polyglot tool version manager."
         echo ""
-        read -p "Would you like to install Ruby and dependencies automatically? (y/n) " -n 1 -r
+        read -p "Would you like to install Ruby and dependencies automatically? (y/n) " -n 1 -r < /dev/tty
         echo ""
         if [[ $REPLY =~ ^[Yy]$ ]]; then
             install_macos_dependencies
@@ -249,10 +261,7 @@ suggest_ruby_installation() {
         fi
         echo ""
         print_info "Manual Installation with mise:"
-        echo "  # Install Xcode Command Line Tools"
-        echo "  xcode-select --install"
-        echo ""
-        echo "  # Install Homebrew (if not installed)"
+        echo "  # Install Homebrew (it will install Xcode Command Line Tools automatically)"
         echo "  /bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""
         echo ""
         echo "  # Install dependencies"
@@ -271,7 +280,7 @@ suggest_ruby_installation() {
             echo "  This script can automatically install Ruby and dependencies for you."
             echo "  Uses mise - a fast, polyglot tool version manager."
             echo ""
-            read -p "Would you like to install Ruby and dependencies automatically? (y/n) " -n 1 -r
+            read -p "Would you like to install Ruby and dependencies automatically? (y/n) " -n 1 -r < /dev/tty
             echo ""
             if [[ $REPLY =~ ^[Yy]$ ]]; then
                 install_ubuntu_dependencies
@@ -359,17 +368,25 @@ main() {
             if install_via_gem; then
                 show_post_install_info
                 exit 0
+            else
+                print_error "Failed to install OpenClacky gem"
+                exit 1
             fi
+        else
+            # User declined or installation failed
+            print_info "Ruby installation was not completed"
+            print_info "Please install Ruby manually and run: gem install openclacky"
+            print_info "For more information, visit: https://github.com/clacky-ai/open-clacky"
+            exit 1
         fi
     else
         print_error "Could not install OpenClacky automatically"
         echo ""
         suggest_ruby_installation
         echo ""
+        print_info "For more information, visit: https://github.com/clacky-ai/open-clacky"
+        exit 1
     fi
-
-    print_info "For more information, visit: https://github.com/clacky-ai/open-clacky"
-    exit 1
 }
 
 # Post-installation information
