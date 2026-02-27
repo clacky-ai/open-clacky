@@ -59,9 +59,18 @@ After the script completes, use the run_project tool to start the server:
 run_project(action: "start")
 ```
 
-This will start the Rails development server in the background. Inform user:
-- Application: http://localhost:3000
-- Admin: http://localhost:3000/admin (admin/admin)
+**Important**: If run_project executes without errors, the server has started successfully. 
+
+Then inform the user and ask what to develop next:
+```
+✨ Rails project created successfully!
+
+The development server is now running at: http://localhost:3000
+
+You can open your browser and visit the URL to see the application.
+
+What would you like to develop next?
+```
 
 ## Error Handling
 - Directory not empty → Ask user confirmation, abort if declined
