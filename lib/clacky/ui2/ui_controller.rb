@@ -901,7 +901,8 @@ module Clacky
           @layout.position_inline_input_cursor(@inline_input)
         when :submit, :cancel
           # InlineInput is done, will be cleaned up by request_confirmation after collect returns
-          nil
+          # Don't render anything here - let request_confirmation handle cleanup
+          return
         when :toggle_expand
           # If there's command output available, show it; otherwise show diff
           if @progress_output_buffer
