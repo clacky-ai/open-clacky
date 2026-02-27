@@ -583,7 +583,7 @@ module Clacky
         # Show question in output with theme styling
         theme = ThemeManager.current_theme
         question_symbol = theme.format_symbol(:info)
-        append_output("\n#{question_symbol} #{message}")
+        append_output("#{question_symbol} #{message}")
 
         # Pause InputArea
         @input_area.pause
