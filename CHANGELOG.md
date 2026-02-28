@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.7.5] - 2026-03-05
+## [0.7.5] - 2026-02-28
 
 ### Fixed
 - Tool errors now display in low-key style (same as tool result) to avoid alarming users for non-critical errors the agent can retry
