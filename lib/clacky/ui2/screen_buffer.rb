@@ -24,9 +24,21 @@ module Clacky
         print "\e[#{row + 1};#{col + 1}H"
       end
 
-      # Clear entire screen
-      def clear_screen
-        print "\e[2J"
+      # Clear screen with different modes:
+      #   :preserve - clear visible screen, scrollback history preserved (default)
+      #   :current  - cursor to top-left and erase to end, no new scrollback produced
+      #   :reset    - clear visible screen AND scrollback history (full reset)
+      # @param mode [Symbol] Clear mode (:preserve, :current, :reset)
+      def clear_screen(mode: :preserve)
+        case mode
+        when :reset
+          print "\e[3J"    # erase scrollback buffer
+          print "\e[H\e[J" # cursor to top-left, erase to end of screen
+        when :current
+          print "\e[H\e[J" # cursor to top-left, erase to end of screen
+        else # :preserve
+          print "\e[2J\e[H"    # erase visible screen, scrollback preserved
+        end
         move_cursor(0, 0)
       end
 
@@ -118,7 +130,7 @@ module Clacky
         if timeout
           return nil unless IO.select([$stdin], nil, nil, timeout)
         end
-        
+
         $stdin.getc
       end
 
@@ -172,11 +184,11 @@ module Clacky
           # Keep reading available characters
           loop_count = 0
           empty_checks = 0
-          
+
           loop do
             # Check if there's data available immediately
             has_data = IO.select([$stdin], nil, nil, 0)
-            
+
             if has_data
               next_char = $stdin.getc
               break unless next_char

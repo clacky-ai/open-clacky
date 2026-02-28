@@ -96,30 +96,30 @@ module Clacky
         @render_mutex.synchronize do
           # Clear entire screen
           screen.clear_screen
-          
+
           # Re-render output from buffer
           render_output_from_buffer
-          
+
           # Re-render fixed areas at new positions
           render_fixed_areas
           screen.flush
         end
       end
-      
+
       # Render output area from buffer (clears and re-renders last N lines)
       private def render_output_from_buffer
         max_output_row = fixed_area_start_row
-        
+
         # Clear output area
         (0...max_output_row).each do |row|
           screen.move_cursor(row, 0)
           screen.clear_line
         end
-        
+
         # Re-render from buffer (show last N lines that fit)
         @output_row = 0
         visible_lines = [@output_buffer.size, max_output_row].min
-        
+
         @output_buffer.last(visible_lines).each do |line|
           screen.move_cursor(@output_row, 0)
           print line
@@ -217,7 +217,7 @@ module Clacky
 
           # Reset output position to beginning
           @output_row = 0
-          
+
           # Clear the output buffer so re-renders don't restore old content
           @output_buffer.clear
 
@@ -349,27 +349,36 @@ module Clacky
 
       # Handle window resize
       private def handle_resize
+        # Record old dimensions before updating to detect shrink vs grow
+        old_height = screen.height
+        old_width = screen.width
+
         # Update terminal dimensions and recalculate layout
         screen.update_dimensions
         calculate_layout
 
-        # Clear entire screen
-        screen.clear_screen
-        
+        # When shrinking: full reset (clears scrollback too), otherwise just clear current screen
+        shrinking = screen.height < old_height || screen.width < old_width
+        screen.clear_screen(mode: shrinking ? :reset : :current)
+
         # Re-render all output from buffer
         @output_row = 0
         max_output_row = fixed_area_start_row
-        
+
         # Calculate how many lines we can show from the end of buffer
         visible_lines = [@output_buffer.size, max_output_row].min
-        
+
         # Render the last N lines that fit in the output area
         @output_buffer.last(visible_lines).each do |line|
           screen.move_cursor(@output_row, 0)
           print line
           @output_row += 1
         end
-        
+
+        # Sync @last_fixed_area_height so render_fixed_areas won't think the height
+        # changed and trigger a second render_output_from_buffer call
+        @last_fixed_area_height = fixed_area_height
+
         # Re-render fixed areas at new positions
         render_fixed_areas
         screen.flush
@@ -381,7 +390,7 @@ module Clacky
       def write_output_line(line)
         # Add to buffer for potential re-rendering
         @output_buffer << line
-        
+
         # Calculate where fixed area starts (this is where output area ends)
         max_output_row = fixed_area_start_row
 
@@ -581,21 +590,21 @@ module Clacky
       # @param hint [String] Hint message at bottom
       def enter_fullscreen(lines, hint: "Press Ctrl+O to return")
         return if @fullscreen_mode
-        
+
         @fullscreen_mode = true
-        
+
         # Enter alternate screen buffer
         print "\e[?1049h"
         # Clear screen and move cursor to top
         print "\e[2J\e[H"
         $stdout.flush
-        
+
         # Show all lines with proper line endings (CR+LF)
         lines.each do |line|
           # Strip trailing newline and print with CR+LF
           print line.chomp + "\r\n"
         end
-        
+
         # Show hint at bottom
         print "\r\n"
         print "\e[36m#{hint}\e[0m\r\n"
@@ -605,9 +614,9 @@ module Clacky
       # Exit fullscreen mode and restore previous screen
       def exit_fullscreen
         return unless @fullscreen_mode
-        
+
         @fullscreen_mode = false
-        
+
         # Exit alternate screen buffer (automatically restores previous screen)
         print "\e[?1049l"
         $stdout.flush
@@ -628,7 +637,7 @@ module Clacky
       # Check and process pending resize (should be called from main thread periodically)
       def process_pending_resize
         return unless @resize_pending
-        
+
         @resize_pending = false
         handle_resize_safely
       end
