@@ -220,12 +220,6 @@ module Clacky
         end
       end
 
-      # Debug: Save request body to see what we're actually sending
-      if ENV['CLACKY_DEBUG_REQUEST']
-        debug_file = "/tmp/clacky_request_#{Time.now.to_i}.json"
-        File.write(debug_file, JSON.pretty_generate(body))
-      end
-
       response = openai_connection.post("chat/completions") do |req|
         req.body = body.to_json
       end
@@ -238,24 +232,8 @@ module Clacky
       # Convert OpenAI message format to Anthropic format
       body = build_anthropic_body(messages, model, tools, max_tokens, caching_enabled)
 
-      # DEBUG: Always save request body
-      debug_file = "/tmp/clacky_request_body.json"
-      File.write(debug_file, JSON.pretty_generate(body))
-
       response = anthropic_connection.post("v1/messages") do |req|
         req.body = body.to_json
-      end
-
-      # Debug response
-      if ENV['CLACKY_DEBUG_REQUEST']
-        timestamp = Time.now.to_i
-        File.write("/tmp/clacky_debug_#{timestamp}.txt", "URL = #{@base_url}/v1/messages\n")
-        File.write("/tmp/clacky_debug_#{timestamp}.txt", "API Key = #{@api_key[0..10]}...\n")
-        File.write("/tmp/clacky_debug_#{timestamp}.txt", "Headers = #{anthropic_connection.headers.inspect}\n")
-        File.open("/tmp/clacky_debug_#{timestamp}.txt", "a") do |f|
-          f.puts "Response status = #{response.status}"
-          f.puts "Response body = #{response.body}"
-        end
       end
 
       handle_anthropic_response(response)
@@ -294,18 +272,6 @@ module Clacky
         anthropic_tools.last[:cache_control] = { type: "ephemeral" }
       end
 
-      # DEBUG: Log tools transformation
-      debug_file = "/tmp/clacky_tools_debug.txt"
-      File.write(debug_file, "Tools Debug:\n")
-      File.write(debug_file, "Input tools count: #{tools&.length || 0}\n", mode: "a")
-      File.write(debug_file, "Anthropic tools count: #{anthropic_tools&.length || 0}\n", mode: "a")
-      if tools&.any?
-        File.write(debug_file, "First input tool: #{JSON.pretty_generate(tools.first)}\n", mode: "a")
-      end
-      if anthropic_tools&.any?
-        File.write(debug_file, "First anthropic tool: #{JSON.pretty_generate(anthropic_tools.first)}\n", mode: "a")
-      end
-
       body = {
         model: model,
         max_tokens: max_tokens,
@@ -316,10 +282,6 @@ module Clacky
       body[:system] = system if system && !system.empty?
 
       body[:tools] = anthropic_tools if anthropic_tools&.any?
-
-      # DEBUG: Log final body
-      File.write(debug_file, "Body has tools: #{body.key?(:tools)}\n", mode: "a")
-      File.write(debug_file, "Body tools count: #{body[:tools]&.length || 0}\n", mode: "a")
 
       body
     end
@@ -452,16 +414,6 @@ module Clacky
             arguments: tc["input"].is_a?(String) ? tc["input"] : tc["input"].to_json
           }
         end
-
-        # DEBUG: Log what we got
-        debug_file = "/tmp/clacky_anthropic_response.txt"
-        File.write(debug_file, "Response Analysis:\n")
-        File.write(debug_file, "content_blocks count: #{content_blocks.length}\n", mode: "a")
-        File.write(debug_file, "content_block types: #{content_blocks.map { |b| b["type"] }.inspect}\n", mode: "a")
-        File.write(debug_file, "tool_use blocks found: #{content_blocks.select { |b| b["type"] == "tool_use" }.length}\n", mode: "a")
-        File.write(debug_file, "extracted tool_calls: #{tool_calls.length}\n", mode: "a")
-        File.write(debug_file, "finish_reason (raw): #{data["stop_reason"]}\n", mode: "a")
-        File.write(debug_file, "Full content_blocks: #{JSON.pretty_generate(content_blocks)}\n", mode: "a")
 
         # Parse finish reason
         finish_reason = case data["stop_reason"]
