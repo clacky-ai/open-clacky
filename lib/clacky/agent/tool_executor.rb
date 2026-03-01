@@ -197,14 +197,16 @@ module Clacky
           }
         else
           # User manually denied or provided feedback
+          # Clearly state the action was NOT performed so the LLM knows the change did not happen
           message = if user_feedback && !user_feedback.empty?
-                      "Tool use denied by user. User feedback: #{user_feedback}"
+                      "Tool use denied by user. This action was NOT performed. User feedback: #{user_feedback}"
                     else
-                      "Tool use denied by user"
+                      "Tool use denied by user. This action was NOT performed."
                     end
 
           tool_content = {
             error: message,
+            action_performed: false,
             user_feedback: user_feedback
           }
         end
