@@ -150,7 +150,7 @@ module Clacky
 
     PERMISSION_MODES = [:auto_approve, :confirm_safes, :plan_only].freeze
 
-    attr_accessor :permission_mode, :max_tokens, :verbose, 
+    attr_accessor :permission_mode, :max_tokens, :verbose,
                   :enable_compression, :enable_prompt_caching,
                   :models, :current_model_index
 
@@ -161,7 +161,7 @@ module Clacky
       @enable_compression = options[:enable_compression].nil? ? true : options[:enable_compression]
       # Enable prompt caching by default for cost savings
       @enable_prompt_caching = options[:enable_prompt_caching].nil? ? true : options[:enable_prompt_caching]
-      
+
       # Models configuration
       @models = options[:models] || []
       @current_model_index = options[:current_model_index] || 0
