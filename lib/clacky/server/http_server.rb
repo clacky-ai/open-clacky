@@ -182,7 +182,12 @@ module Clacky
 
       def api_list_tasks(res)
         tasks = @scheduler.list_tasks.map do |name|
-          { name: name, path: @scheduler.task_file_path(name) }
+          content = begin
+            @scheduler.read_task(name)
+          rescue StandardError
+            ""
+          end
+          { name: name, path: @scheduler.task_file_path(name), content: content }
         end
         json_response(res, 200, { tasks: tasks })
       end
@@ -247,7 +252,8 @@ module Clacky
             @registry.update(session_id, status: :error, error: e.message)
           end
 
-          json_response(res, 202, { ok: true, session_id: session_id })
+          session = @registry.list.find { |s| s[:id] == session_id }
+          json_response(res, 202, { ok: true, session: session })
         rescue => e
           json_response(res, 422, { error: e.message })
         end
@@ -331,9 +337,6 @@ module Clacky
           if @registry.exist?(session_id)
             conn.session_id = session_id
             subscribe(session_id, conn)
-            # Send current session state to the new subscriber
-            sessions = @registry.list
-            conn.send_json(type: "session_list", sessions: sessions)
             conn.send_json(type: "subscribed", session_id: session_id)
           else
             conn.send_json(type: "error", message: "Session not found: #{session_id}")
