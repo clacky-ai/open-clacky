@@ -650,7 +650,7 @@ module Clacky
         end
 
         if diff_lines.size > max_lines
-          append_output("\n... (#{diff_lines.size - max_lines} more lines, diff truncated. Press Ctrl+O to expand)")
+          append_output("\n... (#{diff_lines.size - max_lines} more lines hidden. Press Ctrl+O to open full diff in pager)")
         end
       rescue LoadError
         # Fallback if diffy is not available
@@ -662,10 +662,29 @@ module Clacky
       # Show fullscreen diff view (only if not already expanded)
       private def redisplay_diff
         return unless @last_diff_lines
-        return if @layout.fullscreen_mode?  # Already in fullscreen, ignore
+        return if @layout.fullscreen_mode?
 
-        # Enter fullscreen diff mode
-        @layout.enter_fullscreen(@last_diff_lines, hint: "Press Ctrl+O to return")
+        # Use `less -R` as pager: it handles its own alternate screen + scrolling,
+        # and restores the terminal perfectly on exit — no DIY scrolling needed.
+        content = @last_diff_lines.join
+
+        # Write diff to a temp file so less can read it
+        require "tempfile"
+        tmpfile = Tempfile.new(["clacky_diff", ".txt"])
+        tmpfile.write(content)
+        tmpfile.flush
+
+        # Suspend raw mode so less can take full control of the terminal
+        @layout.screen.disable_raw_mode
+
+        system("less -R #{tmpfile.path}")
+
+        # Restore raw mode and repaint the main screen
+        @layout.screen.enable_raw_mode
+        @layout.rerender_all
+      ensure
+        tmpfile&.close
+        tmpfile&.unlink
       end
 
       # Show fullscreen command output view

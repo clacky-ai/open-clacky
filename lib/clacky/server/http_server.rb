@@ -5,19 +5,19 @@ require "websocket/driver"
 require "json"
 require "thread"
 require "fileutils"
+require "uri"
 require_relative "session_registry"
 require_relative "web_ui_controller"
+require_relative "scheduler"
 
 module Clacky
   module Server
     # HttpServer runs an embedded WEBrick HTTP server with WebSocket support.
     #
     # Routes:
-    #   GET  /                       → serves index.html (embedded web UI)
-    #   GET  /api/sessions           → JSON list of sessions
-    #   POST /api/sessions           → create a new session
-    #   DELETE /api/sessions/:id     → delete a session
     #   GET  /ws                     → WebSocket upgrade (all real-time communication)
+    #   *    /api/*                  → JSON REST API (sessions, tasks, schedules)
+    #   GET  /**                     → static files served from lib/clacky/web/ directory
     class HttpServer
       WEB_ROOT = File.expand_path("../web", __dir__)
 
@@ -29,6 +29,10 @@ module Clacky
         @registry       = SessionRegistry.new
         @ws_clients     = {}  # session_id => [WebSocketConnection, ...]
         @ws_mutex       = Mutex.new
+        @scheduler      = Scheduler.new(
+          session_registry: @registry,
+          session_builder:  method(:build_session)
+        )
       end
 
       def start
@@ -39,18 +43,34 @@ module Clacky
           AccessLog:       []
         )
 
-        # Mount all routes on the root servlet
-        server.mount_proc("/") { |req, res| dispatch(req, res) }
+        # Mount API + WebSocket handler (takes priority)
+        server.mount_proc("/api") { |req, res| dispatch(req, res) }
+        server.mount_proc("/ws")  { |req, res| dispatch(req, res) }
+
+        # Mount static file handler for the entire web directory.
+        # Use mount_proc so we can inject no-cache headers on every response,
+        # preventing stale JS/CSS from being served after a gem update.
+        file_handler = WEBrick::HTTPServlet::FileHandler.new(server, WEB_ROOT,
+                                                             FancyIndexing: false)
+        server.mount_proc("/") do |req, res|
+          file_handler.service(req, res)
+          res["Cache-Control"] = "no-store"
+          res["Pragma"]        = "no-cache"
+        end
 
         # Graceful shutdown on Ctrl-C
-        trap("INT")  { server.shutdown }
-        trap("TERM") { server.shutdown }
+        trap("INT")  { @scheduler.stop; server.shutdown }
+        trap("TERM") { @scheduler.stop; server.shutdown }
 
         puts "🌐 Clacky Web UI running at http://#{@host}:#{@port}"
         puts "   Press Ctrl-C to stop."
 
         # Auto-create a default session on startup
         create_default_session
+
+        # Start the background scheduler
+        @scheduler.start
+        puts "   ⏰ Scheduler started (#{@scheduler.schedules.size} schedule(s) loaded)"
 
         server.start
       end
@@ -70,30 +90,29 @@ module Clacky
         end
 
         case [method, path]
-        when ["GET",    "/"]                 then serve_index(res)
-        when ["GET",    "/api/sessions"]     then api_list_sessions(res)
-        when ["POST",   "/api/sessions"]     then api_create_session(req, res)
+        when ["GET",    "/api/sessions"]      then api_list_sessions(res)
+        when ["POST",   "/api/sessions"]      then api_create_session(req, res)
+        when ["GET",    "/api/schedules"]     then api_list_schedules(res)
+        when ["POST",   "/api/schedules"]     then api_create_schedule(req, res)
+        when ["GET",    "/api/tasks"]         then api_list_tasks(res)
+        when ["POST",   "/api/tasks"]         then api_create_task(req, res)
+        when ["POST",   "/api/tasks/run"]     then api_run_task(req, res)
         else
           if method == "DELETE" && path.start_with?("/api/sessions/")
             session_id = path.sub("/api/sessions/", "")
             api_delete_session(session_id, res)
+          elsif method == "DELETE" && path.start_with?("/api/schedules/")
+            name = URI.decode_www_form_component(path.sub("/api/schedules/", ""))
+            api_delete_schedule(name, res)
+          elsif method == "GET" && path.start_with?("/api/tasks/")
+            name = URI.decode_www_form_component(path.sub("/api/tasks/", ""))
+            api_get_task(name, res)
+          elsif method == "DELETE" && path.start_with?("/api/tasks/")
+            name = URI.decode_www_form_component(path.sub("/api/tasks/", ""))
+            api_delete_task(name, res)
           else
             not_found(res)
           end
-        end
-      end
-
-      # ── Static file ───────────────────────────────────────────────────────────
-
-      def serve_index(res)
-        html_path = File.join(WEB_ROOT, "index.html")
-        if File.exist?(html_path)
-          res.status       = 200
-          res.content_type = "text/html; charset=utf-8"
-          res.body         = File.read(html_path)
-        else
-          res.status = 404
-          res.body   = "index.html not found"
         end
       end
 
@@ -123,6 +142,115 @@ module Clacky
         working_dir = default_working_dir
         FileUtils.mkdir_p(working_dir) unless Dir.exist?(working_dir)
         build_session(name: "Session 1", working_dir: working_dir)
+      end
+
+      # ── Schedules API ─────────────────────────────────────────────────────────
+
+      def api_list_schedules(res)
+        json_response(res, 200, { schedules: @scheduler.schedules })
+      end
+
+      def api_create_schedule(req, res)
+        body = parse_json_body(req)
+        name = body["name"].to_s.strip
+        task = body["task"].to_s.strip
+        cron = body["cron"].to_s.strip
+
+        if name.empty? || task.empty? || cron.empty?
+          json_response(res, 422, { error: "name, task, and cron are required" })
+          return
+        end
+
+        unless @scheduler.list_tasks.include?(task)
+          json_response(res, 422, { error: "Task not found: #{task}" })
+          return
+        end
+
+        @scheduler.add_schedule(name: name, task: task, cron: cron)
+        json_response(res, 201, { ok: true, name: name })
+      end
+
+      def api_delete_schedule(name, res)
+        if @scheduler.remove_schedule(name)
+          json_response(res, 200, { ok: true })
+        else
+          json_response(res, 404, { error: "Schedule not found: #{name}" })
+        end
+      end
+
+      # ── Tasks API ─────────────────────────────────────────────────────────────
+
+      def api_list_tasks(res)
+        tasks = @scheduler.list_tasks.map do |name|
+          { name: name, path: @scheduler.task_file_path(name) }
+        end
+        json_response(res, 200, { tasks: tasks })
+      end
+
+      def api_get_task(name, res)
+        content = @scheduler.read_task(name)
+        json_response(res, 200, { name: name, content: content })
+      rescue => e
+        json_response(res, 404, { error: e.message })
+      end
+
+      def api_delete_task(name, res)
+        path = @scheduler.task_file_path(name)
+        if File.exist?(path)
+          File.delete(path)
+          json_response(res, 200, { ok: true })
+        else
+          json_response(res, 404, { error: "Task not found: #{name}" })
+        end
+      end
+
+      def api_create_task(req, res)
+        body    = parse_json_body(req)
+        name    = body["name"].to_s.strip
+        content = body["content"].to_s
+
+        if name.empty?
+          json_response(res, 422, { error: "name is required" })
+          return
+        end
+
+        @scheduler.write_task(name, content)
+        json_response(res, 201, { ok: true, name: name })
+      end
+
+      def api_run_task(req, res)
+        body = parse_json_body(req)
+        name = body["name"].to_s.strip
+
+        if name.empty?
+          json_response(res, 422, { error: "name is required" })
+          return
+        end
+
+        begin
+          prompt     = @scheduler.read_task(name)
+          session_name = "▶ #{name} #{Time.now.strftime("%H:%M")}"
+          working_dir  = File.expand_path("~/clacky_workspace")
+          FileUtils.mkdir_p(working_dir)
+
+          session_id = build_session(name: session_name, working_dir: working_dir)
+
+          Thread.new do
+            agent = nil
+            @registry.with_session(session_id) { |s| agent = s[:agent] }
+            next unless agent
+
+            @registry.update(session_id, status: :running)
+            Dir.chdir(working_dir) { agent.run(prompt) }
+            @registry.update(session_id, status: :idle)
+          rescue => e
+            @registry.update(session_id, status: :error, error: e.message)
+          end
+
+          json_response(res, 202, { ok: true, session_id: session_id })
+        rescue => e
+          json_response(res, 422, { error: e.message })
+        end
       end
 
       def api_delete_session(session_id, res)
@@ -295,8 +423,11 @@ module Clacky
 
       def subscribe(session_id, conn)
         @ws_mutex.synchronize do
+          # Remove conn from any previous session subscription first,
+          # so switching sessions never results in duplicate delivery.
+          @ws_clients.each_value { |list| list.delete(conn) }
           @ws_clients[session_id] ||= []
-          @ws_clients[session_id] << conn
+          @ws_clients[session_id] << conn unless @ws_clients[session_id].include?(conn)
         end
       end
 
