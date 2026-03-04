@@ -108,6 +108,10 @@ module Clacky
         when ["GET",    "/api/tasks"]         then api_list_tasks(res)
         when ["POST",   "/api/tasks"]         then api_create_task(req, res)
         when ["POST",   "/api/tasks/run"]     then api_run_task(req, res)
+        when ["GET",    "/api/config"]        then api_get_config(res)
+        when ["POST",   "/api/config"]        then api_save_config(req, res)
+        when ["POST",   "/api/config/test"]   then api_test_config(req, res)
+        when ["GET",    "/api/providers"]     then api_list_providers(res)
         else
           if method == "DELETE" && path.start_with?("/api/sessions/")
             session_id = path.sub("/api/sessions/", "")
@@ -260,6 +264,115 @@ module Clacky
         rescue => e
           json_response(res, 422, { error: e.message })
         end
+      end
+
+      # ── Config API ────────────────────────────────────────────────────────────
+
+      # GET /api/config — return current model configurations
+      def api_get_config(res)
+        models = @agent_config.models.map.with_index do |m, i|
+          {
+            index:            i,
+            model:            m["model"],
+            base_url:         m["base_url"],
+            api_key_masked:   mask_api_key(m["api_key"]),
+            anthropic_format: m["anthropic_format"] || false,
+            type:             m["type"]
+          }
+        end
+        json_response(res, 200, { models: models, current_index: @agent_config.current_model_index })
+      end
+
+      # POST /api/config — save updated model list
+      # Body: { models: [ { index, model, base_url, api_key, anthropic_format, type } ] }
+      # api_key may be masked ("sk-ab12****...5678") — keep existing key in that case
+      def api_save_config(req, res)
+        body = parse_json_body(req)
+        return json_response(res, 400, { error: "Invalid JSON" }) unless body
+
+        incoming = body["models"]
+        return json_response(res, 400, { error: "models array required" }) unless incoming.is_a?(Array)
+
+        incoming.each_with_index do |m, i|
+          existing = @agent_config.models[i]
+          # Resolve api_key: if masked placeholder, keep the stored key
+          api_key = if m["api_key"].to_s.include?("****")
+                      existing&.dig("api_key")
+                    else
+                      m["api_key"]
+                    end
+
+          if existing
+            existing["model"]            = m["model"]            if m.key?("model")
+            existing["base_url"]         = m["base_url"]         if m.key?("base_url")
+            existing["api_key"]          = api_key               if api_key
+            existing["anthropic_format"] = m["anthropic_format"] if m.key?("anthropic_format")
+            existing["type"]             = m["type"]             if m.key?("type")
+          else
+            @agent_config.add_model(
+              model:            m["model"].to_s,
+              api_key:          api_key.to_s,
+              base_url:         m["base_url"].to_s,
+              anthropic_format: m["anthropic_format"] || false,
+              type:             m["type"]
+            )
+          end
+        end
+
+        # Remove models that are no longer present (trim to incoming length)
+        while @agent_config.models.length > incoming.length
+          @agent_config.models.pop
+        end
+
+        @agent_config.save
+        json_response(res, 200, { ok: true })
+      rescue => e
+        json_response(res, 422, { error: e.message })
+      end
+
+      # POST /api/config/test — test connection for a single model config
+      # Body: { model, base_url, api_key, anthropic_format }
+      def api_test_config(req, res)
+        body = parse_json_body(req)
+        return json_response(res, 400, { error: "Invalid JSON" }) unless body
+
+        api_key = body["api_key"].to_s
+        # If masked, use the stored key from the matching model (by index or current)
+        if api_key.include?("****")
+          idx = body["index"]&.to_i || @agent_config.current_model_index
+          api_key = @agent_config.models.dig(idx, "api_key").to_s
+        end
+
+        begin
+          test_client = Clacky::Client.new(
+            api_key,
+            base_url:         body["base_url"].to_s,
+            anthropic_format: body["anthropic_format"] || false
+          )
+          model = body["model"].to_s
+          result = test_client.test_connection(model: model)
+          if result[:success]
+            json_response(res, 200, { ok: true, message: "Connected successfully" })
+          else
+            json_response(res, 200, { ok: false, message: result[:error].to_s })
+          end
+        rescue => e
+          json_response(res, 200, { ok: false, message: e.message })
+        end
+      end
+
+      # GET /api/providers — return built-in provider presets for quick setup
+      def api_list_providers(res)
+        providers = Clacky::Providers::PRESETS.map do |id, preset|
+          {
+            id:            id,
+            name:          preset["name"],
+            base_url:      preset["base_url"],
+            default_model: preset["default_model"],
+            models:        preset["models"] || []
+          }
+        end
+        json_response(res, 200, { providers: providers })
       end
 
       def api_delete_session(session_id, res)
@@ -538,6 +651,13 @@ module Clacky
         end
 
         session_id
+      end
+
+      # Mask API key for display: show first 8 + last 4 chars, middle replaced with ****
+      def mask_api_key(key)
+        return "" if key.nil? || key.empty?
+        return key if key.length <= 12
+        "#{key[0..7]}****#{key[-4..]}"
       end
 
       def json_response(res, status, data)

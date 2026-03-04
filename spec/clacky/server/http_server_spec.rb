@@ -1,0 +1,437 @@
+# frozen_string_literal: true
+
+require "spec_helper"
+require "net/http"
+require "json"
+require "tmpdir"
+require "fileutils"
+require "clacky/server/http_server"
+require "clacky/agent_config"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+module HttpServerSpecHelpers
+  # Start the server in a background thread; yield a Net::HTTP instance.
+  # The server is shut down after the block returns.
+  def with_server(agent_config:, client_factory: -> { double("client") })
+    server = Clacky::Server::HttpServer.new(
+      host:           "127.0.0.1",
+      port:           0,  # OS picks a free port
+      agent_config:   agent_config,
+      client_factory: client_factory
+    )
+
+    # We only need the dispatcher (dispatch method), not the full WEBrick loop.
+    # Expose the internal dispatcher directly for unit testing via a lightweight
+    # Rack-like test harness.
+    yield server
+  end
+
+  # Build a minimal fake WEBrick request object.
+  def fake_req(method:, path:, body: nil, headers: {})
+    req = double("req",
+      request_method: method,
+      path:           path,
+      body:           body ? body.to_json : nil,
+      "[]":           nil
+    )
+    allow(req).to receive(:instance_variable_get).and_return(nil)
+    allow(req).to receive(:[]) { |k| headers[k] }
+    req
+  end
+
+  # Build a response collector that captures status + body.
+  def fake_res
+    res = double("res").as_null_object
+    allow(res).to receive(:status=)  { |v| res.instance_variable_set(:@status, v) }
+    allow(res).to receive(:body=)    { |v| res.instance_variable_set(:@body, v) }
+    allow(res).to receive(:content_type=)
+    allow(res).to receive(:[]=)
+    allow(res).to receive(:status)   { res.instance_variable_get(:@status) }
+    allow(res).to receive(:body)     { res.instance_variable_get(:@body) }
+    res
+  end
+
+  def parsed_body(res)
+    JSON.parse(res.body)
+  end
+
+  # Call the private dispatch method directly.
+  def dispatch(server, req, res)
+    server.send(:dispatch, req, res)
+  end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Specs
+# ─────────────────────────────────────────────────────────────────────────────
+
+RSpec.describe Clacky::Server::HttpServer do
+  include HttpServerSpecHelpers
+
+  let(:tmpdir) { Dir.mktmpdir("clacky_http_server_spec") }
+  let(:config_file) { File.join(tmpdir, "config.yml") }
+
+  let(:agent_config) do
+    cfg = Clacky::AgentConfig.new(models: [
+      {
+        "model"            => "test-model",
+        "api_key"          => "sk-testkey1234567890abcd",
+        "base_url"         => "https://api.example.com",
+        "anthropic_format" => true,
+        "type"             => "default"
+      }
+    ])
+    stub_const("Clacky::AgentConfig::CONFIG_FILE", config_file)
+    cfg
+  end
+
+  after { FileUtils.rm_rf(tmpdir) }
+
+  # ── Initialization ────────────────────────────────────────────────────────
+
+  describe "#initialize" do
+    it "stores host, port, agent_config, and client_factory" do
+      factory = -> { double("client") }
+      server = described_class.new(
+        host: "0.0.0.0", port: 8080,
+        agent_config: agent_config, client_factory: factory
+      )
+      expect(server.instance_variable_get(:@host)).to eq("0.0.0.0")
+      expect(server.instance_variable_get(:@port)).to eq(8080)
+      expect(server.instance_variable_get(:@agent_config)).to eq(agent_config)
+      expect(server.instance_variable_get(:@client_factory)).to eq(factory)
+    end
+
+    it "creates an empty session registry" do
+      server = described_class.new(
+        agent_config: agent_config, client_factory: -> {}
+      )
+      expect(server.instance_variable_get(:@registry).list).to eq([])
+    end
+  end
+
+  # ── GET /api/sessions ─────────────────────────────────────────────────────
+
+  describe "GET /api/sessions" do
+    it "returns an empty sessions array initially" do
+      with_server(agent_config: agent_config) do |server|
+        req = fake_req(method: "GET", path: "/api/sessions")
+        res = fake_res
+        dispatch(server, req, res)
+
+        expect(res.status).to eq(200)
+        body = parsed_body(res)
+        expect(body).to have_key("sessions")
+        expect(body["sessions"]).to be_an(Array)
+      end
+    end
+  end
+
+  # ── POST /api/sessions ────────────────────────────────────────────────────
+
+  describe "POST /api/sessions" do
+    it "creates a new session and returns it" do
+      with_server(agent_config: agent_config) do |server|
+        req = fake_req(method: "POST", path: "/api/sessions",
+                       body: { name: "my-session" })
+        res = fake_res
+        dispatch(server, req, res)
+
+        expect(res.status).to eq(201)
+        body = parsed_body(res)
+        expect(body["session"]).to include("name" => "my-session")
+        expect(body["session"]["id"]).not_to be_nil
+      end
+    end
+
+    it "auto-generates a name when none is provided" do
+      with_server(agent_config: agent_config) do |server|
+        req = fake_req(method: "POST", path: "/api/sessions", body: {})
+        res = fake_res
+        dispatch(server, req, res)
+
+        expect(res.status).to eq(201)
+        body = parsed_body(res)
+        expect(body["session"]["name"]).not_to be_nil
+      end
+    end
+  end
+
+  # ── DELETE /api/sessions/:id ──────────────────────────────────────────────
+
+  describe "DELETE /api/sessions/:id" do
+    it "deletes an existing session" do
+      with_server(agent_config: agent_config) do |server|
+        # Create a session first
+        create_req = fake_req(method: "POST", path: "/api/sessions",
+                              body: { name: "to-delete" })
+        create_res = fake_res
+        dispatch(server, create_req, create_res)
+        session_id = parsed_body(create_res)["session"]["id"]
+
+        # Now delete it
+        del_req = fake_req(method: "DELETE", path: "/api/sessions/#{session_id}")
+        del_res = fake_res
+        dispatch(server, del_req, del_res)
+
+        expect(del_res.status).to eq(200)
+        expect(parsed_body(del_res)["ok"]).to be true
+      end
+    end
+
+    it "returns 404 when session does not exist" do
+      with_server(agent_config: agent_config) do |server|
+        req = fake_req(method: "DELETE", path: "/api/sessions/nonexistent-id")
+        res = fake_res
+        dispatch(server, req, res)
+
+        expect(res.status).to eq(404)
+      end
+    end
+  end
+
+  # ── GET /api/config ───────────────────────────────────────────────────────
+
+  describe "GET /api/config" do
+    it "returns the model list with masked API keys" do
+      with_server(agent_config: agent_config) do |server|
+        req = fake_req(method: "GET", path: "/api/config")
+        res = fake_res
+        dispatch(server, req, res)
+
+        expect(res.status).to eq(200)
+        body = parsed_body(res)
+        expect(body["models"]).to be_an(Array)
+        expect(body["models"].length).to eq(1)
+
+        m = body["models"].first
+        expect(m["model"]).to eq("test-model")
+        expect(m["base_url"]).to eq("https://api.example.com")
+        expect(m["anthropic_format"]).to be true
+        expect(m["type"]).to eq("default")
+        # API key should be masked
+        expect(m["api_key_masked"]).to include("****")
+        expect(m["api_key_masked"]).not_to eq("sk-testkey1234567890abcd")
+      end
+    end
+
+    it "includes current_index in the response" do
+      with_server(agent_config: agent_config) do |server|
+        req = fake_req(method: "GET", path: "/api/config")
+        res = fake_res
+        dispatch(server, req, res)
+
+        body = parsed_body(res)
+        expect(body).to have_key("current_index")
+      end
+    end
+  end
+
+  # ── POST /api/config ──────────────────────────────────────────────────────
+
+  describe "POST /api/config" do
+    it "saves updated model configuration" do
+      with_server(agent_config: agent_config) do |server|
+        payload = {
+          models: [{
+            index:            0,
+            model:            "claude-opus-4",
+            base_url:         "https://api.anthropic.com",
+            api_key:          "sk-newkey0000111122223333",
+            anthropic_format: true,
+            type:             "default"
+          }]
+        }
+        req = fake_req(method: "POST", path: "/api/config", body: payload)
+        res = fake_res
+        dispatch(server, req, res)
+
+        expect(res.status).to eq(200)
+        expect(parsed_body(res)["ok"]).to be true
+
+        # Verify the in-memory config was updated
+        expect(agent_config.model_name).to eq("claude-opus-4")
+        expect(agent_config.base_url).to eq("https://api.anthropic.com")
+      end
+    end
+
+    it "preserves existing API key when masked placeholder is sent" do
+      with_server(agent_config: agent_config) do |server|
+        original_key = agent_config.api_key
+
+        payload = {
+          models: [{
+            index:            0,
+            model:            "test-model",
+            base_url:         "https://api.example.com",
+            api_key:          "sk-test****abcd",  # masked
+            anthropic_format: true,
+            type:             "default"
+          }]
+        }
+        req = fake_req(method: "POST", path: "/api/config", body: payload)
+        res = fake_res
+        dispatch(server, req, res)
+
+        expect(res.status).to eq(200)
+        # Original key must be preserved
+        expect(agent_config.api_key).to eq(original_key)
+      end
+    end
+
+    it "returns 400 when body is missing models array" do
+      with_server(agent_config: agent_config) do |server|
+        req = fake_req(method: "POST", path: "/api/config", body: { foo: "bar" })
+        res = fake_res
+        dispatch(server, req, res)
+
+        expect(res.status).to eq(400)
+        expect(parsed_body(res)["error"]).to match(/models array required/)
+      end
+    end
+  end
+
+  # ── POST /api/config/test ─────────────────────────────────────────────────
+
+  describe "POST /api/config/test" do
+    it "returns ok: true when connection succeeds" do
+      test_client = double("client")
+      allow(test_client).to receive(:test_connection).and_return({ success: true })
+
+      factory_called = false
+      client_factory = -> { factory_called = true; double("main_client") }
+
+      with_server(agent_config: agent_config, client_factory: client_factory) do |server|
+        allow(Clacky::Client).to receive(:new).and_return(test_client)
+
+        payload = {
+          model:            "test-model",
+          base_url:         "https://api.example.com",
+          api_key:          "sk-testkey1234567890abcd",
+          anthropic_format: false
+        }
+        req = fake_req(method: "POST", path: "/api/config/test", body: payload)
+        res = fake_res
+        dispatch(server, req, res)
+
+        expect(res.status).to eq(200)
+        body = parsed_body(res)
+        expect(body["ok"]).to be true
+        expect(body["message"]).to eq("Connected successfully")
+      end
+    end
+
+    it "returns ok: false when connection fails" do
+      test_client = double("client")
+      allow(test_client).to receive(:test_connection).and_raise(StandardError, "Unauthorized")
+
+      with_server(agent_config: agent_config) do |server|
+        allow(Clacky::Client).to receive(:new).and_return(test_client)
+
+        payload = {
+          model:    "bad-model",
+          base_url: "https://api.example.com",
+          api_key:  "sk-invalid",
+          anthropic_format: false
+        }
+        req = fake_req(method: "POST", path: "/api/config/test", body: payload)
+        res = fake_res
+        dispatch(server, req, res)
+
+        expect(res.status).to eq(200)
+        body = parsed_body(res)
+        expect(body["ok"]).to be false
+        expect(body["message"]).to match(/Unauthorized/)
+      end
+    end
+
+    it "uses stored key when masked placeholder is sent" do
+      test_client = double("client")
+      allow(test_client).to receive(:test_connection).and_return({ success: true })
+
+      with_server(agent_config: agent_config) do |server|
+        expect(Clacky::Client).to receive(:new) do |key, **|
+          # Should receive the real stored key, not the masked one
+          expect(key).to eq("sk-testkey1234567890abcd")
+          test_client
+        end
+
+        payload = {
+          index:    0,
+          model:    "test-model",
+          base_url: "https://api.example.com",
+          api_key:  "sk-testke****abcd",  # masked
+          anthropic_format: true
+        }
+        req = fake_req(method: "POST", path: "/api/config/test", body: payload)
+        res = fake_res
+        dispatch(server, req, res)
+
+        expect(parsed_body(res)["ok"]).to be true
+      end
+    end
+  end
+
+  # ── GET /api/tasks ────────────────────────────────────────────────────────
+
+  describe "GET /api/tasks" do
+    it "returns empty tasks list when no tasks exist" do
+      with_server(agent_config: agent_config) do |server|
+        # Point scheduler to tmpdir so no real tasks are read
+        stub_const("Clacky::Server::Scheduler::TASKS_DIR", File.join(tmpdir, "tasks"))
+
+        req = fake_req(method: "GET", path: "/api/tasks")
+        res = fake_res
+        dispatch(server, req, res)
+
+        expect(res.status).to eq(200)
+        body = parsed_body(res)
+        expect(body["tasks"]).to be_an(Array)
+      end
+    end
+  end
+
+  # ── 404 for unknown routes ────────────────────────────────────────────────
+
+  describe "unknown routes" do
+    it "returns 404 for an unrecognised path" do
+      with_server(agent_config: agent_config) do |server|
+        req = fake_req(method: "GET", path: "/api/does-not-exist")
+        res = fake_res
+        dispatch(server, req, res)
+
+        expect(res.status).to eq(404)
+      end
+    end
+  end
+
+  # ── mask_api_key helper ───────────────────────────────────────────────────
+
+  describe "#mask_api_key (private)" do
+    subject(:server) do
+      described_class.new(agent_config: agent_config, client_factory: -> {})
+    end
+
+    it "masks a normal key showing first 8 and last 4 chars" do
+      result = server.send(:mask_api_key, "sk-testkey1234567890abcd")
+      expect(result).to start_with("sk-testk")
+      expect(result).to end_with("abcd")
+      expect(result).to include("****")
+    end
+
+    it "returns empty string for nil key" do
+      expect(server.send(:mask_api_key, nil)).to eq("")
+    end
+
+    it "returns empty string for empty key" do
+      expect(server.send(:mask_api_key, "")).to eq("")
+    end
+
+    it "returns the key unchanged when shorter than 12 chars" do
+      expect(server.send(:mask_api_key, "short")).to eq("short")
+    end
+  end
+end

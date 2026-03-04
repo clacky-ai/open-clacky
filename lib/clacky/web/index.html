@@ -26,6 +26,17 @@
         <div id="task-list-items"></div>
       </div>
     </div>
+
+    <!-- Bottom nav -->
+    <div id="sidebar-footer">
+      <button id="btn-settings" class="sidebar-nav-btn" title="Settings">
+        <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="3"/>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+        </svg>
+        <span>Settings</span>
+      </button>
+    </div>
   </aside>
 
   <!-- ── MAIN ─────────────────────────────────────────────────────────── -->
@@ -74,6 +85,25 @@
       </div>
     </div>
 
+    <!-- ── SETTINGS PANEL ──────────────────────────────────────────────── -->
+    <div id="settings-panel" style="display:none">
+      <header id="settings-header">
+        <span>Settings</span>
+      </header>
+      <div id="settings-body">
+
+        <!-- Models section -->
+        <section class="settings-section">
+          <div class="settings-section-title">
+            <span>AI Models</span>
+            <button id="btn-add-model" class="btn-settings-add">+ Add Model</button>
+          </div>
+          <div id="model-cards"></div>
+        </section>
+
+      </div>
+    </div>
+
   </main>
 </div>
 
@@ -91,6 +121,7 @@
 <script src="/ws.js"></script>
 <script src="/sessions.js"></script>
 <script src="/tasks.js"></script>
+<script src="/settings.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>
