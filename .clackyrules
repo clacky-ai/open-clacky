@@ -49,13 +49,25 @@ It provides chat functionality and autonomous AI agent capabilities with tool us
 - **IMPORTANT**: When testing clacky commands or debugging, always use `bundle exec ruby bin/clacky` instead of the global `clacky` command. The global command loads the system-installed gem version (e.g., `openclacky-0.7.0`), not your local development code
 
 ### Tool Development
-When adding new tools:
+**IMPORTANT**: Do NOT add new Ruby Tool classes without careful consideration. Tools are low-level primitives (file I/O, shell, web search, etc.). Before creating a new Tool, always ask: can this capability be achieved with an existing Tool + a Skill (SKILL.md) instead? If yes, use a Skill.
+
+Only add a new Tool when it requires capabilities that no existing tool can provide (e.g., a new API integration, a new system-level operation).
+
+When a new Tool is truly necessary:
 1. Create class in `lib/clacky/tools/`
 2. Inherit from `Clacky::Tools::Base`
 3. Define required class attributes
 4. Implement `execute` method
 5. Add optional `format_call` and `format_result` methods
 6. Require in `lib/clacky.rb`
+
+### Skill Development
+Skills are the preferred way to add new high-level capabilities. A skill is a Markdown instruction file (SKILL.md) that guides the Agent to accomplish a goal using existing Tools.
+
+- Built-in default skills live in `lib/clacky/default_skills/<skill-name>/SKILL.md` (shipped with the gem)
+- Project-level skills live in `.clacky/skills/<skill-name>/SKILL.md`
+- User-level skills live in `~/.clacky/skills/<skill-name>/SKILL.md`
+- **Prefer Skills over new Tools** whenever the task can be composed from existing primitives (write, shell, read, etc.)
 
 ### Agent Behavior
 - TODO manager is for planning only - must execute tasks after planning
