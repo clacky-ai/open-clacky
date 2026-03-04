@@ -43,16 +43,16 @@ module Clacky
       end
 
       # Stop the background scheduler thread gracefully.
+      # NOTE: intentionally avoids Mutex here so it is safe to call from a
+      # signal trap context (Ruby disallows Mutex#synchronize inside traps).
       def stop
-        @mutex.synchronize do
-          @running = false
-          @thread&.wakeup rescue nil
-        end
+        @running = false
+        @thread&.wakeup rescue nil
         @thread&.join(5)
       end
 
       def running?
-        @mutex.synchronize { @running }
+        @running
       end
 
       # Return all schedules from the config file.
