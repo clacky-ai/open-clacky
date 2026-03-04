@@ -176,6 +176,18 @@ body {
 }
 #task-detail-title { font-weight: 600; font-size: 15px; }
 
+#btn-create-task {
+  padding: 5px 12px;
+  background: #238636;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+#btn-create-task:hover { background: #2ea043; }
+
 /* ── Task list table ─────────────────────────────────────────────────────── */
 #task-list-table {
   flex: 1;
