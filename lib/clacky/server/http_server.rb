@@ -233,24 +233,16 @@ module Clacky
         end
 
         begin
-          prompt     = @scheduler.read_task(name)
+          prompt       = @scheduler.read_task(name)
           session_name = "▶ #{name} #{Time.now.strftime("%H:%M")}"
           working_dir  = File.expand_path("~/clacky_workspace")
           FileUtils.mkdir_p(working_dir)
 
           session_id = build_session(name: session_name, working_dir: working_dir)
 
-          Thread.new do
-            agent = nil
-            @registry.with_session(session_id) { |s| agent = s[:agent] }
-            next unless agent
-
-            @registry.update(session_id, status: :running)
-            Dir.chdir(working_dir) { agent.run(prompt) }
-            @registry.update(session_id, status: :idle)
-          rescue => e
-            @registry.update(session_id, status: :error, error: e.message)
-          end
+          # Store the pending task prompt so the WS "run_task" message can start it
+          # after the client has subscribed and is ready to receive broadcasts.
+          @registry.update(session_id, pending_task: prompt, pending_working_dir: working_dir)
 
           session = @registry.list.find { |s| s[:id] == session_id }
           json_response(res, 202, { ok: true, session: session })
@@ -357,6 +349,12 @@ module Clacky
         when "list_sessions"
           conn.send_json(type: "session_list", sessions: @registry.list)
 
+        when "run_task"
+          # Client sends this after subscribing to guarantee it's ready to receive
+          # broadcasts before the agent starts executing.
+          session_id = msg["session_id"] || conn.session_id
+          start_pending_task(session_id)
+
         when "ping"
           conn.send_json(type: "pong")
 
@@ -386,24 +384,25 @@ module Clacky
         return unless agent
 
         @registry.update(session_id, status: :running)
+        broadcast_session_update(session_id)
 
         thread = Thread.new do
           Dir.chdir(session[:working_dir]) do
             agent.run(content, images: images)
           end
           @registry.update(session_id, status: :idle, error: nil)
+          broadcast_session_update(session_id)
 
           # Persist session
           session_manager = Clacky::SessionManager.new
           session_manager.save(agent.to_session_data(status: :success))
-
-          # Push updated session list to all connected clients
-          broadcast_all(type: "session_list", sessions: @registry.list)
         rescue Clacky::AgentInterrupted
           @registry.update(session_id, status: :idle)
+          broadcast_session_update(session_id)
           broadcast(session_id, { type: "interrupted", session_id: session_id })
         rescue => e
           @registry.update(session_id, status: :error, error: e.message)
+          broadcast_session_update(session_id)
           broadcast(session_id, { type: "error", session_id: session_id, message: e.message })
         end
 
@@ -420,6 +419,44 @@ module Clacky
         @registry.with_session(session_id) do |s|
           s[:thread]&.raise(Clacky::AgentInterrupted, "Interrupted by user")
         end
+      end
+
+      # Start the pending task for a session.
+      # Called when the client sends "run_task" over WS — by that point the
+      # client has already subscribed, so every broadcast will be delivered.
+      def start_pending_task(session_id)
+        return unless @registry.exist?(session_id)
+
+        session = @registry.get(session_id)
+        prompt      = session[:pending_task]
+        working_dir = session[:pending_working_dir]
+        return unless prompt  # nothing pending
+
+        # Clear the pending fields so a re-connect doesn't re-run
+        @registry.update(session_id, pending_task: nil, pending_working_dir: nil)
+
+        agent = nil
+        @registry.with_session(session_id) { |s| agent = s[:agent] }
+        return unless agent
+
+        @registry.update(session_id, status: :running)
+        broadcast_session_update(session_id)
+
+        thread = Thread.new do
+          Dir.chdir(working_dir) { agent.run(prompt) }
+          @registry.update(session_id, status: :idle)
+          broadcast_session_update(session_id)
+        rescue Clacky::AgentInterrupted
+          @registry.update(session_id, status: :idle)
+          broadcast_session_update(session_id)
+          broadcast(session_id, { type: "interrupted", session_id: session_id })
+        rescue => e
+          @registry.update(session_id, status: :error, error: e.message)
+          broadcast_session_update(session_id)
+          broadcast(session_id, { type: "error", session_id: session_id, message: e.message })
+        end
+
+        @registry.with_session(session_id) { |s| s[:thread] = thread }
       end
 
       # ── WebSocket subscription management ─────────────────────────────────────
@@ -454,6 +491,15 @@ module Clacky
       def broadcast_all(event)
         clients = @ws_mutex.synchronize { @ws_clients.values.flatten.uniq }
         clients.each { |conn| conn.send_json(event) rescue nil }
+      end
+
+      # Broadcast a session_update event to all clients so they can patch their
+      # local session list without needing a full session_list refresh.
+      def broadcast_session_update(session_id)
+        session = @registry.list.find { |s| s[:id] == session_id }
+        return unless session
+
+        broadcast_all(type: "session_update", session: session)
       end
 
       # ── Helpers ───────────────────────────────────────────────────────────────

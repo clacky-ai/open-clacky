@@ -140,7 +140,7 @@ body {
 }
 .task-actions { display: flex; gap: 4px; flex-shrink: 0; }
 
-.task-btn-run, .task-btn-del {
+.task-item .task-btn-run, .task-item .task-btn-del {
   border: none;
   border-radius: 4px;
   width: 24px;
@@ -179,7 +179,7 @@ body {
 /* ── Task list table ─────────────────────────────────────────────────────── */
 #task-list-table {
   flex: 1;
-  overflow-y: auto;
+  overflow: auto;
   padding: 16px 20px;
   display: flex;
   flex-direction: column;
@@ -196,10 +196,11 @@ body {
 .task-table-header,
 .task-table-row {
   display: grid;
-  grid-template-columns: 180px 140px 1fr 200px;
+  grid-template-columns: 180px 140px 1fr minmax(200px, auto);
   align-items: center;
   gap: 12px;
   padding: 10px 14px;
+  min-width: 600px;
 }
 
 .task-table-header {
@@ -268,6 +269,8 @@ body {
   display: flex;
   gap: 6px;
   justify-content: flex-end;
+  flex-shrink: 0;
+  overflow: visible;
 }
 
 .task-btn {
