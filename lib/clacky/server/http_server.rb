@@ -217,9 +217,7 @@ module Clacky
       end
 
       def api_delete_task(name, res)
-        path = @scheduler.task_file_path(name)
-        if File.exist?(path)
-          File.delete(path)
+        if @scheduler.delete_task(name)
           json_response(res, 200, { ok: true })
         else
           json_response(res, 404, { error: "Task not found: #{name}" })

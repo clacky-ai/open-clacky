@@ -110,6 +110,20 @@ module Clacky
         end.sort
       end
 
+      # Delete a task file and remove all schedules that reference it.
+      # Returns true if the task file existed and was deleted, false otherwise.
+      def delete_task(task_name)
+        path = task_file_path(task_name)
+        return false unless File.exist?(path)
+
+        File.delete(path)
+        # Remove all schedules referencing this task
+        load_schedules.select { |s| s["task"] == task_name }.each do |s|
+          remove_schedule(s["name"])
+        end
+        true
+      end
+
       # Return the file path for a task.
       def task_file_path(task_name)
         File.join(TASKS_DIR, "#{task_name}.md")
