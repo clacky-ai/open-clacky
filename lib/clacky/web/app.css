@@ -435,6 +435,60 @@ body {
 .tool-name     { color: #e3b341; font-weight: 600; }
 .progress-msg  { color: #58a6ff; font-size: 12px; align-self: center; animation: pulse 1.2s infinite; }
 
+/* ── Tool group (collapsible tool call list) ─────────────────────────────── */
+.tool-group {
+  align-self: flex-start;
+  max-width: 90%;
+  font-family: monospace;
+  font-size: 12px;
+  color: #8b949e;
+}
+.tool-group-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: #0d1117;
+  border: 1px solid #30363d;
+  user-select: none;
+  color: #8b949e;
+  transition: background 0.15s;
+}
+.tool-group-header:hover { background: #161b22; }
+.tool-group-arrow {
+  font-size: 10px;
+  transition: transform 0.2s;
+  display: inline-block;
+  color: #6e7681;
+}
+.tool-group.expanded .tool-group-arrow { transform: rotate(90deg); }
+.tool-group-label { color: #8b949e; }
+.tool-group-label .tg-count { color: #6e7681; margin-left: 4px; }
+.tool-group-body {
+  margin-top: 4px;
+  display: none;
+  flex-direction: column;
+  gap: 2px;
+  padding-left: 8px;
+  border-left: 2px solid #21262d;
+}
+.tool-group.expanded .tool-group-body { display: flex; }
+.tool-item {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.tool-item-name { color: #e3b341; font-weight: 600; }
+.tool-item-arg  { color: #8b949e; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 400px; }
+.tool-item-status { margin-left: auto; font-size: 11px; flex-shrink: 0; }
+.tool-item-status.ok     { color: #3fb950; }
+.tool-item-status.err    { color: #f85149; }
+.tool-item-status.running { color: #58a6ff; animation: pulse 1.2s infinite; }
+
 /* Inline image thumbnails inside user message bubbles */
 .msg-image-thumb {
   display: block;

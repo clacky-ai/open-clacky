@@ -53,6 +53,9 @@ module Clacky
       end
 
       def show_tool_call(name, args)
+        # Skip request_user_feedback — its question is already shown as an assistant message
+        return if name.to_s == "request_user_feedback"
+
         args_data = args.is_a?(String) ? (JSON.parse(args) rescue args) : args
         emit("tool_call", name: name, args: args_data)
       end
