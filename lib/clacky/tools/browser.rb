@@ -1,21 +1,17 @@
 # frozen_string_literal: true
 
-require "open3"
 require "shellwords"
 require "socket"
 require "uri"
-require "timeout"
-require "tmpdir"
 require_relative "base"
+require_relative "shell"
 
 module Clacky
   module Tools
     class Browser < Base
       self.tool_name = "browser"
       self.tool_description = <<~DESC
-        Control the user's real Chrome browser using agent-browser CLI.
-
-        Use this tool ONLY for tasks that require the user's login session:
+        Use this tool ONLY when the task requires the user's login session, such as:
         - Posting on social media
         - Accessing account pages or dashboards
         - Filling forms while logged in
@@ -75,31 +71,17 @@ module Clacky
 
         full_command = build_command(command, session, auto_connect: use_auto_connect, session_name: persistent_session_name)
 
-        begin
-          stdout, stderr, status = Timeout.timeout(60) do
-            Open3.capture3(*full_command)
-          end
+        result = Shell.new.execute(command: full_command, hard_timeout: 60)
 
-          output = stdout.strip
-          error_output = stderr.strip
-
-          # Safety net: catch explicit connection errors in stderr
-          if use_auto_connect && !status.success? && error_output.include?("Could not connect")
-            return chrome_setup_instructions
-          end
-
-          {
-            success: status.success?,
-            command: command,
-            stdout: truncate_and_save(output),
-            stderr: error_output.empty? && !status.success? ? "Command failed (exit #{status.exitstatus})" : error_output,
-            exit_code: status.exitstatus
-          }
-        rescue Timeout::Error
-          { error: "Command timed out after 60s: #{command}" }
-        rescue StandardError => e
-          { error: "Failed to run agent-browser: #{e.message}" }
+        # Safety net: catch explicit connection errors in stderr
+        if use_auto_connect && !result[:success] && result[:stderr].to_s.include?("Could not connect")
+          return chrome_setup_instructions
         end
+
+        result[:command] = command
+        result
+      rescue StandardError => e
+        { error: "Failed to run agent-browser: #{e.message}" }
       end
 
       def format_call(args)
@@ -120,15 +102,6 @@ module Clacky
           stderr = result[:stderr] || "Failed"
           "[Failed] #{stderr[0..80]}"
         end
-      end
-
-      def format_result_for_llm(result)
-        return result if result[:error]
-
-        compact = { success: result[:success], command: result[:command], exit_code: result[:exit_code] }
-        compact[:stdout] = result[:stdout] || ""
-        compact[:stderr] = result[:stderr] if result[:stderr] && !result[:stderr].empty?
-        compact
       end
 
       private
@@ -199,18 +172,9 @@ module Clacky
         executable = find_chrome
         return :not_installed unless executable
 
-        system("sh", "-c", "#{Shellwords.escape(executable)} > /dev/null 2>&1 &")
-        # Wait up to 5s for Chrome to start, then open debug page
-        poll_until(attempts: 10, interval: 0.5) { chrome_debug_running? }
+        pid = Process.spawn([executable, executable], out: File::NULL, err: File::NULL)
+        Process.detach(pid)
         open_chrome_remote_debugging_page
-        false
-      end
-
-      def poll_until(attempts:, interval:)
-        attempts.times do
-          return true if yield
-          sleep interval
-        end
         false
       end
 
@@ -242,19 +206,6 @@ module Clacky
             "Phase 2 — Once the user confirms the toggle is enabled, warn them BEFORE retrying: 'Chrome will now show an Allow remote debugging confirmation dialog — please click Allow.' Then retry the browser command.",
           note: "Do NOT retry immediately. Wait for the user to confirm the toggle is enabled, warn about the Allow dialog, then retry."
         }
-      end
-
-      def truncate_and_save(output)
-        max_chars = 8000
-        return output if output.length <= max_chars
-
-        temp_file = File.join(Dir.tmpdir, "agent_browser_#{Time.now.to_i}.output")
-        File.write(temp_file, output)
-
-        truncated = output[0, max_chars]
-        lines = output.lines.length
-        shown = truncated.lines.length
-        truncated + "\n\n... [Output truncated: showing #{shown} of #{lines} lines, full content: #{temp_file} (use grep to search)] ..."
       end
     end
   end
