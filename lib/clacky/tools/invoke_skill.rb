@@ -29,7 +29,7 @@ module Clacky
       # @param agent [Clacky::Agent] Agent instance (injected)
       # @param skill_loader [Clacky::SkillLoader] Skill loader instance (injected)
       # @return [Hash] Result of skill execution
-      def execute(skill_name:, task:, agent: nil, skill_loader: nil)
+      def execute(skill_name:, task:, agent: nil, skill_loader: nil, working_dir: nil)
         # Validate injected dependencies
         return { error: "Agent context is required" } unless agent
         return { error: "Skill loader is required" } unless skill_loader

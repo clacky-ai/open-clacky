@@ -49,7 +49,7 @@ module Clacky
       CHROME_DEBUG_PORT = 9222
       CHROME_DEBUG_PAGE = "chrome://inspect/#remote-debugging"
 
-      def execute(command:, session: nil, isolated: nil)
+      def execute(command:, session: nil, isolated: nil, working_dir: nil)
         # Default: try to connect to user's Chrome (unless isolated mode requested)
         use_auto_connect = !isolated
         persistent_session_name = nil

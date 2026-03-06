@@ -44,7 +44,7 @@ module Clacky
       # Maximum characters per line (prevent single huge lines from bloating tokens)
       MAX_LINE_CHARS = 1000
 
-      def execute(path:, max_lines: 500, start_line: nil, end_line: nil)
+      def execute(path:, max_lines: 500, start_line: nil, end_line: nil, working_dir: nil)
         # Expand ~ to home directory
         expanded_path = expand_path(path)
 

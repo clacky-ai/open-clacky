@@ -21,7 +21,7 @@ module Clacky
         required: %w[path content]
       }
 
-      def execute(path:, content:)
+      def execute(path:, content:, working_dir: nil)
         # Validate path
         if path.nil? || path.strip.empty?
           return { error: "Path cannot be empty" }

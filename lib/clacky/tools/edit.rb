@@ -31,7 +31,7 @@ module Clacky
         required: %w[path old_string new_string]
       }
 
-      def execute(path:, old_string:, new_string:, replace_all: false)
+      def execute(path:, old_string:, new_string:, replace_all: false, working_dir: nil)
         # Expand ~ to home directory
         path = expand_path(path)
 

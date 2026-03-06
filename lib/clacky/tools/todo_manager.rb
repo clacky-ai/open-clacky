@@ -39,7 +39,7 @@ module Clacky
         required: ["action"]
       }
 
-      def execute(action:, task: nil, tasks: nil, id: nil, ids: nil, todos_storage: nil)
+      def execute(action:, task: nil, tasks: nil, id: nil, ids: nil, todos_storage: nil, working_dir: nil)
         # todos_storage is injected by Agent, stores todos in memory
         @todos = todos_storage || []
 

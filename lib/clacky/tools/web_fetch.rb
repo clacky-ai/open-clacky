@@ -27,7 +27,7 @@ module Clacky
         required: %w[url]
       }
 
-      def execute(url:, max_length: 3000)
+      def execute(url:, max_length: 3000, working_dir: nil)
         # Validate URL
         begin
           uri = URI.parse(url)

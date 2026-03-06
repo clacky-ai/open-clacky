@@ -38,7 +38,7 @@ module Clacky
       
       self.tool_category = "interaction"
 
-      def execute(question:, context: nil, options: nil)
+      def execute(question:, context: nil, options: nil, working_dir: nil)
         # Build the feedback request message
         message_parts = []
         

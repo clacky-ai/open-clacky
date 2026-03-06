@@ -27,7 +27,7 @@ module Clacky
         required: %w[query]
       }
 
-      def execute(query:, max_results: 10)
+      def execute(query:, max_results: 10, working_dir: nil)
         # Validate query
         if query.nil? || query.strip.empty?
           return { error: "Query cannot be empty" }
