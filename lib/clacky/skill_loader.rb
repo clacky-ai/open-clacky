@@ -14,18 +14,22 @@ module Clacky
       :global_claude,      # ~/.claude/skills/ (compatibility)
       :global_clacky,      # ~/.clacky/skills/
       :project_claude,     # .claude/skills/ (project-level compatibility)
-      :project_clacky      # .clacky/skills/ (highest priority)
+      :project_clacky,     # .clacky/skills/ (highest priority among plain skills)
+      :brand               # ~/.clacky/brand_skills/ (encrypted, license-gated)
     ].freeze
 
     # Initialize the skill loader and automatically load all skills
     # @param working_dir [String] Current working directory for project-level discovery
-    def initialize(working_dir = nil)
-      @working_dir = working_dir || Dir.pwd
-      @skills = {}           # Map identifier -> Skill
+    # @param brand_config [Clacky::BrandConfig, nil] Optional brand config used to
+    #   decrypt brand skills. When nil, brand skills are silently skipped.
+    def initialize(working_dir = nil, brand_config: nil)
+      @working_dir  = working_dir || Dir.pwd
+      @brand_config = brand_config
+      @skills = {}            # Map identifier -> Skill
       @skills_by_command = {} # Map slash_command -> Skill
-      @errors = []           # Store loading errors
-      @loaded_from = {}      # Track which location each skill was loaded from
-      
+      @errors = []            # Store loading errors
+      @loaded_from = {}       # Track which location each skill was loaded from
+
       # Automatically load all skills on initialization
       load_all
     end
@@ -42,8 +46,33 @@ module Clacky
       load_global_clacky_skills
       load_project_claude_skills
       load_project_clacky_skills
+      load_brand_skills
 
       all_skills
+    end
+
+    # Load encrypted brand skills from ~/.clacky/brand_skills/
+    # Each skill directory must contain a SKILL.md.enc file.
+    # Requires a BrandConfig with an activated license to decrypt.
+    # @return [Array<Skill>]
+    def load_brand_skills
+      return [] unless @brand_config&.activated?
+
+      # Use brand_config#brand_skills_dir so the path respects CONFIG_DIR,
+      # which is important for test isolation via stub_const.
+      brand_skills_dir = Pathname.new(@brand_config.brand_skills_dir)
+      return [] unless brand_skills_dir.exist?
+
+      skills = []
+      brand_skills_dir.children.select(&:directory?).each do |skill_dir|
+        # Only load directories that contain an encrypted skill file
+        next unless skill_dir.join("SKILL.md.enc").exist?
+
+        skill_name = skill_dir.basename.to_s
+        skill = load_single_brand_skill(skill_dir, skill_name)
+        skills << skill if skill
+      end
+      skills
     end
 
     # Load skills from ~/.claude/skills/ (lowest priority, compatibility)
@@ -278,6 +307,46 @@ module Clacky
       skills
     end
 
+    # Load a single encrypted brand skill directory.
+    # @param skill_dir [Pathname] Directory containing SKILL.md.enc
+    # @param skill_name [String] Directory basename used as fallback identifier
+    # @return [Skill, nil]
+    private def load_single_brand_skill(skill_dir, skill_name)
+      skill = Skill.new(
+        skill_dir,
+        source_path:  skill_dir,
+        brand_skill:  true,
+        brand_config: @brand_config
+      )
+
+      existing = @skills[skill.identifier]
+      if existing
+        existing_source = @loaded_from[skill.identifier]
+        priority_order  = [:default, :global_claude, :global_clacky, :project_claude, :project_clacky, :brand]
+
+        if priority_order.index(:brand) > priority_order.index(existing_source)
+          @skills.delete(existing.identifier)
+          @skills_by_command.delete(existing.slash_command)
+          @loaded_from.delete(existing.identifier)
+        else
+          @errors << "Skipping duplicate brand skill '#{skill.identifier}' at #{skill_dir}"
+          return nil
+        end
+      end
+
+      @skills[skill.identifier]          = skill
+      @skills_by_command[skill.slash_command] = skill
+      @loaded_from[skill.identifier]     = :brand
+
+      skill
+    rescue Clacky::AgentError => e
+      @errors << "Error loading brand skill '#{skill_name}' from #{skill_dir}: #{e.message}"
+      nil
+    rescue StandardError => e
+      @errors << "Unexpected error loading brand skill '#{skill_name}' from #{skill_dir}: #{e.message}"
+      nil
+    end
+
     def load_single_skill(skill_dir, source_path, skill_name, source_type)
       skill = Skill.new(skill_dir, source_path: source_path)
 
@@ -286,7 +355,7 @@ module Clacky
       if existing
         # Skip duplicate (lower priority)
         existing_source = @loaded_from[skill.identifier]
-        priority_order = [:global_claude, :global_clacky, :project_claude, :project_clacky]
+        priority_order = [:default, :global_claude, :global_clacky, :project_claude, :project_clacky, :brand]
 
         if priority_order.index(source_type) > priority_order.index(existing_source)
           # Replace with higher priority skill

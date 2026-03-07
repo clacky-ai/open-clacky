@@ -1,5 +1,29 @@
 # frozen_string_literal: true
 
+# Friendly Ruby version check — must come before anything else so it triggers
+# during `gem install` when the gemspec is evaluated.
+if RUBY_VERSION < "3.1.0"
+  abort <<~MSG
+
+    ✗  Ruby #{RUBY_VERSION} is not supported.
+
+    OpenClacky requires Ruby >= 3.1.0, but your system is running Ruby #{RUBY_VERSION}.
+
+    ──────────────────────────────────────────────────────────────────────
+     Recommended: Use the one-line installer (handles Ruby automatically)
+    ──────────────────────────────────────────────────────────────────────
+
+      /bin/bash -c "$(curl -sSL https://raw.githubusercontent.com/clacky-ai/open-clacky/main/scripts/install.sh)"
+
+    This script will automatically install the correct Ruby version via mise
+    and then install OpenClacky — no manual Ruby upgrade needed.
+
+    For more details, visit:
+      https://github.com/clacky-ai/open-clacky#installation
+
+  MSG
+end
+
 require_relative "lib/clacky/version"
 
 Gem::Specification.new do |spec|

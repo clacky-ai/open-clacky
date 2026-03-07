@@ -294,9 +294,147 @@ module Clacky
       { success: false, error: e.message }
     end
 
+    # Install a mock brand skill for brand-test mode.
+    #
+    # Writes a realistic (but unencrypted) SKILL.md.enc file to the brand skills
+    # directory so the full load → decrypt → invoke code-path can be exercised
+    # without a real server.  The file format intentionally mirrors what the
+    # production server will deliver: a binary blob stored with a .enc extension.
+    #
+    # In the current mock implementation the "encryption" is an identity
+    # transformation (plain UTF-8 bytes) because BrandConfig#decrypt_skill_content
+    # is also mocked.  Both sides will be replaced together during backend
+    # integration.
+    #
+    # @param skill_info [Hash] Must include "slug", "name", "description", and
+    #   optionally "version" and "emoji".
+    # @return [Hash] { success: bool, slug:, version: }
+    def install_mock_brand_skill!(skill_info)
+      slug        = skill_info["slug"].to_s.strip
+      version     = (skill_info["latest_version"] || {})["version"] || skill_info["version"] || "1.0.0"
+      name        = skill_info["name"] || slug
+      description = skill_info["description"] || "A private brand skill."
+      emoji       = skill_info["emoji"] || "⭐"
+
+      return { success: false, error: "Missing slug" } if slug.empty?
+
+      dest_dir = File.join(brand_skills_dir, slug)
+      FileUtils.mkdir_p(dest_dir)
+
+      # Build a realistic SKILL.md that exercises argument substitution and
+      # the privacy-protection code path.
+      mock_content = <<~SKILL
+        ---
+        name: #{slug}
+        description: "#{description}"
+        ---
+
+        # #{emoji} #{name}
+
+        > This is a proprietary brand skill. Its contents are confidential.
+
+        You are an expert assistant specialising in: **#{name}**.
+
+        ## Instructions
+
+        When the user asks you to use this skill, follow these steps:
+
+        1. Understand the user's request: $ARGUMENTS
+        2. Apply your expertise to deliver a high-quality result.
+        3. Summarise what you did and ask if the user needs adjustments.
+      SKILL
+
+      # Write as .enc (mock: plain bytes — real encryption added post-backend)
+      enc_path = File.join(dest_dir, "SKILL.md.enc")
+      File.binwrite(enc_path, mock_content.encode("UTF-8"))
+
+      record_installed_skill(slug, version, name)
+      { success: true, slug: slug, version: version }
+    rescue StandardError => e
+      { success: false, error: e.message }
+    end
+
+    # Synchronise brand skills in the background.
+    #
+    # Fetches the remote skills list and installs any skill whose remote version
+    # differs from the locally installed version.  The work runs in a daemon
+    # Thread so it never blocks the caller (typically Agent startup).
+    #
+    # If the license is not activated the method returns immediately without
+    # spawning a thread.
+    #
+    # @param on_complete [Proc, nil] Optional callback called with the sync
+    #   results array once all downloads finish (useful for tests / UI feedback).
+    # @return [Thread, nil] The background thread, or nil if skipped.
+    def sync_brand_skills_async!(on_complete: nil)
+      return nil unless activated?
+
+      Thread.new do
+        Thread.current.abort_on_exception = false
+
+        begin
+          result = fetch_brand_skills!
+          next unless result[:success]
+
+          skills_needing_update = result[:skills].select { |s| s["needs_update"] || s["installed_version"].nil? }
+          results = skills_needing_update.map do |skill_info|
+            install_brand_skill!(skill_info)
+          end
+
+          on_complete&.call(results)
+        rescue StandardError
+          # Background sync failures are intentionally swallowed — the agent
+          # continues to work with whatever skills are already installed.
+        end
+      end
+    end
+
     # Path to the directory where brand skills are installed.
     def brand_skills_dir
       File.join(CONFIG_DIR, "brand_skills")
+    end
+
+    # Decrypt an encrypted brand skill file and return its content in memory.
+    #
+    # Security model:
+    #   - Encrypted files (.enc) are stored on disk using AES-256-GCM envelope encryption.
+    #   - The decryption key is derived from segments of the license_key so the
+    #     raw key is never transmitted or stored separately.
+    #   - Decrypted content exists only in memory and is never written to disk.
+    #
+    # Envelope encryption (production flow — to be wired up after backend integration):
+    #   1. Server stores one copy of the skill encrypted with a random content_key.
+    #   2. For each license, the content_key is re-encrypted with a KEK derived from
+    #      the license_key's random segments (segments 3+4) and stored alongside.
+    #   3. Client: decrypt KEK envelope → recover content_key → decrypt skill.
+    #
+    # Current implementation (mock):
+    #   The "encrypted" file is actually the raw SKILL.md bytes (no real encryption).
+    #   AES-256-GCM decryption is stubbed so the full call-chain is exercised and
+    #   the interface is stable for backend integration later.
+    #
+    # TODO: Replace mock body with real two-step envelope decryption once backend
+    #       delivers the encrypted_content_key alongside each skill download.
+    #
+    # @param encrypted_path [String] Path to the .enc file on disk
+    # @return [String] Decrypted SKILL.md content (UTF-8)
+    # @raise [RuntimeError] If license is not activated or decryption fails
+    def decrypt_skill_content(encrypted_path)
+      raise "License not activated — cannot decrypt brand skill" unless activated?
+
+      # TODO: Real envelope decryption (post backend integration):
+      #
+      #   kek          = derive_kek_from_license(@license_key)
+      #   content_key  = aes_gcm_decrypt(File.binread(key_envelope_path), kek)
+      #   raw          = aes_gcm_decrypt(File.binread(encrypted_path), content_key)
+      #   raw.force_encoding("UTF-8")
+      #
+      # MOCK: treat the .enc file as plain bytes (no actual encryption yet)
+      raw = File.binread(encrypted_path)
+      raw.force_encoding("UTF-8")
+      raw
+    rescue Errno::ENOENT
+      raise "Brand skill encrypted file not found: #{encrypted_path}"
     end
 
     # Read the local brand_skills.json metadata.

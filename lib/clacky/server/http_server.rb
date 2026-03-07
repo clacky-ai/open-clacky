@@ -415,7 +415,9 @@ module Clacky
           return
         end
 
-        result = brand.install_brand_skill!(skill_info)
+        # In brand-test mode use the mock installer which writes a real .enc file
+        # so the full decrypt → load → invoke code-path is exercised end-to-end.
+        result = @brand_test ? brand.install_mock_brand_skill!(skill_info) : brand.install_brand_skill!(skill_info)
 
         if result[:success]
           # Reload skills so the Agent can pick up the new skill immediately

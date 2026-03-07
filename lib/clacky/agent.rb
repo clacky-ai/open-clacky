@@ -69,8 +69,15 @@ module Clacky
       # Uses LLM to preserve key decisions, errors, and context while reducing token count
       @message_compressor = MessageCompressor.new(@client, model: current_model)
 
-      # Skill loader for skill management
-      @skill_loader = SkillLoader.new(@working_dir)
+      # Load brand config — used for brand skill decryption and background sync
+      @brand_config = Clacky::BrandConfig.load
+
+      # Skill loader for skill management (brand_config enables encrypted skill loading)
+      @skill_loader = SkillLoader.new(@working_dir, brand_config: @brand_config)
+
+      # Background sync: compare remote skill versions and download updates quietly.
+      # Runs in a daemon thread so Agent startup is never blocked.
+      @brand_config.sync_brand_skills_async!
 
       # Initialize Time Machine
       init_time_machine

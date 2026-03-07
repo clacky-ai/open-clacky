@@ -29,6 +29,7 @@ module Clacky
     attr_reader :disable_model_invocation, :user_invocable
     attr_reader :allowed_tools, :context, :agent_type, :argument_hint, :hooks
     attr_reader :fork_agent, :model, :forbidden_tools, :auto_summarize
+    attr_reader :brand_skill, :brand_config
 
     # Check if this skill is disabled (disable-model-invocation: true)
     # @return [Boolean]
@@ -39,9 +40,15 @@ module Clacky
 
     # @param directory [Pathname, String] Path to the skill directory
     # @param source_path [Pathname, String, nil] Optional source path for priority resolution
-    def initialize(directory, source_path: nil)
-      @directory = Pathname.new(directory)
+    # @param brand_skill [Boolean] When true, content is loaded from an encrypted
+    #   SKILL.md.enc file via BrandConfig#decrypt_skill_content at invoke time.
+    #   The on-disk file is never read as plain text.
+    # @param brand_config [BrandConfig, nil] Required when brand_skill is true.
+    def initialize(directory, source_path: nil, brand_skill: false, brand_config: nil)
+      @directory   = Pathname.new(directory)
       @source_path = source_path ? Pathname.new(source_path) : @directory
+      @brand_skill = brand_skill
+      @brand_config = brand_config
 
       load_skill
     end
@@ -120,7 +127,9 @@ module Clacky
     # @param shell_output [Hash] Shell command outputs for !command` syntax (optional)
     # @return [String] Processed content
     def process_content(arguments = "", shell_output: {})
-      processed_content = @content.dup
+      # For brand skills, decrypt content in memory at invoke time.
+      # For plain skills, use the already-loaded @content.
+      processed_content = decrypted_content.dup
 
       # Replace argument placeholders
       processed_content = substitute_arguments(processed_content, arguments)
@@ -159,7 +168,7 @@ module Clacky
         forbidden_tools: @forbidden_tools,
         allowed_tools: @allowed_tools,
         argument_hint: @argument_hint,
-        content_length: @content.length
+        content_length: encrypted? ? nil : @content&.length
       }
     end
 
@@ -171,9 +180,57 @@ module Clacky
       file_path.exist? ? file_path.read : nil
     end
 
+    # Returns true when this skill's content is stored encrypted on disk.
+    # @return [Boolean]
+    def encrypted?
+      @brand_skill == true
+    end
+
+    # Decrypt and return the raw skill content.
+    #
+    # For brand skills the content lives in SKILL.md.enc and is decrypted
+    # in memory via BrandConfig#decrypt_skill_content — it is never written
+    # to disk as plain text.
+    #
+    # For regular skills this is identical to reading @content directly.
+    #
+    # @return [String] Plain-text SKILL.md body (without frontmatter)
+    # @raise [RuntimeError] If the brand_config is missing or decryption fails
+    def decrypted_content
+      return @content unless encrypted?
+
+      raise "brand_config is required to decrypt brand skill '#{identifier}'" unless @brand_config
+
+      enc_path = @directory.join("SKILL.md.enc").to_s
+      raw = @brand_config.decrypt_skill_content(enc_path)
+
+      # Strip frontmatter from the decrypted bytes so callers get only the body
+      if raw.start_with?("---")
+        fm_match = raw.match(/\A---\n.*?\n---\n*/m)
+        fm_match ? raw[fm_match.end(0)..].strip : raw
+      else
+        raw
+      end
+    end
+
     private
 
     def load_skill
+      if @brand_skill
+        load_brand_skill
+      else
+        load_plain_skill
+      end
+
+      # Set defaults
+      @user_invocable = true if @user_invocable.nil?
+      @disable_model_invocation = false if @disable_model_invocation.nil?
+
+      validate_frontmatter
+    end
+
+    # Load a plain (unencrypted) skill from SKILL.md
+    private def load_plain_skill
       skill_file = @directory.join("SKILL.md")
 
       unless skill_file.exist?
@@ -182,19 +239,43 @@ module Clacky
 
       content = skill_file.read
 
-      # Parse frontmatter if present
       if content.start_with?("---")
         parse_frontmatter(content)
       else
         @frontmatter = {}
         @content = content
       end
+    end
 
-      # Set defaults
-      @user_invocable = true if @user_invocable.nil?
-      @disable_model_invocation = false if @disable_model_invocation.nil?
+    # Load a brand (encrypted) skill from SKILL.md.enc.
+    #
+    # Only the frontmatter is parsed at load time so the agent can build the
+    # skill list (name, description) without decrypting the full content.
+    # The body is decrypted lazily via #decrypted_content when the skill is
+    # actually invoked.
+    private def load_brand_skill
+      enc_file = @directory.join("SKILL.md.enc")
 
-      validate_frontmatter
+      unless enc_file.exist?
+        raise Clacky::AgentError, "SKILL.md.enc not found in brand skill directory: #{@directory}"
+      end
+
+      raise "brand_config is required to load brand skill" unless @brand_config
+
+      # Decrypt once at load time to parse frontmatter; the result is kept only
+      # in memory and discarded after this method returns.
+      raw = @brand_config.decrypt_skill_content(enc_file.to_s)
+
+      if raw.start_with?("---")
+        parse_frontmatter(raw)
+      else
+        @frontmatter = {}
+        @content = raw
+      end
+
+      # Clear content from memory — it will be re-decrypted at invoke time
+      # via #decrypted_content so the plain text is never held in a long-lived object.
+      @content = nil
     end
 
     def parse_frontmatter(content)

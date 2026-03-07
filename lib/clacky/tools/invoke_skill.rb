@@ -43,8 +43,10 @@ module Clacky
           return { error: "Skill '#{skill_name}' does not allow model invocation" }
         end
 
-        # Execute skill based on its configuration
-        if skill.fork_agent?
+        # Execute skill based on its configuration.
+        # Brand skills (encrypted) are ALWAYS executed in a subagent so their
+        # plaintext content is never exposed to the main agent or the user.
+        if skill.encrypted? || skill.fork_agent?
           # Execute in subagent - use private method via send
           result = agent.send(:execute_skill_with_subagent, skill, task)
           {
