@@ -85,13 +85,14 @@ module Clacky
     # @param compressed_content [String] The compressed summary from LLM
     # @param original_messages [Array<Hash>] Original messages before compression
     # @param recent_messages [Array<Hash>] Recent messages to preserve
+    # @param chunk_path [String, nil] Path to the archived chunk MD file (if saved)
     # @return [Array<Hash>] Rebuilt message list: system + compressed + recent
-    def rebuild_with_compression(compressed_content, original_messages:, recent_messages:)
+    def rebuild_with_compression(compressed_content, original_messages:, recent_messages:, chunk_path: nil)
       # Find and preserve system message
       system_msg = original_messages.find { |m| m[:role] == "system" }
 
       # Parse the compressed result
-      parsed_messages = parse_compressed_result(compressed_content)
+      parsed_messages = parse_compressed_result(compressed_content, chunk_path: chunk_path)
 
       # If parsing fails or returns empty, raise error
       if parsed_messages.nil? || parsed_messages.empty?
@@ -104,7 +105,7 @@ module Clacky
 
     private
 
-    def parse_compressed_result(result)
+    def parse_compressed_result(result, chunk_path: nil)
       # Return the compressed result as a single assistant message
       # Keep the <analysis> or <summary> tags as they provide semantic context
       content = result.strip
@@ -112,7 +113,14 @@ module Clacky
       if content.empty?
         []
       else
-        [{ role: "assistant", content: content }]
+        # Inject chunk anchor so AI knows where to find original conversation
+        if chunk_path
+          anchor = "\n\n---\n📁 **Original conversation archived at:** `#{chunk_path}`\n" \
+                   "_Use `file_reader` tool to recall details from this chunk._"
+          content = content + anchor
+        end
+
+        [{ role: "assistant", content: content, compressed_summary: true, chunk_path: chunk_path }]
       end
     end
   end

@@ -7,14 +7,15 @@ module Clacky
   class SessionManager
     SESSIONS_DIR = File.join(Dir.home, ".clacky", "sessions")
 
-    def initialize
+    def initialize(sessions_dir: nil)
+      @sessions_dir = sessions_dir || SESSIONS_DIR
       ensure_sessions_dir
     end
 
     # Save a session
     def save(session_data)
       filename = generate_filename(session_data[:session_id], session_data[:created_at])
-      filepath = File.join(SESSIONS_DIR, filename)
+      filepath = File.join(@sessions_dir, filename)
 
       File.write(filepath, JSON.pretty_generate(session_data))
       FileUtils.chmod(0o600, filepath)
@@ -65,13 +66,13 @@ module Clacky
       cutoff_time = Time.now - (days * 24 * 60 * 60)
       deleted_count = 0
 
-      Dir.glob(File.join(SESSIONS_DIR, "*.json")).each do |filepath|
+      Dir.glob(File.join(@sessions_dir, "*.json")).each do |filepath|
         session = load_session_file(filepath)
         next unless session
 
         updated_at = Time.parse(session[:updated_at])
         if updated_at < cutoff_time
-          File.delete(filepath)
+          delete_session_with_chunks(filepath)
           deleted_count += 1
         end
       end
@@ -90,10 +91,10 @@ module Clacky
 
       sessions_to_delete.each do |session|
         filename = generate_filename(session[:session_id], session[:created_at])
-        filepath = File.join(SESSIONS_DIR, filename)
+        filepath = File.join(@sessions_dir, filename)
 
         if File.exist?(filepath)
-          File.delete(filepath)
+          delete_session_with_chunks(filepath)
           deleted_count += 1
         end
       end
@@ -104,7 +105,7 @@ module Clacky
     private
 
     def ensure_sessions_dir
-      FileUtils.mkdir_p(SESSIONS_DIR) unless Dir.exist?(SESSIONS_DIR)
+      FileUtils.mkdir_p(@sessions_dir) unless Dir.exist?(@sessions_dir)
     end
 
     def generate_filename(session_id, created_at)
@@ -113,8 +114,22 @@ module Clacky
       "#{datetime}-#{short_id}.json"
     end
 
+    # Delete a session JSON file and all its associated chunk MD files
+    # Chunk files follow the pattern: {base}-chunk-{n}.md
+    def delete_session_with_chunks(json_filepath)
+      # Delete the main session JSON
+      File.delete(json_filepath) if File.exist?(json_filepath)
+
+      # Find and delete associated chunk MD files
+      base = File.basename(json_filepath, ".json")
+      chunk_pattern = File.join(@sessions_dir, "#{base}-chunk-*.md")
+      Dir.glob(chunk_pattern).each do |chunk_file|
+        File.delete(chunk_file)
+      end
+    end
+
     def all_sessions
-      Dir.glob(File.join(SESSIONS_DIR, "*.json")).map do |filepath|
+      Dir.glob(File.join(@sessions_dir, "*.json")).map do |filepath|
         load_session_file(filepath)
       end.compact
     end

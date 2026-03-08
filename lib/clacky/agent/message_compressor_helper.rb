@@ -119,10 +119,20 @@ module Clacky
         # Note: we need to remove the compression instruction message we just added
         original_messages = @messages[0..-2]  # All except the last (compression instruction)
 
+        # Archive compressed messages to a chunk MD file before discarding them
+        chunk_index = @compressed_summaries.size + 1
+        chunk_path = save_compressed_chunk(
+          original_messages,
+          compression_context[:recent_messages],
+          chunk_index: chunk_index,
+          compression_level: compression_context[:compression_level]
+        )
+
         @messages = @message_compressor.rebuild_with_compression(
           compressed_content,
           original_messages: original_messages,
-          recent_messages: compression_context[:recent_messages]
+          recent_messages: compression_context[:recent_messages],
+          chunk_path: chunk_path
         )
 
         # Track this compression
@@ -130,7 +140,8 @@ module Clacky
           level: compression_context[:compression_level],
           message_count: compression_context[:original_message_count],
           timestamp: Time.now.iso8601,
-          strategy: :insert_then_compress
+          strategy: :insert_then_compress,
+          chunk_path: chunk_path
         }
 
         final_tokens = total_message_tokens[:total]
@@ -248,6 +259,132 @@ module Clacky
       end
 
       private
+
+      # Save the messages being compressed to a chunk MD file for future recall
+      # File path: ~/.clacky/sessions/{datetime}-{short_id}-chunk-{n}.md
+      # @param original_messages [Array<Hash>] All messages before compression (excluding compression instruction)
+      # @param recent_messages [Array<Hash>] Recent messages being kept (to exclude from chunk)
+      # @param chunk_index [Integer] Sequential chunk number
+      # @param compression_level [Integer] Compression level
+      # @return [String, nil] Path to saved chunk file, or nil if save failed
+      def save_compressed_chunk(original_messages, recent_messages, chunk_index:, compression_level:)
+        return nil unless @session_id && @created_at
+
+        # Messages being compressed = original minus system message minus recent messages
+        recent_set = recent_messages.to_a
+        messages_to_archive = original_messages.reject do |m|
+          m[:role] == "system" || recent_set.include?(m)
+        end
+
+        return nil if messages_to_archive.empty?
+
+        sessions_dir = Clacky::SessionManager::SESSIONS_DIR
+        datetime = Time.parse(@created_at).strftime("%Y-%m-%d-%H-%M-%S")
+        short_id = @session_id[0..7]
+        base_name = "#{datetime}-#{short_id}"
+        chunk_filename = "#{base_name}-chunk-#{chunk_index}.md"
+        chunk_path = File.join(sessions_dir, chunk_filename)
+
+        md_content = build_chunk_md(messages_to_archive, chunk_index: chunk_index, compression_level: compression_level)
+
+        File.write(chunk_path, md_content)
+        FileUtils.chmod(0o600, chunk_path)
+
+        chunk_path
+      rescue => e
+        @ui&.log("Failed to save chunk MD: #{e.message}", level: :warn)
+        nil
+      end
+
+      # Build markdown content from a list of messages
+      # @param messages [Array<Hash>] Messages to render
+      # @param chunk_index [Integer] Chunk number for metadata
+      # @param compression_level [Integer] Compression level
+      # @return [String] Markdown content
+      def build_chunk_md(messages, chunk_index:, compression_level:)
+        lines = []
+
+        # Front matter
+        lines << "---"
+        lines << "session_id: #{@session_id}"
+        lines << "chunk: #{chunk_index}"
+        lines << "compression_level: #{compression_level}"
+        lines << "archived_at: #{Time.now.iso8601}"
+        lines << "message_count: #{messages.size}"
+        lines << "---"
+        lines << ""
+        lines << "# Session Chunk #{chunk_index}"
+        lines << ""
+        lines << "> This file contains the original conversation archived during compression."
+        lines << "> Use `file_reader` to recall specific details from this conversation."
+        lines << ""
+
+        messages.each do |msg|
+          role = msg[:role]
+          content = msg[:content]
+
+          case role
+          when "user"
+            lines << "## User"
+            lines << ""
+            lines << format_message_content(content)
+            lines << ""
+          when "assistant"
+            # If this message is itself a compressed summary, annotate the header
+            # so the reader knows the original conversation is in the referenced chunk
+            if msg[:compressed_summary] && msg[:chunk_path]
+              prev_chunk = File.basename(msg[:chunk_path])
+              lines << "## Assistant [Compressed Summary — original conversation at: #{prev_chunk}]"
+            else
+              lines << "## Assistant"
+            end
+            lines << ""
+            # Include tool calls summary if present
+            if msg[:tool_calls]&.any?
+              tool_names = msg[:tool_calls].map { |tc| tc.dig(:function, :name) }.compact.join(", ")
+              lines << "_Tool calls: #{tool_names}_"
+              lines << ""
+            end
+            lines << format_message_content(content) if content
+            lines << ""
+          when "tool"
+            tool_name = msg[:name] || "tool"
+            lines << "### Tool Result: #{tool_name}"
+            lines << ""
+            lines << "```"
+            lines << truncate_content(content.to_s, max_length: 500)
+            lines << "```"
+            lines << ""
+          end
+        end
+
+        lines.join("\n")
+      end
+
+      # Format message content (handles string or array of content blocks)
+      def format_message_content(content)
+        return "" if content.nil?
+        return content.to_s if content.is_a?(String)
+
+        # Handle array of content blocks (e.g., text + images)
+        if content.is_a?(Array)
+          content.map do |block|
+            if block.is_a?(Hash) && block[:type] == "text"
+              block[:text].to_s
+            else
+              "[#{block[:type] || 'content'}]"
+            end
+          end.join("\n")
+        else
+          content.to_s
+        end
+      end
+
+      # Truncate long content with a note
+      def truncate_content(text, max_length: 500)
+        return text if text.length <= max_length
+        "#{text[0...max_length]}\n... [truncated, #{text.length} chars total]"
+      end
 
       # Calculate how many recent messages to keep based on how much we need to compress
       def calculate_target_recent_count(reduction_needed)
