@@ -163,11 +163,12 @@ RSpec.describe "Brand Skill system" do
             "description"     => "Deploy helper.",
             "needs_update"    => true,
             "installed_version" => nil,
-            "latest_version"  => { "version" => "2.0.1", "download_url" => nil }
+            "latest_version"  => { "version" => "2.0.1", "download_url" => "https://example.com/deploy-assistant.zip" }
           }
         ]
         allow(config).to receive(:fetch_brand_skills!)
           .and_return({ success: true, skills: mock_skills })
+        allow(config).to receive(:install_brand_skill!).and_return({ success: true, slug: "deploy-assistant", version: "2.0.1" })
 
         completed_results = nil
         thread = config.sync_brand_skills_async!(on_complete: ->(r) { completed_results = r })

@@ -7,6 +7,7 @@ PATH
       diffy (~> 3.4)
       faraday (~> 2.0)
       pastel (~> 0.8)
+      rubyzip (~> 3.0)
       thor (~> 1.3)
       tty-markdown (~> 0.7)
       tty-prompt (~> 0.23)
@@ -101,6 +102,7 @@ GEM
       parser (>= 3.3.7.2)
       prism (~> 1.7)
     ruby-progressbar (1.13.0)
+    rubyzip (3.2.2)
     stringio (3.2.0)
     strings (0.2.1)
       strings-ansi (~> 0.2)
@@ -195,6 +197,7 @@ CHECKSUMS
   rubocop (1.84.0) sha256=88dec310153bb685a879f5a7cdb601f6287b8f0ee675d9dc63a17c7204c4190a
   rubocop-ast (1.49.0) sha256=49c3676d3123a0923d333e20c6c2dbaaae2d2287b475273fddee0c61da9f71fd
   ruby-progressbar (1.13.0) sha256=80fc9c47a9b640d6834e0dc7b3c94c9df37f08cb072b7761e4a71e22cff29b33
+  rubyzip (3.2.2) sha256=c0ed99385f0625415c8f05bcae33fe649ed2952894a95ff8b08f26ca57ea5b3c
   stringio (3.2.0) sha256=c37cb2e58b4ffbd33fe5cd948c05934af997b36e0b6ca6fdf43afa234cf222e1
   strings (0.2.1) sha256=933293b3c95cf85b81eb44b3cf673e3087661ba739bbadfeadf442083158d6fb
   strings-ansi (0.2.0) sha256=90262d760ea4a94cc2ae8d58205277a343409c288cbe7c29416b1826bd511c88

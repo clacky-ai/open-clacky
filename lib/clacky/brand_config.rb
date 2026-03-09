@@ -18,6 +18,10 @@ module Clacky
   #
   # brand.yml structure:
   #   brand_name: "JohnAI"
+  #   distribution_name: "JohnAI Distribution"
+  #   product_name: "JohnAI Pro"
+  #   logo_url: "https://example.com/logo.png"
+  #   support_contact: "support@johnai.com"
   #   license_key: "0000002A-00000007-DEADBEEF-CAFEBABE-A1B2C3D4"
   #   license_activated_at: "2025-03-01T00:00:00Z"
   #   license_expires_at: "2026-03-01T00:00:00Z"
@@ -38,11 +42,16 @@ module Clacky
 
     attr_reader :brand_name, :license_key, :license_activated_at,
                 :license_expires_at, :license_last_heartbeat, :device_id,
-                :brand_command
+                :brand_command, :distribution_name, :product_name,
+                :logo_url, :support_contact
 
     def initialize(attrs = {})
       @brand_name              = attrs["brand_name"]
       @brand_command           = attrs["brand_command"]
+      @distribution_name       = attrs["distribution_name"]
+      @product_name            = attrs["product_name"]
+      @logo_url                = attrs["logo_url"]
+      @support_contact         = attrs["support_contact"]
       @license_key             = attrs["license_key"]
       @license_activated_at    = parse_time(attrs["license_activated_at"])
       @license_expires_at      = parse_time(attrs["license_expires_at"])
@@ -131,6 +140,7 @@ module Clacky
         @license_expires_at     = parse_time(data["expires_at"])
         # Use brand_name returned by the API; fall back to any existing value
         @brand_name = data["brand_name"] if data["brand_name"] && !data["brand_name"].to_s.strip.empty?
+        apply_distribution(data["distribution"])
         save
         { success: true, message: "License activated successfully!", brand_name: @brand_name, data: data }
       else
@@ -175,12 +185,14 @@ module Clacky
       return { success: false, message: "License not activated" } unless activated?
 
       user_id   = parse_user_id_from_key(@license_key)
+      key_hash  = Digest::SHA256.hexdigest(@license_key)
       ts        = Time.now.utc.to_i.to_s
       nonce     = SecureRandom.hex(16)
       message   = "#{user_id}:#{@device_id}:#{ts}:#{nonce}"
       signature = OpenSSL::HMAC.hexdigest("SHA256", @license_key, message)
 
       payload = {
+        key_hash:  key_hash,
         user_id:   user_id.to_s,
         device_id: @device_id,
         timestamp: ts,
@@ -193,6 +205,7 @@ module Clacky
       if response[:success]
         @license_last_heartbeat = Time.now.utc
         @license_expires_at = parse_time(response[:data]["expires_at"]) if response[:data]["expires_at"]
+        apply_distribution(response[:data]["distribution"])
         save
         { success: true, message: "Heartbeat OK" }
       else
@@ -206,12 +219,14 @@ module Clacky
       return { success: false, error: "License not activated", skills: [] } unless activated?
 
       user_id   = parse_user_id_from_key(@license_key)
+      key_hash  = Digest::SHA256.hexdigest(@license_key)
       ts        = Time.now.utc.to_i.to_s
       nonce     = SecureRandom.hex(16)
       message   = "#{user_id}:#{@device_id}:#{ts}:#{nonce}"
       signature = OpenSSL::HMAC.hexdigest("SHA256", @license_key, message)
 
       payload = {
+        key_hash:  key_hash,
         user_id:   user_id.to_s,
         device_id: @device_id,
         timestamp: ts,
@@ -252,13 +267,9 @@ module Clacky
 
       return { success: false, error: "Missing slug" } if slug.empty?
 
-      # When download_url is nil (e.g. mock/test mode), skip the download and
-      # just record the installed version so the UI reflects a successful install.
       if url.nil?
-        dest_dir = File.join(brand_skills_dir, slug)
-        FileUtils.mkdir_p(dest_dir)
-        record_installed_skill(slug, version, skill_info["name"])
-        return { success: true, slug: slug, version: version }
+        FileUtils.mkdir_p(File.join(brand_skills_dir, slug))
+        return { success: false, error: "No download URL" }
       end
 
       require "zip"
@@ -270,17 +281,28 @@ module Clacky
       tmp_zip = File.join(brand_skills_dir, "#{slug}.zip")
       download_file(url, tmp_zip)
 
-      # Extract into dest_dir (overwrite existing files)
+      # Extract into dest_dir (overwrite existing files).
+      # Auto-detect whether the zip has a single root folder to strip.
+      # Uses get_input_stream instead of entry.extract to avoid rubyzip 3.x
+      # path-safety restrictions on absolute destination paths.
       Zip::File.open(tmp_zip) do |zip|
-        zip.each do |entry|
-          # Strip leading component (the archive root folder) if present
-          parts    = entry.name.split("/")
-          rel_path = parts.length > 1 ? parts[1..].join("/") : parts[0]
-          next if rel_path.empty?
+        entries  = zip.entries.reject(&:directory?)
+        top_dirs = entries.map { |e| e.name.split("/").first }.uniq
+        has_root = top_dirs.length == 1 && entries.any? { |e| e.name.include?("/") }
+
+        entries.each do |entry|
+          rel_path = if has_root
+                       parts = entry.name.split("/")
+                       parts[1..].join("/")
+                     else
+                       entry.name
+                     end
+
+          next if rel_path.nil? || rel_path.empty?
 
           out = File.join(dest_dir, rel_path)
           FileUtils.mkdir_p(File.dirname(out))
-          entry.extract(out) { true }  # overwrite
+          File.open(out, "wb") { |f| f.write(entry.get_input_stream.read) }
         end
       end
 
@@ -290,7 +312,7 @@ module Clacky
       record_installed_skill(slug, version, skill_info["name"])
 
       { success: true, slug: slug, version: version }
-    rescue StandardError => e
+    rescue StandardError, ScriptError => e
       { success: false, error: e.message }
     end
 
@@ -437,13 +459,46 @@ module Clacky
       raise "Brand skill encrypted file not found: #{encrypted_path}"
     end
 
-    # Read the local brand_skills.json metadata.
+    # Read the local brand_skills.json metadata, cross-validated against the
+    # actual file system.  A skill is only considered installed when:
+    #   1. It has an entry in brand_skills.json, AND
+    #   2. Its skill directory exists under brand_skills_dir, AND
+    #   3. That directory contains at least one file (SKILL.md or SKILL.md.enc).
+    #
+    # If the JSON record exists but the directory is missing or empty the entry
+    # is silently dropped from the result and the JSON file is cleaned up so
+    # subsequent installs start from a clean state.
+    #
     # Returns a hash keyed by slug: { "version" => "1.0.0", "name" => "..." }
     def installed_brand_skills
       path = File.join(brand_skills_dir, "brand_skills.json")
       return {} unless File.exist?(path)
 
-      JSON.parse(File.read(path))
+      raw = JSON.parse(File.read(path))
+
+      # Validate each entry against the actual file system.
+      valid   = {}
+      changed = false
+
+      raw.each do |slug, meta|
+        skill_dir = File.join(brand_skills_dir, slug)
+        has_files = Dir.exist?(skill_dir) &&
+                    Dir.glob(File.join(skill_dir, "SKILL.md{,.enc}")).any?
+
+        if has_files
+          valid[slug] = meta
+        else
+          # JSON record exists but files are missing — mark for cleanup.
+          changed = true
+        end
+      end
+
+      # Persist the cleaned-up JSON so stale records don't accumulate.
+      if changed
+        File.write(path, JSON.generate(valid))
+      end
+
+      valid
     rescue StandardError
       {}
     end
@@ -453,6 +508,10 @@ module Clacky
       {
         brand_name:         @brand_name,
         brand_command:      @brand_command,
+        distribution_name:  @distribution_name,
+        product_name:       @product_name,
+        logo_url:           @logo_url,
+        support_contact:    @support_contact,
         branded:            branded?,
         activated:          activated?,
         expired:            expired?,
@@ -466,6 +525,10 @@ module Clacky
       data = {}
       data["brand_name"]             = @brand_name             if @brand_name
       data["brand_command"]          = @brand_command          if @brand_command
+      data["distribution_name"]      = @distribution_name      if @distribution_name
+      data["product_name"]           = @product_name           if @product_name
+      data["logo_url"]               = @logo_url               if @logo_url
+      data["support_contact"]        = @support_contact        if @support_contact
       data["license_key"]            = @license_key            if @license_key
       data["license_activated_at"]   = @license_activated_at.iso8601   if @license_activated_at
       data["license_expires_at"]     = @license_expires_at.iso8601     if @license_expires_at
@@ -474,20 +537,44 @@ module Clacky
       YAML.dump(data)
     end
 
+    # Apply distribution fields from API response.
+    # Updates name, product_name, logo_url, support_contact from the distribution hash.
+    private def apply_distribution(dist)
+      return unless dist.is_a?(Hash)
+
+      @distribution_name = dist["name"]           if dist["name"].to_s.strip != ""
+      @product_name      = dist["product_name"]    if dist["product_name"].to_s.strip != ""
+      @logo_url          = dist["logo_url"]         if dist["logo_url"].to_s.strip != ""
+      @support_contact   = dist["support_contact"]  if dist["support_contact"].to_s.strip != ""
+    end
+
     # Download a remote URL to a local file path.
-    private def download_file(url, dest)
+    private def download_file(url, dest, max_redirects: 10)
       require "net/http"
       require "uri"
 
       uri = URI.parse(url)
-      Net::HTTP.start(uri.host, uri.port, use_ssl: uri.scheme == "https",
-                      open_timeout: 15, read_timeout: 60) do |http|
-        http.request_get(uri.request_uri) do |resp|
-          raise "HTTP #{resp.code}" unless resp.code.to_i == 200
+      max_redirects.times do
+        Net::HTTP.start(uri.host, uri.port, use_ssl: uri.scheme == "https",
+                        open_timeout: 15, read_timeout: 60) do |http|
+          http.request_get(uri.request_uri) do |resp|
+            case resp.code.to_i
+            when 200
+              File.open(dest, "wb") { |f| resp.read_body { |chunk| f.write(chunk) } }
+              return
+            when 301, 302, 303, 307, 308
+              location = resp["location"]
+              raise "Redirect with no Location header" if location.nil? || location.empty?
 
-          File.open(dest, "wb") { |f| resp.read_body { |chunk| f.write(chunk) } }
+              uri = URI.parse(location)
+              break  # break out of Net::HTTP.start, re-enter loop with new uri
+            else
+              raise "HTTP #{resp.code}"
+            end
+          end
         end
       end
+      raise "Too many redirects"
     end
 
     # Persist installed skill metadata to brand_skills.json.

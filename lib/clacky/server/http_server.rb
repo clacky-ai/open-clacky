@@ -105,7 +105,7 @@ module Clacky
           session_registry: @registry,
           session_builder:  method(:build_session)
         )
-        @skill_loader    = Clacky::SkillLoader.new
+        @skill_loader    = Clacky::SkillLoader.new(nil, brand_config: Clacky::BrandConfig.load)
       end
 
       def start
@@ -452,6 +452,8 @@ module Clacky
         else
           json_response(res, 422, { ok: false, error: result[:error] })
         end
+      rescue StandardError, ScriptError => e
+        json_response(res, 500, { ok: false, error: e.message })
       end
 
       # GET /api/brand
