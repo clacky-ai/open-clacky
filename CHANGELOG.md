@@ -14,14 +14,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Skill autocomplete dropdown** in the web UI: type `/` in the chat input to see a filtered list of available skills
 - **File-based logger** (`Clacky::Logger`): thread-safe structured logging to `~/.clacky/logs/` for debugging agent sessions
 - **Session persistence on startup**: server now restores the most recent session for the working directory automatically on boot
-- **Long-term memory update system**: agent automatically updates `~/.clacky/memories/` after sessions using a whitelist-driven approach
+- **Long-term memory update system**: agent automatically updates `~/.clacky/memories/` after sessions using a whitelist-driven approach; memories persist across restarts and are injected into agent context on startup
+- **recall-memory skill with smart meta injection**: the `recall-memory` skill now receives a pre-built index of all memory files (topic, description, last updated) so the agent can selectively load only relevant memories without reading every file
 - **Compressed message archiving**: older messages are compressed and archived to chunk Markdown files to keep context window manageable
 - **Network pre-flight check**: connection is verified before agent starts; helpful VPN/proxy suggestions shown on failure
 - **Encrypted brand skills**: white-label brand skills can now be shipped as encrypted `.enc` files for privacy
 
 ### Improved
-- Memory update logic tightened with a whitelist approach — only writes memory when explicit criteria are met, reducing noise
-- Memory update threshold raised and prompt made dynamic for more reliable triggering
+- Memory update logic tightened: whitelist-driven approach, raised trigger threshold, and dynamic prompt — reduces false writes and improves reliability
 - Slash commands in onboarding (`/create-task`, `/skill-add`) now use the pending-message pattern so they work correctly before WS connects
 - Sidebar shows "No sessions yet" placeholder during onboarding
 - Session delete is now optimistic — UI updates immediately without waiting for WS broadcast, and 404 ghost sessions are cleaned up automatically
