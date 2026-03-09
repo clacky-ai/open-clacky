@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.3] - 2026-03-09
+
+### Added
+- **Slash command skill injection**: skill content is now injected as an assistant message for all `/skill-name` commands, giving the agent full context of the skill instructions at invocation time
+- **Collapsible `<think>` blocks** in web UI: model reasoning enclosed in `<think>…</think>` tags is rendered as a collapsible "Thinking…" section instead of raw text
+
+### Improved
+- **Web UI settings panel**: refined layout and styles for the settings modal
+- **Session state restored on page refresh**: "Thinking…" progress indicator and error messages are now restored from session status after a page reload instead of disappearing
+
+### Fixed
+- **AgentConfig shallow-copy bug**: switching models in Settings no longer pollutes existing sessions — `deep_copy` (JSON round-trip) is now used everywhere instead of `dup` to prevent shared `@models` hash mutation across sessions
+
 ## [0.8.2] - 2026-03-09
 
 ### Added
