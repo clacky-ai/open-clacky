@@ -126,13 +126,29 @@ To use this skill, simply say:
    ```
 
 3. **Analyze and Categorize Commits**
-   - Review each commit message and its changes
+   - Review each commit message AND its diff (`git show <hash> --stat`) to understand the actual change
    - Categorize into:
      - **Major Features**: User-visible functionality additions
      - **Improvements**: Performance, UX, architecture enhancements
      - **Bug Fixes**: Error corrections and issue resolutions
      - **Changes**: Breaking changes or significant refactoring
      - **Minor Details**: Small fixes, style changes, trivial updates
+
+   **⚠️ Critical: Do NOT over-merge commits on the same topic**
+
+   It is tempting to group multiple commits under one bullet because they share a theme (e.g., "all about memory"). Resist this — each commit with **independent user-facing value** deserves its own bullet.
+
+   Ask for every commit: *"Does this enable something the user couldn't do before, separate from other commits on this topic?"*
+   - YES → write a separate CHANGELOG bullet
+   - NO (pure refactor, stability fix, threshold tweak) → merge into a related bullet or put in "More"
+
+   **Example of the mistake to avoid:**
+   - `feat: add long-term memory update system` and `feat: skill template context and recall-memory meta injection` are both "about memory", but they describe distinct capabilities:
+     - First: agent writes memories after sessions
+     - Second: skills receive a pre-built index so agent can selectively load only relevant memories
+   - These must be two separate bullets, not one.
+
+   **Sanity check after writing:** Count your `### Added` bullets vs the number of `feat:` commits. If `feat` commits > bullets, you likely merged too aggressively — revisit.
 
 4. **Write CHANGELOG Entries**
 
