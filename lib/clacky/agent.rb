@@ -33,11 +33,12 @@ module Clacky
     include MemoryUpdater
 
     attr_reader :session_id, :messages, :iterations, :total_cost, :working_dir, :created_at, :total_tasks, :todos,
-                :cache_stats, :cost_source, :ui, :skill_loader
+                :cache_stats, :cost_source, :ui, :skill_loader, :agent_profile
 
-    def initialize(client, config = {}, working_dir: nil, ui: nil)
+    def initialize(client, config = {}, working_dir: nil, ui: nil, profile: "coding")
       @client = client  # Client for current model
       @config = config.is_a?(AgentConfig) ? config : AgentConfig.new(config)
+      @agent_profile = AgentProfile.load(profile)
       @tool_registry = ToolRegistry.new
       @hooks = HookManager.new
       @session_id = SecureRandom.uuid
@@ -89,8 +90,8 @@ module Clacky
     end
 
     # Restore from a saved session
-    def self.from_session(client, config, session_data, ui: nil)
-      agent = new(client, config, ui: ui)
+    def self.from_session(client, config, session_data, ui: nil, profile: "coding")
+      agent = new(client, config, ui: ui, profile: profile)
       agent.restore_session(session_data)
       agent
     end

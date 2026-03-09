@@ -172,8 +172,9 @@ module Clacky
 
       # Set skill loader for command suggestions
       # @param skill_loader [Clacky::SkillLoader] The skill loader instance
-      def set_skill_loader(skill_loader)
-        @input_area.set_skill_loader(skill_loader)
+      # @param agent_profile [Clacky::AgentProfile, nil] Current agent profile for skill filtering
+      def set_skill_loader(skill_loader, agent_profile = nil)
+        @input_area.set_skill_loader(skill_loader, agent_profile)
       end
 
       # Append output to the output area

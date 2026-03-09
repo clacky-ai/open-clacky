@@ -38,12 +38,10 @@ module Clacky
         skill = skill_loader.find_by_name(skill_name)
         return { error: "Skill not found: #{skill_name}" } unless skill
 
-        # Check if skill allows model invocation
-        unless skill.model_invocation_allowed?
-          return { error: "Skill '#{skill_name}' does not allow model invocation" }
-        end
-
         # Execute skill based on its configuration.
+        # Note: disable-model-invocation only prevents the skill from appearing in AVAILABLE SKILLS
+        # (so the model won't auto-discover it). It does NOT block execution here — the user may
+        # have triggered this skill explicitly via a slash command (/skill-name).
         # Brand skills (encrypted) are ALWAYS executed in a subagent so their
         # plaintext content is never exposed to the main agent or the user.
         if skill.encrypted? || skill.fork_agent?

@@ -7,6 +7,7 @@ require_relative "clacky/skill_loader"
 
 # Agent system
 require_relative "clacky/agent_config"
+require_relative "clacky/agent_profile"
 require_relative "clacky/providers"
 require_relative "clacky/session_manager"
 

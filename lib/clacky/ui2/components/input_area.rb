@@ -130,9 +130,10 @@ module Clacky
 
         # Set skill loader for command suggestions
         # @param skill_loader [Clacky::SkillLoader] The skill loader instance
-        def set_skill_loader(skill_loader)
+        # @param agent_profile [Clacky::AgentProfile, nil] Current agent profile for skill filtering
+        def set_skill_loader(skill_loader, agent_profile = nil)
           @skill_loader = skill_loader
-          @command_suggestions.load_skill_commands(skill_loader) if skill_loader
+          @command_suggestions.load_skill_commands(skill_loader, agent_profile) if skill_loader
         end
 
         # Update session bar info

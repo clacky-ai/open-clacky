@@ -39,12 +39,16 @@ module Clacky
           UI2::ThemeManager.current_theme
         end
 
-        # Load skill commands from skill loader
+        # Load skill commands from skill loader, filtered by agent profile whitelist
         # @param skill_loader [Clacky::SkillLoader] The skill loader instance
-        def load_skill_commands(skill_loader)
+        # @param agent_profile [Clacky::AgentProfile, nil] Current agent profile (nil = allow all)
+        def load_skill_commands(skill_loader, agent_profile = nil)
           return unless skill_loader
 
-          @skill_commands = skill_loader.user_invocable_skills.map do |skill|
+          skills = skill_loader.user_invocable_skills
+          skills = skills.select { |s| agent_profile.skill_allowed?(s.identifier) } if agent_profile
+
+          @skill_commands = skills.map do |skill|
             {
               command: skill.slash_command,
               description: skill.description || "No description available",

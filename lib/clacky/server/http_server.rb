@@ -1072,13 +1072,13 @@ module Clacky
       # @param working_dir [String] working directory for the agent
       # @param permission_mode [Symbol] :confirm_all (default, human present) or
       #   :auto_approve (unattended — suppresses request_user_feedback waits)
-      def build_session(name:, working_dir:, permission_mode: :confirm_all)
+      def build_session(name:, working_dir:, permission_mode: :confirm_all, profile: "general")
         session_id = @registry.create(name: name, working_dir: working_dir)
 
         client = @client_factory.call
         config = @agent_config.dup
         config.permission_mode = permission_mode
-        agent  = Clacky::Agent.new(client, config, working_dir: working_dir)
+        agent  = Clacky::Agent.new(client, config, working_dir: working_dir, profile: profile)
 
         broadcaster = method(:broadcast)
         ui = WebUIController.new(session_id, broadcaster)
@@ -1106,7 +1106,7 @@ module Clacky
 
         client = @client_factory.call
         config = @agent_config.dup
-        agent  = Clacky::Agent.from_session(client, config, session_data)
+        agent  = Clacky::Agent.from_session(client, config, session_data, profile: "general")
 
         broadcaster = method(:broadcast)
         ui = WebUIController.new(session_id, broadcaster)

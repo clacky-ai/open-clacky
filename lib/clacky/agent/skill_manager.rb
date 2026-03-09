@@ -29,9 +29,10 @@ module Clacky
           return nil unless skill
 
           # Check if user can invoke this skill
-          unless skill.user_invocable?
-            return nil
-          end
+          return nil unless skill.user_invocable?
+
+          # Check if this skill is allowed by the current agent profile
+          return nil if @agent_profile && !@agent_profile.skill_allowed?(skill.identifier)
 
           { skill: skill, arguments: arguments }
         else
@@ -63,11 +64,12 @@ module Clacky
         expanded_content
       end
 
-      # Generate skill context - loads all auto-invocable skills
+      # Generate skill context - loads all auto-invocable skills allowed by the agent profile
       # @return [String] Skill context to add to system prompt
       def build_skill_context
-        # Load all auto-invocable skills
+        # Load all auto-invocable skills, filtered by the agent profile's skill whitelist
         all_skills = @skill_loader.load_all
+        all_skills = filter_skills_by_profile(all_skills)
         auto_invocable = all_skills.select(&:model_invocation_allowed?)
 
         return "" if auto_invocable.empty?
@@ -79,8 +81,7 @@ module Clacky
         context += "AVAILABLE SKILLS:\n"
         context += "=" * 80 + "\n\n"
         context += "CRITICAL SKILL USAGE RULES:\n"
-        context += "- When user's request matches a skill description, you MUST use invoke_skill tool\n"
-        context += "- NEVER implement skill functionality yourself - always delegate to the skill\n"
+        context += "- When user's request matches a skill description, you MUST use invoke_skill tool — invoke only the single BEST matching skill, do NOT call multiple skills for the same request\n"
         context += "- Example: invoke_skill(skill_name: 'code-explorer', task: 'Analyze project structure')\n"
         context += "- SLASH COMMAND (HIGHEST PRIORITY): If user input starts with /skill_name, you MUST invoke_skill immediately as the first action with no exceptions.\n"
         context += "\n"
@@ -113,6 +114,16 @@ module Clacky
       end
 
       private
+
+      # Filter skills by the agent profile's skill whitelist.
+      # If no profile is set, all skills are allowed (backward-compatible).
+      # @param skills [Array<Skill>]
+      # @return [Array<Skill>]
+      def filter_skills_by_profile(skills)
+        return skills unless @agent_profile
+
+        skills.select { |skill| @agent_profile.skill_allowed?(skill.identifier) }
+      end
 
       # Build template context for skill content expansion.
       # Provides named values that can be used as <%= key %> in SKILL.md files.

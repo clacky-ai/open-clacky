@@ -3,127 +3,81 @@
 module Clacky
   class Agent
     # System prompt construction
-    # Builds system prompt with project rules and skill context
+    # Builds system prompt by composing layers:
+    #   1. Agent-specific system_prompt.md  (role & responsibilities)
+    #   2. base_prompt.md                   (universal rules: todo manager, tool usage, etc.)
+    #   3. Project rules                    (.clackyrules / .cursorrules / CLAUDE.md)
+    #   4. SOUL.md                          (agent personality — user override or built-in default)
+    #   5. USER.md                          (user profile — user override or built-in default)
+    #   6. Skills context                   (available skills list)
     module SystemPromptBuilder
-      # System prompt for the coding agent
-      SYSTEM_PROMPT = <<~PROMPT.freeze
-        You are OpenClacky, an AI coding assistant and technical co-founder, designed to help non-technical
-        users complete software development projects. You are responsible for development in the current project.
-
-        Your role is to:
-        - Understand project requirements and translate them into technical solutions
-        - Write clean, maintainable, and well-documented code
-        - Follow best practices and industry standards
-        - Explain technical concepts in simple terms when needed
-        - Proactively identify potential issues and suggest improvements
-        - Help with debugging, testing, and deployment
-
-        Working process:
-        1. **For complex tasks with multiple steps**:
-           - Use todo_manager to create a complete TODO list FIRST
-           - After creating the TODO list, START EXECUTING each task immediately
-           - Don't stop after planning - continue to work on the tasks!
-        2. Always read existing code before making changes (use file_reader/glob/grep or invoke code-explorer skill)
-        3. **ALWAYS use `glob` tool to find files in the current directory — NEVER use shell `find` command for file discovery.**
-        4. Ask clarifying questions if requirements are unclear
-        5. Break down complex tasks into manageable steps
-        6. **USE TOOLS to create/modify files** - don't just return code
-        7. Write code that is secure, efficient, and easy to understand
-        8. Test your changes using the shell tool when appropriate
-        9. **IMPORTANT**: After completing each step, mark the TODO as completed and continue to the next one
-        10. Keep working until ALL TODOs are completed or you need user input
-        11. Provide brief explanations after completing actions
-
-        IMPORTANT: You should frequently refer to the existing codebase. For unclear instructions,
-        prioritize understanding the codebase first before answering or taking action.
-        Always read relevant code files to understand the project structure, patterns, and conventions.
-
-        CRITICAL RULE FOR TODO MANAGER:
-        When using todo_manager to add tasks, you MUST continue working immediately after adding ALL todos.
-        Adding todos is NOT completion - it's just the planning phase!
-        Workflow: add todo 1 → add todo 2 → add todo 3 → START WORKING on todo 1 → complete(1) → work on todo 2 → complete(2) → etc.
-        NEVER stop after just adding todos without executing them!
-
-        NOTE: Available skills are listed below in the AVAILABLE SKILLS section.
-        When a user's request matches a skill, you MUST use the skill tool instead of implementing it yourself.
-
-        ## Long-term Memory
-        You have long-term memories in `~/.clacky/memories/`. Use `invoke_skill("recall-memory", "<topic>")` when:
-        - The user references something from a past session
-        - You encounter a concept or decision you're unsure about
-        Do NOT recall proactively — only when genuinely needed.
-      PROMPT
-
       # Max characters loaded from each agent file (SOUL.md / USER.md)
       MAX_MEMORY_FILE_CHARS = 1000
 
       # Build complete system prompt with project rules and skills
       # @return [String] Complete system prompt
       def build_system_prompt
-        prompt = SYSTEM_PROMPT.dup
+        parts = []
 
-        # Try to load project rules from multiple sources (in order of priority)
+        # Layer 1: agent-specific role & responsibilities
+        parts << @agent_profile.system_prompt
+
+        # Layer 2: universal behavioral rules (todo manager, tool usage, etc.)
+        base = @agent_profile.base_prompt
+        parts << base unless base.empty?
+
+        # Layer 3: project-specific rules from working directory
+        project_rules = load_project_rules
+        if project_rules
+          parts << format_section("PROJECT-SPECIFIC RULES (from #{project_rules[:source]})",
+                                  project_rules[:content],
+                                  footer: "IMPORTANT: Follow these project-specific rules at all times!")
+        end
+
+        # Layer 4 & 5: SOUL.md and USER.md (with built-in defaults as fallback)
+        soul = truncate(@agent_profile.soul, MAX_MEMORY_FILE_CHARS)
+        parts << format_section("AGENT SOUL (from ~/.clacky/agents/SOUL.md)", soul) unless soul.empty?
+
+        user_profile = truncate(@agent_profile.user_profile, MAX_MEMORY_FILE_CHARS)
+        parts << format_section("USER PROFILE (from ~/.clacky/agents/USER.md)", user_profile) unless user_profile.empty?
+
+        # Layer 6: skills context
+        skill_context = build_skill_context
+        parts << skill_context if skill_context && !skill_context.empty?
+
+        parts.join("\n\n")
+      end
+
+      private def load_project_rules
         rules_files = [
           { path: ".clackyrules", name: ".clackyrules" },
           { path: ".cursorrules", name: ".cursorrules" },
-          { path: "CLAUDE.md", name: "CLAUDE.md" }
+          { path: "CLAUDE.md",    name: "CLAUDE.md" }
         ]
-
-        rules_content = nil
-        rules_source = nil
 
         rules_files.each do |file_info|
           full_path = File.join(@working_dir, file_info[:path])
-          if File.exist?(full_path)
-            content = File.read(full_path).strip
-            unless content.empty?
-              rules_content = content
-              rules_source = file_info[:name]
-              break
-            end
-          end
+          next unless File.exist?(full_path)
+
+          content = File.read(full_path).strip
+          return { content: content, source: file_info[:name] } unless content.empty?
         end
 
-        # Add rules to prompt if found
-        if rules_content && rules_source
-          prompt += "\n\n" + "=" * 80 + "\n"
-          prompt += "PROJECT-SPECIFIC RULES (from #{rules_source}):\n"
-          prompt += "=" * 80 + "\n"
-          prompt += rules_content
-          prompt += "\n" + "=" * 80 + "\n"
-          prompt += "⚠️ IMPORTANT: Follow these project-specific rules at all times!\n"
-          prompt += "=" * 80
-        end
+        nil
+      end
 
-        # Load agent soul and user profile from ~/.clacky/agents/
-        # Each file is capped at MAX_MEMORY_FILE_CHARS to keep system prompt size under control
-        agents_dir = File.expand_path("~/.clacky/agents")
-        [
-          { path: File.join(agents_dir, "SOUL.md"), label: "AGENT SOUL" },
-          { path: File.join(agents_dir, "USER.md"), label: "USER PROFILE" }
-        ].each do |entry|
-          next unless File.exist?(entry[:path])
+      private def format_section(title, content, footer: nil)
+        sep = "=" * 80
+        lines = ["", sep, title, sep, content, sep]
+        lines << footer if footer
+        lines << sep if footer
+        lines.join("\n")
+      end
 
-          content = File.read(entry[:path]).strip
-          next if content.empty?
+      private def truncate(text, max_chars)
+        return text if text.length <= max_chars
 
-          if content.length > MAX_MEMORY_FILE_CHARS
-            content = content[0, MAX_MEMORY_FILE_CHARS] + "\n... [truncated]"
-          end
-
-          relative = entry[:path].sub(File.expand_path("~"), "~")
-          prompt += "\n\n" + "=" * 80 + "\n"
-          prompt += "#{entry[:label]} (from #{relative}):\n"
-          prompt += "=" * 80 + "\n"
-          prompt += content
-          prompt += "\n" + "=" * 80
-        end
-
-        # Add all loaded skills to system prompt
-        skill_context = build_skill_context
-        prompt += skill_context if skill_context && !skill_context.empty?
-
-        prompt
+        text[0, max_chars] + "\n... [truncated]"
       end
     end
   end

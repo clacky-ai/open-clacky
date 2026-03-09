@@ -54,6 +54,7 @@ module Clacky
     option :json, type: :boolean, default: false, desc: "Output NDJSON to stdout (for scripting/piping)"
     option :message, type: :string, aliases: "-m", desc: "Run non-interactively with this message and exit"
     option :image, type: :array, aliases: "-i", desc: "Image file path(s) to attach (use with -m; can be specified multiple times)"
+    option :agent, type: :string, default: "coding", desc: "Agent profile to use: coding, general, or any custom profile name (default: coding)"
     option :help, type: :boolean, aliases: "-h", desc: "Show this help message"
     def agent
       # Handle help option
@@ -84,21 +85,24 @@ module Clacky
       # Create client for current model
       client = Clacky::Client.new(agent_config.api_key, base_url: agent_config.base_url, anthropic_format: agent_config.anthropic_format?)
 
+      # Resolve agent profile name from --agent option
+      agent_profile = options[:agent] || "coding"
+
       # Handle session loading/continuation
       session_manager = Clacky::SessionManager.new
       agent = nil
       is_session_load = false
 
       if options[:continue]
-        agent = load_latest_session(client, agent_config, session_manager, working_dir)
+        agent = load_latest_session(client, agent_config, session_manager, working_dir, profile: agent_profile)
         is_session_load = !agent.nil?
       elsif options[:attach]
-        agent = load_session_by_number(client, agent_config, session_manager, working_dir, options[:attach])
+        agent = load_session_by_number(client, agent_config, session_manager, working_dir, options[:attach], profile: agent_profile)
         is_session_load = !agent.nil?
       end
 
       # Create new agent if no session loaded
-      agent ||= Clacky::Agent.new(client, agent_config, working_dir: working_dir)
+      agent ||= Clacky::Agent.new(client, agent_config, working_dir: working_dir, profile: agent_profile)
 
       # Change to working directory
       original_dir = Dir.pwd
@@ -108,7 +112,7 @@ module Clacky
         if options[:message]
           run_non_interactive(agent, options[:message], Array(options[:image]), agent_config, session_manager)
         elsif options[:json]
-          run_agent_with_json(agent, working_dir, agent_config, session_manager, client)
+          run_agent_with_json(agent, working_dir, agent_config, session_manager, client, profile: agent_profile)
         else
           run_agent_with_ui2(agent, working_dir, agent_config, session_manager, client, is_session_load: is_session_load)
         end
@@ -364,7 +368,7 @@ module Clacky
         say ""
       end
 
-      def load_latest_session(client, agent_config, session_manager, working_dir)
+      def load_latest_session(client, agent_config, session_manager, working_dir, profile: "coding")
         session_data = session_manager.latest_for_directory(working_dir)
 
         if session_data.nil?
@@ -373,10 +377,10 @@ module Clacky
         end
 
         # Don't print message here - will be shown by UI after banner
-        Clacky::Agent.from_session(client, agent_config, session_data)
+        Clacky::Agent.from_session(client, agent_config, session_data, profile: profile)
       end
 
-      def load_session_by_number(client, agent_config, session_manager, working_dir, identifier)
+      def load_session_by_number(client, agent_config, session_manager, working_dir, identifier, profile: "coding")
         # Get a larger list to search through (for ID prefix matching)
         sessions = session_manager.list(current_dir: working_dir, limit: 100)
 
@@ -420,7 +424,7 @@ module Clacky
         end
 
         # Don't print message here - will be shown by UI after banner
-        Clacky::Agent.from_session(client, agent_config, session_data)
+        Clacky::Agent.from_session(client, agent_config, session_data, profile: profile)
       end
 
       # Handle agent error/interrupt with cleanup
@@ -476,7 +480,7 @@ module Clacky
       #   {"type":"confirmation","id":"conf_1","result":"yes"} — answer to request_confirmation
       #
       # If a bare string line is received it is treated as a message content.
-      def run_agent_with_json(agent, working_dir, agent_config, session_manager, client)
+      def run_agent_with_json(agent, working_dir, agent_config, session_manager, client, profile: "coding")
         json_ui = Clacky::JsonUIController.new
         agent.instance_variable_set(:@ui, json_ui)
 
@@ -510,7 +514,7 @@ module Clacky
             when "/exit", "/quit"
               break
             when "/clear"
-              agent = Clacky::Agent.new(client, agent_config, working_dir: working_dir)
+              agent = Clacky::Agent.new(client, agent_config, working_dir: working_dir, profile: profile)
               agent.instance_variable_set(:@ui, json_ui)
               json_ui.emit("info", message: "Session cleared. Starting fresh.")
               next
@@ -576,8 +580,8 @@ module Clacky
         # Inject UI into agent
         agent.instance_variable_set(:@ui, ui_controller)
 
-        # Set skill loader for command suggestions
-        ui_controller.set_skill_loader(agent.skill_loader)
+        # Set skill loader for command suggestions, filtered by agent profile whitelist
+        ui_controller.set_skill_loader(agent.skill_loader, agent.agent_profile)
 
         # Track current working thread (agent or idle compression that can be interrupted)
         # idle_timer is tracked separately because it should not be interrupted during sleep
