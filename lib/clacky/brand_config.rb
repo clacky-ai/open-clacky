@@ -33,6 +33,7 @@ module Clacky
 
     # OpenClacky Cloud API base URL
     API_BASE_URL = "https://openclacky.com"
+    #API_BASE_URL = "http://127.0.0.1:3000"
 
     # How often to send a heartbeat (seconds) — once per day
     HEARTBEAT_INTERVAL = 86_400
@@ -57,6 +58,12 @@ module Clacky
       @license_expires_at      = parse_time(attrs["license_expires_at"])
       @license_last_heartbeat  = parse_time(attrs["license_last_heartbeat"])
       @device_id               = attrs["device_id"]
+
+      # In-memory decryption key cache: "skill_id:skill_version_id" => { key:, expires_at: }
+      # Never persisted to disk. Survives across multiple skill invocations within one session.
+      @decryption_keys         = {}
+      # Timestamp of last successful server contact (for grace period calculation)
+      @last_server_contact_at  = nil
     end
 
     # Load brand configuration from ~/.clacky/brand.yml.
@@ -310,7 +317,8 @@ module Clacky
 
       # Record installed version in brand_skills.json (including description for
       # offline display when the remote API is unreachable).
-      record_installed_skill(slug, version, skill_info["name"], skill_info["description"])
+      # encrypted: true because the ZIP contains MANIFEST.enc.json + AES-256-GCM encrypted files.
+      record_installed_skill(slug, version, skill_info["name"], skill_info["description"], encrypted: true)
 
       { success: true, slug: slug, version: version }
     rescue StandardError, ScriptError => e
@@ -371,7 +379,8 @@ module Clacky
       enc_path = File.join(dest_dir, "SKILL.md.enc")
       File.binwrite(enc_path, mock_content.encode("UTF-8"))
 
-      record_installed_skill(slug, version, name, description)
+      # encrypted: false — mock skills store plain bytes in .enc, no MANIFEST needed.
+      record_installed_skill(slug, version, name, description, encrypted: false)
       { success: true, slug: slug, version: version }
     rescue StandardError => e
       { success: false, error: e.message }
@@ -420,44 +429,69 @@ module Clacky
     # Decrypt an encrypted brand skill file and return its content in memory.
     #
     # Security model:
-    #   - Encrypted files (.enc) are stored on disk using AES-256-GCM envelope encryption.
-    #   - The decryption key is derived from segments of the license_key so the
-    #     raw key is never transmitted or stored separately.
+    #   - Skill files are AES-256-GCM encrypted. Each skill directory contains a
+    #     MANIFEST.enc.json that stores per-file IV, auth tag, checksum, and the
+    #     skill_version_id needed to request the decryption key from the server.
+    #   - Decryption keys are requested from the server once and cached in memory
+    #     (never written to disk). Subsequent calls for the same skill version are
+    #     served entirely from cache without network I/O.
     #   - Decrypted content exists only in memory and is never written to disk.
     #
-    # Envelope encryption (production flow — to be wired up after backend integration):
-    #   1. Server stores one copy of the skill encrypted with a random content_key.
-    #   2. For each license, the content_key is re-encrypted with a KEK derived from
-    #      the license_key's random segments (segments 3+4) and stored alongside.
-    #   3. Client: decrypt KEK envelope → recover content_key → decrypt skill.
+    # Fallback for mock/plain skills:
+    #   When no MANIFEST.enc.json exists in the skill directory, the method falls
+    #   back to reading the .enc file as raw UTF-8 bytes (mock/dev mode).
     #
-    # Current implementation (mock):
-    #   The "encrypted" file is actually the raw SKILL.md bytes (no real encryption).
-    #   AES-256-GCM decryption is stubbed so the full call-chain is exercised and
-    #   the interface is stable for backend integration later.
-    #
-    # TODO: Replace mock body with real two-step envelope decryption once backend
-    #       delivers the encrypted_content_key alongside each skill download.
-    #
-    # @param encrypted_path [String] Path to the .enc file on disk
-    # @return [String] Decrypted SKILL.md content (UTF-8)
+    # @param encrypted_path [String] Path to the .enc file on disk (e.g. ".../slug/SKILL.md.enc")
+    # @return [String] Decrypted file content (UTF-8)
     # @raise [RuntimeError] If license is not activated or decryption fails
     def decrypt_skill_content(encrypted_path)
       raise "License not activated — cannot decrypt brand skill" unless activated?
 
-      # TODO: Real envelope decryption (post backend integration):
-      #
-      #   kek          = derive_kek_from_license(@license_key)
-      #   content_key  = aes_gcm_decrypt(File.binread(key_envelope_path), kek)
-      #   raw          = aes_gcm_decrypt(File.binread(encrypted_path), content_key)
-      #   raw.force_encoding("UTF-8")
-      #
-      # MOCK: treat the .enc file as plain bytes (no actual encryption yet)
-      raw = File.binread(encrypted_path)
-      raw.force_encoding("UTF-8")
-      raw
-    rescue Errno::ENOENT
-      raise "Brand skill encrypted file not found: #{encrypted_path}"
+      skill_dir    = File.dirname(encrypted_path)
+      manifest_path = File.join(skill_dir, "MANIFEST.enc.json")
+
+      # Fall back to plain-bytes mode when no MANIFEST present (mock skills).
+      unless File.exist?(manifest_path)
+        raw = File.binread(encrypted_path)
+        return raw.force_encoding("UTF-8")
+      end
+
+      # Read and parse the manifest
+      manifest = JSON.parse(File.read(manifest_path))
+
+      skill_id         = manifest["skill_id"]
+      skill_version_id = manifest["skill_version_id"]
+
+      raise "MANIFEST.enc.json missing skill_id"         unless skill_id
+      raise "MANIFEST.enc.json missing skill_version_id" unless skill_version_id
+
+      # Derive the relative file path (e.g. "SKILL.md") from the .enc filename
+      enc_basename = File.basename(encrypted_path)                 # "SKILL.md.enc"
+      file_path    = enc_basename.sub(/\.enc\z/, "")               # "SKILL.md"
+
+      file_meta = manifest["files"] && manifest["files"][file_path]
+      raise "File '#{file_path}' not found in MANIFEST.enc.json" unless file_meta
+
+      # Fetch decryption key — served from in-memory cache when available
+      key = fetch_decryption_key(skill_id: skill_id, skill_version_id: skill_version_id)
+
+      # Decrypt using AES-256-GCM
+      ciphertext = File.binread(encrypted_path)
+      plaintext  = aes_gcm_decrypt(key, ciphertext, file_meta["iv"], file_meta["tag"])
+
+      # Integrity check
+      actual   = Digest::SHA256.hexdigest(plaintext)
+      expected = file_meta["original_checksum"]
+      if expected && actual != expected
+        raise "Checksum mismatch for #{file_path}: " \
+              "expected #{expected}, got #{actual}"
+      end
+
+      plaintext
+    rescue Errno::ENOENT => e
+      raise "Brand skill file not found: #{e.message}"
+    rescue JSON::ParserError => e
+      raise "Invalid MANIFEST.enc.json: #{e.message}"
     end
 
     # Read the local brand_skills.json metadata, cross-validated against the
@@ -579,9 +613,14 @@ module Clacky
     end
 
     # Persist installed skill metadata to brand_skills.json.
+    #
+    # encrypted: true  → skill files are AES-256-GCM encrypted; MANIFEST.enc.json
+    #                    is present in the skill directory and must be used for decryption.
+    # encrypted: false → mock/plain skill; SKILL.md.enc contains raw UTF-8 bytes.
+    #
     # description is stored so it can be shown locally even when the remote API
     # is unreachable (e.g. offline or license server down).
-    private def record_installed_skill(slug, version, name, description = nil)
+    private def record_installed_skill(slug, version, name, description = nil, encrypted: true)
       FileUtils.mkdir_p(brand_skills_dir)
       path      = File.join(brand_skills_dir, "brand_skills.json")
       installed = installed_brand_skills
@@ -589,9 +628,88 @@ module Clacky
         "version"      => version,
         "name"         => name,
         "description"  => description.to_s,
+        "encrypted"    => encrypted,
         "installed_at" => Time.now.utc.iso8601
       }
       File.write(path, JSON.generate(installed))
+    end
+
+    # Fetch the AES-256-GCM decryption key for a skill version from the server.
+    #
+    # Keys are cached in memory by "skill_id:skill_version_id" for the duration
+    # of the process lifetime.  The cache is never written to disk.
+    #
+    # Cache validity:
+    #   - Served from cache when key has not expired AND last server contact was
+    #     within HEARTBEAT_GRACE_PERIOD (3 days).  This lets skills work offline
+    #     for up to 3 days after the last successful heartbeat.
+    #
+    # @param skill_id         [Integer]
+    # @param skill_version_id [Integer]
+    # @return [String] 32-byte binary decryption key
+    # @raise [RuntimeError] on network or auth failure
+    private def fetch_decryption_key(skill_id:, skill_version_id:)
+      cache_key = "#{skill_id}:#{skill_version_id}"
+      cached    = @decryption_keys[cache_key]
+
+      # Serve from cache when key is still valid and we're within the grace period
+      if cached
+        within_grace = @last_server_contact_at &&
+                       (Time.now.utc - @last_server_contact_at) < HEARTBEAT_GRACE_PERIOD
+        key_valid    = Time.now.utc < cached[:expires_at]
+
+        return cached[:key] if key_valid && within_grace
+      end
+
+      # Build signed request payload
+      user_id   = parse_user_id_from_key(@license_key)
+      key_hash  = Digest::SHA256.hexdigest(@license_key)
+      ts        = Time.now.utc.to_i.to_s
+      nonce     = SecureRandom.hex(16)
+      message   = "#{user_id}:#{@device_id}:#{ts}:#{nonce}"
+      signature = OpenSSL::HMAC.hexdigest("SHA256", @license_key, message)
+
+      payload = {
+        key_hash:         key_hash,
+        user_id:          user_id.to_s,
+        device_id:        @device_id,
+        timestamp:        ts,
+        nonce:            nonce,
+        signature:        signature,
+        skill_id:         skill_id,
+        skill_version_id: skill_version_id
+      }
+
+      response = api_post("/api/v1/licenses/skill_keys", payload)
+      raise "Failed to fetch decryption key: #{response[:error]}" unless response[:success]
+
+      data       = response[:data]
+      key_bytes  = [data["decryption_key"]].pack("H*")
+      expires_at = data["expires_at"] ? parse_time(data["expires_at"]) : Time.now.utc + 365 * 86_400
+
+      @decryption_keys[cache_key] = { key: key_bytes, expires_at: expires_at }
+      @last_server_contact_at = Time.now.utc
+
+      key_bytes
+    end
+
+    # Decrypt ciphertext using AES-256-GCM.
+    # @param key        [String] 32-byte binary key
+    # @param ciphertext [String] Encrypted binary data
+    # @param iv_b64     [String] Base64-encoded 12-byte IV
+    # @param tag_b64    [String] Base64-encoded 16-byte auth tag
+    # @return [String] Decrypted plaintext (UTF-8)
+    # @raise [RuntimeError] on decryption failure (wrong key, tampered data)
+    private def aes_gcm_decrypt(key, ciphertext, iv_b64, tag_b64)
+      require "base64"
+      cipher          = OpenSSL::Cipher.new("aes-256-gcm").decrypt
+      cipher.key      = key
+      cipher.iv       = Base64.strict_decode64(iv_b64)
+      cipher.auth_tag = Base64.strict_decode64(tag_b64)
+      (cipher.update(ciphertext) + cipher.final).force_encoding("UTF-8")
+    rescue OpenSSL::Cipher::CipherError => e
+      raise "AES-256-GCM decryption failed: #{e.message}. " \
+            "The file may be corrupted or the license key is incorrect."
     end
 
     # Parse user_id from the License Key structure.

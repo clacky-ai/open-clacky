@@ -22,9 +22,12 @@ module Clacky
     # @param working_dir [String] Current working directory for project-level discovery
     # @param brand_config [Clacky::BrandConfig, nil] Optional brand config used to
     #   decrypt brand skills. When nil, brand skills are silently skipped.
-    def initialize(working_dir = nil, brand_config: nil)
+    # @param home_dir [String, nil] Override home directory (used in tests for isolation).
+    #   Defaults to ENV["HOME"].
+    def initialize(working_dir = nil, brand_config: nil, home_dir: nil)
       @working_dir  = working_dir || Dir.pwd
       @brand_config = brand_config
+      @home_dir     = home_dir || ENV.fetch("HOME", "~")
       @skills = {}            # Map identifier -> Skill
       @skills_by_command = {} # Map slash_command -> Skill
       @errors = []            # Store loading errors
@@ -52,7 +55,15 @@ module Clacky
     end
 
     # Load brand skills from ~/.clacky/brand_skills/
-    # Supports both encrypted (SKILL.md.enc) and plain (SKILL.md) brand skills.
+    #
+    # The authoritative source for whether a skill is encrypted is brand_skills.json
+    # ("encrypted" field written at install time).  This avoids re-reading the file
+    # system to infer encryption status on every agent start.
+    #
+    # Fallback: when brand_skills.json is missing or has no entry for a skill
+    # directory, we detect encryption by checking for MANIFEST.enc.json (real
+    # encrypted skills always have one; mock/plain skills do not).
+    #
     # Encrypted skills require a BrandConfig with an activated license to decrypt.
     # @return [Array<Skill>]
     def load_brand_skills
@@ -63,15 +74,26 @@ module Clacky
       brand_skills_dir = Pathname.new(@brand_config.brand_skills_dir)
       return [] unless brand_skills_dir.exist?
 
+      # Read brand_skills.json once for O(1) encrypted-field lookups
+      installed_meta = @brand_config.installed_brand_skills
+
       skills = []
       brand_skills_dir.children.select(&:directory?).each do |skill_dir|
-        # Support both encrypted (.enc) and plain brand skills
-        encrypted = skill_dir.join("SKILL.md.enc").exist?
-        plain     = skill_dir.join("SKILL.md").exist?
-        next unless encrypted || plain
+        has_enc   = skill_dir.join("SKILL.md.enc").exist?
+        has_plain = skill_dir.join("SKILL.md").exist?
+        next unless has_enc || has_plain
 
-        skill_name = skill_dir.basename.to_s
-        skill = load_single_brand_skill(skill_dir, skill_name, encrypted: encrypted)
+        slug       = skill_dir.basename.to_s
+
+        # brand_skill: true  → Skill.new reads SKILL.md.enc via BrandConfig#decrypt_skill_content.
+        #                       decrypt_skill_content internally distinguishes mock (no MANIFEST)
+        #                       from real AES-256-GCM (with MANIFEST.enc.json) transparently.
+        # brand_skill: false → Skill.new reads SKILL.md as plain text (plain brand skill).
+        #
+        # Use has_enc as the sole determinant: if the .enc file is present, use brand path.
+        use_brand_path = has_enc
+
+        skill = load_single_brand_skill(skill_dir, slug, brand_skill: use_brand_path)
         skills << skill if skill
       end
       skills
@@ -80,14 +102,14 @@ module Clacky
     # Load skills from ~/.claude/skills/ (lowest priority, compatibility)
     # @return [Array<Skill>]
     def load_global_claude_skills
-      global_claude_dir = Pathname.new(ENV.fetch("HOME", "~")).join(".claude", "skills")
+      global_claude_dir = Pathname.new(@home_dir).join(".claude", "skills")
       load_skills_from_directory(global_claude_dir, :global_claude)
     end
 
     # Load skills from ~/.clacky/skills/ (user global)
     # @return [Array<Skill>]
     def load_global_clacky_skills
-      global_clacky_dir = Pathname.new(ENV.fetch("HOME", "~")).join(".clacky", "skills")
+      global_clacky_dir = Pathname.new(@home_dir).join(".clacky", "skills")
       load_skills_from_directory(global_clacky_dir, :global_clacky)
     end
 
@@ -315,12 +337,15 @@ module Clacky
     # @param skill_name [String] Directory basename used as fallback identifier
     # @param encrypted [Boolean] Whether to treat this as an encrypted brand skill
     # @return [Skill, nil]
-    private def load_single_brand_skill(skill_dir, skill_name, encrypted: true)
+    # Load a single brand skill directory.
+    # brand_skill: true  → load from SKILL.md.enc (may be real AES or mock bytes)
+    # brand_skill: false → load from SKILL.md as plain text
+    private def load_single_brand_skill(skill_dir, skill_name, brand_skill: true)
       skill = Skill.new(
         skill_dir,
         source_path:  skill_dir,
-        brand_skill:  encrypted,
-        brand_config: encrypted ? @brand_config : nil
+        brand_skill:  brand_skill,
+        brand_config: brand_skill ? @brand_config : nil
       )
 
       existing = @skills[skill.identifier]
