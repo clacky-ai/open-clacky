@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.4] - 2026-03-10
+
+### Added
+- **License verify & download skills**: brand distribution can now push skills to clients via license heartbeat — skills are downloaded and installed automatically on activation and heartbeat
+- **Web UI theme system**: dark/light mode toggle with full CSS variable theming, persistent across sessions; all UI components (sessions, tasks, settings) updated to use theme variables
+
+### Improved
+- **Skill loader default agent**: `SkillLoader` now applies a sensible default agent value, simplifying skill configuration for common cases
+- **Web UI modernized**: redesigned session and task lists with active indicators, improved hover effects, and inline SVG icons (removed Lucide CDN dependency)
+
+### Fixed
+- **UTF-8 input handling**: invalid UTF-8 bytes in terminal UI input and output are now scrubbed cleanly instead of raising encoding errors
+- **UI thread deadlock**: progress and fullscreen threads now stop gracefully on shutdown, preventing rare deadlocks
+- **IME composition input**: slash `/` command button is now disabled during IME composition (e.g. Chinese input), preventing double-submit on Enter
+- **CLI `clear` command**: fixed a regression that broke the `clacky clear` command
+
+### More
+- Refactor: rename `set_skill_loader` to `set_agent` in `UiController` for clarity
+- Chore: update onboard skill default AI identity wording
+- Fix: append user shim after skill injection for Claude API compatibility
+
 ## [0.8.3] - 2026-03-09
 
 ### Added
