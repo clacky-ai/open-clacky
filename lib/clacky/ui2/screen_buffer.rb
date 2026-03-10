@@ -16,9 +16,9 @@ module Clacky
         @last_input_time = nil
         @rapid_input_threshold = 0.01 # 10ms threshold for detecting paste-like rapid input
 
-        # Set stdin to BINARY mode so raw bytes are read as-is without encoding assumptions.
-        # We convert to UTF-8 explicitly and safely when needed.
-        $stdin.set_encoding('BINARY')
+        # Keep stdin in UTF-8 mode so getc returns complete multi-byte characters (e.g. CJK).
+        # Switching to BINARY would cause getc to return one byte at a time, breaking Chinese input.
+        $stdin.set_encoding('UTF-8')
       end
 
       # Move cursor to specific position (0-indexed)
@@ -192,7 +192,7 @@ module Clacky
             has_data = IO.select([$stdin], nil, nil, 0)
 
             if has_data
-              next_char = $stdin.getc
+              next_char = $stdin.getc rescue nil
               break unless next_char
 
               next_char = safe_to_utf8(next_char)
@@ -256,14 +256,17 @@ module Clacky
 
       private
 
-      # Safely convert a raw BINARY string to valid UTF-8.
-      # Invalid or undefined byte sequences are silently dropped (replace: '').
-      # This prevents ArgumentError from propagating up the input loop when the
-      # terminal delivers partial multi-byte sequences (e.g. mid-CJK character).
-      # @param str [String] Raw byte string (usually ASCII-8BIT from getc in BINARY mode)
+      # Ensure a string is valid UTF-8.
+      # stdin stays in UTF-8 mode so getc returns complete characters (including CJK).
+      # This method handles the rare case where an invalid byte slips through
+      # (e.g. a stray terminal escape or a partial sequence) by scrubbing it out
+      # rather than letting ArgumentError crash the input loop.
+      # @param str [String] String from getc (UTF-8 encoded, but may have invalid bytes)
       # @return [String] Valid UTF-8 string
       private def safe_to_utf8(str)
-        str.encode('UTF-8', 'BINARY', invalid: :replace, undef: :replace, replace: '')
+        return str if str.valid_encoding?
+
+        str.encode('UTF-8', 'UTF-8', invalid: :replace, undef: :replace, replace: '')
       end
     end
   end
