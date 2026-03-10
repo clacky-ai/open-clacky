@@ -105,7 +105,7 @@ module Clacky
           session_registry: @registry,
           session_builder:  method(:build_session)
         )
-        @skill_loader    = Clacky::SkillLoader.new(working_dir: nil, brand_config: Clacky::BrandConfig.load)
+        @skill_loader    = Clacky::SkillLoader.new(brand_config: Clacky::BrandConfig.load)
       end
 
       def start
@@ -395,7 +395,8 @@ module Clacky
 
       # GET /api/brand/skills
       # Fetches the brand skills list from the cloud, enriched with local installed version.
-      # Returns 200 with skill list, or 402/403 when license is not activated / expired.
+      # Returns 200 with skill list, or 403 when license is not activated.
+      # If the remote API call fails, falls back to locally installed skills with a warning.
       def api_brand_skills(res)
         brand = Clacky::BrandConfig.load
 
@@ -414,7 +415,23 @@ module Clacky
         if result[:success]
           json_response(res, 200, { ok: true, skills: result[:skills], expires_at: result[:expires_at] })
         else
-          json_response(res, 422, { ok: false, error: result[:error] })
+          # Remote API failed — fall back to locally installed skills so the user
+          # can still see and use what they already have. Surface a soft warning.
+          local_skills = brand.installed_brand_skills.map do |slug, meta|
+            {
+              "slug"              => slug,
+              "name"              => meta["name"] || slug,
+              # Use locally cached description so it renders correctly offline
+              "description"       => meta["description"].to_s,
+              "installed_version" => meta["version"],
+              "needs_update"      => false
+            }
+          end
+          json_response(res, 200, {
+            ok:      true,
+            skills:  local_skills,
+            warning: "Could not reach the license server. Showing locally installed skills only."
+          })
         end
       end
 

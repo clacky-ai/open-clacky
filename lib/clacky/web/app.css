@@ -1832,6 +1832,17 @@ body {
 }
 .brand-skills-error { color: var(--color-error); }
 
+/* Soft warning banner — shown when remote API is unavailable but local skills are displayed */
+.brand-skills-warning {
+  font-size: 12px;
+  color: #9e6a03;
+  background: #2d2208;
+  border: 1px solid #4d3800;
+  border-radius: 6px;
+  padding: 6px 12px;
+  margin-bottom: 10px;
+}
+
 /* Brand Skill card */
 .brand-skill-card {
   background: var(--color-bg-secondary);

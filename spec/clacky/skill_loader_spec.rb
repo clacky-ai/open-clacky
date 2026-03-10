@@ -127,7 +127,7 @@ RSpec.describe Clacky::SkillLoader do
 
   describe "#errors" do
     it "returns empty array when no errors" do
-      loader = described_class.new(working_dir: working_dir, brand_config: nil)
+      loader = described_class.new(working_dir: working_dir, home_dir: working_dir)
       loader.load_all
 
       expect(loader.errors).to be_empty
@@ -147,7 +147,7 @@ RSpec.describe Clacky::SkillLoader do
         This frontmatter is not closed properly
       CONTENT
 
-      loader = described_class.new(working_dir: working_dir, brand_config: nil)
+      loader = described_class.new(working_dir: working_dir, home_dir: working_dir)
       loader.load_all
 
       expect(loader.errors).not_to be_empty
