@@ -22,7 +22,19 @@ module Clacky
     # Level constants (numeric, for future filtering)
     LEVELS = { debug: 0, info: 1, warn: 2, error: 3 }.freeze
 
+    # Minimum level to echo to $stderr when console output is enabled.
+    # :debug → all; :info → info/warn/error; :warn → warn/error only
+    CONSOLE_MIN_LEVEL = :info
+
     class << self
+      # Enable/disable echoing log lines to $stderr (in addition to the file).
+      # Call Clacky::Logger.console = true from server startup to activate.
+      attr_writer :console
+
+      private def console?
+        @console ||= false
+      end
+
       # Log at DEBUG level.
       def debug(message, **context)
         write_log(:debug, message, context)
@@ -52,9 +64,17 @@ module Clacky
           ensure_log_dir
           File.open(log_file_path(now), "a") { |f| f.puts(line) }
           prune_old_logs
+          echo_to_console(level, line) if console?
         end
       rescue StandardError
         # Never let logger errors crash the main process.
+        nil
+      end
+
+      private def echo_to_console(level, line)
+        return if LEVELS[level] < LEVELS[CONSOLE_MIN_LEVEL]
+        $stderr.puts(line)
+      rescue StandardError
         nil
       end
 

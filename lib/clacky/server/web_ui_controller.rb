@@ -24,6 +24,31 @@ module Clacky
 
         # Pending confirmation state: { id => ConditionVariable, result => value }
         @pending_confirmations = {}
+
+        # Channel subscribers: array of objects implementing UIInterface.
+        # All emitted events are forwarded to each subscriber after WebSocket broadcast.
+        @channel_subscribers = []
+        @subscribers_mutex   = Mutex.new
+      end
+
+      # Register a channel subscriber (e.g. ChannelUIController).
+      # The subscriber will receive every UIInterface call that this controller handles.
+      # @param subscriber [#UIInterface methods]
+      # @return [void]
+      def subscribe_channel(subscriber)
+        @subscribers_mutex.synchronize { @channel_subscribers << subscriber }
+      end
+
+      # Remove a previously registered channel subscriber.
+      # @param subscriber [Object]
+      # @return [void]
+      def unsubscribe_channel(subscriber)
+        @subscribers_mutex.synchronize { @channel_subscribers.delete(subscriber) }
+      end
+
+      # @return [Boolean] true if any channel subscribers are registered
+      def channel_subscribed?
+        @subscribers_mutex.synchronize { !@channel_subscribers.empty? }
       end
 
       # Deliver a confirmation answer received from the browser.
@@ -50,6 +75,7 @@ module Clacky
         return if content.nil? || content.to_s.strip.empty?
 
         emit("assistant_message", content: content)
+        forward_to_subscribers { |sub| sub.show_assistant_message(content) }
       end
 
       def show_tool_call(name, args)
@@ -61,43 +87,53 @@ module Clacky
         # Generate a human-readable summary using the tool's format_call method
         summary = tool_call_summary(name, args_data)
         emit("tool_call", name: name, args: args_data, summary: summary)
+        forward_to_subscribers { |sub| sub.show_tool_call(name, args_data) }
       end
 
       def show_tool_result(result)
         emit("tool_result", result: result)
+        forward_to_subscribers { |sub| sub.show_tool_result(result) }
       end
 
       def show_tool_error(error)
         error_msg = error.is_a?(Exception) ? error.message : error.to_s
         emit("tool_error", error: error_msg)
+        forward_to_subscribers { |sub| sub.show_tool_error(error) }
       end
 
       def show_tool_args(formatted_args)
         emit("tool_args", args: formatted_args)
+        forward_to_subscribers { |sub| sub.show_tool_args(formatted_args) }
       end
 
       def show_file_write_preview(path, is_new_file:)
         emit("file_preview", path: path, operation: "write", is_new_file: is_new_file)
+        forward_to_subscribers { |sub| sub.show_file_write_preview(path, is_new_file: is_new_file) }
       end
 
       def show_file_edit_preview(path)
         emit("file_preview", path: path, operation: "edit")
+        forward_to_subscribers { |sub| sub.show_file_edit_preview(path) }
       end
 
       def show_file_error(error_message)
         emit("file_error", error: error_message)
+        forward_to_subscribers { |sub| sub.show_file_error(error_message) }
       end
 
       def show_shell_preview(command)
         emit("shell_preview", command: command)
+        forward_to_subscribers { |sub| sub.show_shell_preview(command) }
       end
 
       def show_diff(old_content, new_content, max_lines: 50)
         emit("diff", old_size: old_content.bytesize, new_size: new_content.bytesize)
+        # Diffs are too verbose for IM — intentionally not forwarded
       end
 
       def show_token_usage(token_data)
         emit("token_usage", **token_data)
+        # Token usage is internal detail — intentionally not forwarded
       end
 
       def show_complete(iterations:, cost:, duration: nil, cache_stats: nil, awaiting_user_feedback: false)
@@ -106,32 +142,42 @@ module Clacky
         data[:cache_stats]            = cache_stats         if cache_stats
         data[:awaiting_user_feedback] = awaiting_user_feedback if awaiting_user_feedback
         emit("complete", **data)
+        forward_to_subscribers do |sub|
+          sub.show_complete(iterations: iterations, cost: cost, duration: duration,
+                            cache_stats: cache_stats, awaiting_user_feedback: awaiting_user_feedback)
+        end
       end
 
       def append_output(content)
         emit("output", content: content)
+        forward_to_subscribers { |sub| sub.append_output(content) }
       end
 
       # === Status messages ===
 
       def show_info(message, prefix_newline: true)
         emit("info", message: message)
+        forward_to_subscribers { |sub| sub.show_info(message) }
       end
 
       def show_warning(message)
         emit("warning", message: message)
+        forward_to_subscribers { |sub| sub.show_warning(message) }
       end
 
       def show_error(message)
         emit("error", message: message)
+        forward_to_subscribers { |sub| sub.show_error(message) }
       end
 
       def show_success(message)
         emit("success", message: message)
+        forward_to_subscribers { |sub| sub.show_success(message) }
       end
 
       def log(message, level: :info)
         emit("log", level: level.to_s, message: message)
+        # Log forwarding intentionally skipped — too noisy for IM
       end
 
       # === Progress ===
@@ -139,12 +185,14 @@ module Clacky
       def show_progress(message = nil, prefix_newline: true, output_buffer: nil)
         @progress_start_time = Time.now
         emit("progress", message: message, status: "start")
+        forward_to_subscribers { |sub| sub.show_progress(message) }
       end
 
       def clear_progress
         elapsed = @progress_start_time ? (Time.now - @progress_start_time).round(1) : 0
         @progress_start_time = nil
         emit("progress", status: "stop", elapsed: elapsed)
+        forward_to_subscribers { |sub| sub.clear_progress }
       end
 
       # === State updates ===
@@ -155,18 +203,22 @@ module Clacky
         data[:cost]   = cost   if cost
         data[:status] = status if status
         emit("session_update", **data) unless data.empty?
+        forward_to_subscribers { |sub| sub.update_sessionbar(tasks: tasks, cost: cost, status: status) }
       end
 
       def update_todos(todos)
         emit("todo_update", todos: todos)
+        forward_to_subscribers { |sub| sub.update_todos(todos) }
       end
 
       def set_working_status
         emit("session_update", status: "working")
+        forward_to_subscribers { |sub| sub.set_working_status }
       end
 
       def set_idle_status
         emit("session_update", status: "idle")
+        forward_to_subscribers { |sub| sub.set_idle_status }
       end
 
       # === Blocking interaction ===
@@ -183,6 +235,10 @@ module Clacky
         @mutex.synchronize { @pending_confirmations[conf_id] = pending }
 
         emit("request_confirmation", id: conf_id, message: message, default: default)
+
+        # Notify channel subscribers that confirmation is pending — non-blocking.
+        # They display a notice; the actual decision comes from the Web UI user.
+        forward_to_subscribers { |sub| sub.show_warning("⏳ Confirmation requested: #{message}") }
 
         # Block until browser replies or timeout
         @mutex.synchronize do
@@ -230,6 +286,21 @@ module Clacky
       def emit(type, **data)
         event = { type: type, session_id: @session_id }.merge(data)
         @broadcaster.call(@session_id, event)
+      end
+
+      # Forward a UIInterface call to all registered channel subscribers.
+      # Each subscriber is called in the same thread as the caller (Agent thread).
+      # Errors in individual subscribers are rescued and logged so they never
+      # interrupt the main agent execution.
+      def forward_to_subscribers(&block)
+        subscribers = @subscribers_mutex.synchronize { @channel_subscribers.dup }
+        return if subscribers.empty?
+
+        subscribers.each do |sub|
+          block.call(sub)
+        rescue StandardError => e
+          warn "[WebUIController] channel subscriber error: #{e.message}"
+        end
       end
     end
   end

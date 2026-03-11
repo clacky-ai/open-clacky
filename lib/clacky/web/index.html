@@ -78,6 +78,19 @@
             </div>
           </div>
         </div>
+        <div id="channel-list-items">
+          <div id="channels-sidebar-item" class="task-item task-item-summary">
+            <div class="task-row">
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="task-icon">
+                <rect x="5" y="2" width="14" height="20" rx="2"/>
+                <path d="M12 18h.01"/>
+              </svg>
+              <div class="task-info">
+                <span class="task-name" id="channels-sidebar-label">Channels</span>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -310,6 +323,18 @@
       </div>
     </div>
 
+    <!-- ── CHANNELS PANEL ─────────────────────────────────────────────── -->
+    <div id="channels-panel" style="display:none">
+      <div id="channels-body">
+        <div class="channels-page-header">
+          <h2 class="channels-page-title">Channels</h2>
+          <p class="channels-page-subtitle">Connect IM platforms so your users can chat with the assistant via Feishu or WeCom</p>
+        </div>
+
+        <div id="channels-list"></div>
+      </div>
+    </div>
+
     <!-- ── SETTINGS PANEL ──────────────────────────────────────────────── -->
     <div id="settings-panel" style="display:none">
       <header id="settings-header">
@@ -403,6 +428,7 @@
 <script src="/sessions.js"></script>
 <script src="/tasks.js"></script>
 <script src="/skills.js"></script>
+<script src="/channels.js"></script>
 <script src="/settings.js"></script>
 <script src="/onboard.js"></script>
 <script src="/brand.js"></script>

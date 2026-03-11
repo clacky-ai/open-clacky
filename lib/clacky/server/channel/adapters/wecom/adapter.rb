@@ -1,0 +1,106 @@
+# frozen_string_literal: true
+
+require_relative "../../adapters/base"
+require_relative "ws_client"
+
+module Clacky
+  module Channel
+    module Adapters
+      module Wecom
+        # WeCom (Enterprise WeChat) adapter.
+        # Receives messages via WebSocket long connection and sends via bot API.
+        class Adapter < Base
+          def self.platform_id
+            :wecom
+          end
+
+          def self.env_keys
+            %w[IM_WECOM_BOT_ID IM_WECOM_SECRET]
+          end
+
+          def self.platform_config(data)
+            {
+              bot_id: data["IM_WECOM_BOT_ID"],
+              secret: data["IM_WECOM_SECRET"]
+            }
+          end
+
+          def self.set_env_data(data, config)
+            data["IM_WECOM_BOT_ID"] = config[:bot_id]
+            data["IM_WECOM_SECRET"] = config[:secret]
+          end
+
+          def initialize(config)
+            @config = config
+            @ws_client = WSClient.new(
+              bot_id: config[:bot_id],
+              secret: config[:secret],
+              ws_url: config[:ws_url] || WSClient::WS_URL
+            )
+            @running = false
+            @on_message = nil
+          end
+
+          def start(&on_message)
+            @running = true
+            @on_message = on_message
+
+            @ws_client.start do |raw|
+              handle_raw_message(raw)
+            end
+          end
+
+          def stop
+            @running = false
+            @ws_client.stop
+          end
+
+          def send_text(chat_id, text, reply_to: nil)
+            @ws_client.send_message(chat_id, text)
+          end
+
+          def validate_config(config)
+            errors = []
+            errors << "bot_id is required" if config[:bot_id].nil? || config[:bot_id].empty?
+            errors << "secret is required" if config[:secret].nil? || config[:secret].empty?
+            errors
+          end
+
+          private
+
+          def handle_raw_message(raw)
+            msgtype = raw["msgtype"]
+            return unless msgtype == "text"
+
+            content = raw.dig("text", "content").to_s.strip
+            return if content.empty?
+
+            chat_id = raw["chatid"] || raw.dig("from", "userid")
+            return unless chat_id
+
+            user_id = raw.dig("from", "userid")
+            chat_type = raw["chattype"] == "group" ? :group : :direct
+
+            event = {
+              type: :message,
+              platform: :wecom,
+              chat_id: chat_id,
+              user_id: user_id,
+              text: content,
+              message_id: raw["msgid"],
+              timestamp: raw["create_time"] ? Time.at(raw["create_time"]) : Time.now,
+              chat_type: chat_type,
+              raw: raw
+            }
+
+            @on_message&.call(event)
+          rescue => e
+            warn "WeCom handle_raw_message error: #{e.message}"
+          end
+        end
+
+        Adapters.register(:wecom, Adapter)
+      end
+    end
+  end
+end

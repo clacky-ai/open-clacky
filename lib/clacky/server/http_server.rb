@@ -10,6 +10,7 @@ require_relative "session_registry"
 require_relative "web_ui_controller"
 require_relative "scheduler"
 require_relative "../brand_config"
+require_relative "channel"
 
 module Clacky
   module Server
@@ -105,10 +106,18 @@ module Clacky
           session_registry: @registry,
           session_builder:  method(:build_session)
         )
+        @channel_manager = Clacky::Channel::ChannelManager.new(
+          session_registry: @registry,
+          session_builder:  method(:build_session),
+          channel_config:   Clacky::ChannelConfig.load
+        )
         @skill_loader    = Clacky::SkillLoader.new(working_dir: nil, brand_config: Clacky::BrandConfig.load)
       end
 
       def start
+        # Enable console logging for the server process so log lines are visible in the terminal.
+        Clacky::Logger.console = true
+
         # Override WEBrick's built-in signal traps via StartCallback,
         # which fires after WEBrick sets its own INT/TERM handlers.
         # This ensures Ctrl-C always exits immediately.
@@ -173,6 +182,9 @@ module Clacky
         @scheduler.start
         puts "   ⏰ Scheduler started (#{@scheduler.schedules.size} schedule(s) loaded)"
 
+        # Start IM channel adapters (non-blocking — each platform runs in its own thread)
+        @channel_manager.start
+
         server.start
       end
 
@@ -210,8 +222,18 @@ module Clacky
         when ["POST",   "/api/brand/activate"]    then api_brand_activate(req, res)
         when ["GET",    "/api/brand/skills"]      then api_brand_skills(res)
         when ["GET",    "/api/brand"]             then api_brand_info(res)
+        when ["GET",    "/api/channels"]          then api_list_channels(res)
         else
-          if method == "GET" && path.match?(%r{^/api/sessions/[^/]+/skills$})
+          if method == "POST" && path.match?(%r{^/api/channels/[^/]+/test$})
+            platform = path.sub("/api/channels/", "").sub("/test", "")
+            api_test_channel(platform, req, res)
+          elsif method == "POST" && path.start_with?("/api/channels/")
+            platform = path.sub("/api/channels/", "")
+            api_save_channel(platform, req, res)
+          elsif method == "DELETE" && path.start_with?("/api/channels/")
+            platform = path.sub("/api/channels/", "")
+            api_delete_channel(platform, res)
+          elsif method == "GET" && path.match?(%r{^/api/sessions/[^/]+/skills$})
             session_id = path.sub("/api/sessions/", "").sub("/skills", "")
             api_session_skills(session_id, res)
           elsif method == "GET" && path.match?(%r{^/api/sessions/[^/]+/messages$})
@@ -487,6 +509,102 @@ module Clacky
       def api_brand_info(res)
         brand = Clacky::BrandConfig.load
         json_response(res, 200, brand.to_h)
+      end
+
+      # ── Channel API ───────────────────────────────────────────────────────────
+
+      # GET /api/channels
+      # Returns current config and running status for all supported platforms.
+      def api_list_channels(res)
+        config   = Clacky::ChannelConfig.load
+        running  = @channel_manager.running_platforms
+
+        platforms = Clacky::Channel::Adapters.all.map do |klass|
+          platform = klass.platform_id
+          raw      = config.instance_variable_get(:@channels)[platform.to_s] || {}
+          {
+            platform:  platform,
+            enabled:   !!raw["enabled"],
+            running:   running.include?(platform),
+            has_config: !config.platform_config(platform).nil?
+          }.merge(platform_safe_fields(platform, config))
+        end
+
+        json_response(res, 200, { channels: platforms })
+      end
+
+      # POST /api/channels/:platform
+      # Body: { fields... }  (platform-specific credential fields)
+      # Saves credentials and optionally (re)starts the adapter.
+      def api_save_channel(platform, req, res)
+        platform = platform.to_sym
+        body     = parse_json_body(req)
+        config   = Clacky::ChannelConfig.load
+
+        fields = body.transform_keys(&:to_sym).reject { |k, _| k == :platform }
+        config.set_platform(platform, **fields)
+        config.save
+
+        # Hot-reload: stop existing adapter for this platform (if running) and restart
+        @channel_manager.reload_platform(platform, config)
+
+        json_response(res, 200, { ok: true })
+      rescue StandardError => e
+        json_response(res, 422, { ok: false, error: e.message })
+      end
+
+      # DELETE /api/channels/:platform
+      # Disables the platform (keeps credentials, sets enabled: false).
+      def api_delete_channel(platform, res)
+        platform = platform.to_sym
+        config   = Clacky::ChannelConfig.load
+        config.disable_platform(platform)
+        config.save
+
+        @channel_manager.reload_platform(platform, config)
+
+        json_response(res, 200, { ok: true })
+      rescue StandardError => e
+        json_response(res, 422, { ok: false, error: e.message })
+      end
+
+      # POST /api/channels/:platform/test
+      # Body: { fields... }  (credentials to test — NOT saved)
+      # Tests connectivity using the provided credentials without persisting.
+      def api_test_channel(platform, req, res)
+        platform = platform.to_sym
+        body     = parse_json_body(req)
+        fields   = body.transform_keys(&:to_sym).reject { |k, _| k == :platform }
+
+        klass = Clacky::Channel::Adapters.find(platform)
+        unless klass
+          json_response(res, 404, { ok: false, error: "Unknown platform: #{platform}" })
+          return
+        end
+
+        result = klass.test_connection(fields)
+        json_response(res, 200, result)
+      rescue StandardError => e
+        json_response(res, 200, { ok: false, error: e.message })
+      end
+
+      # Returns non-secret fields for a platform (masked secrets).
+      private def platform_safe_fields(platform, config)
+        raw = config.instance_variable_get(:@channels)[platform.to_s] || {}
+        case platform.to_sym
+        when :feishu
+          {
+            app_id:        raw["app_id"] || "",
+            domain:        raw["domain"] || Clacky::Channel::Adapters::Feishu::DEFAULT_DOMAIN,
+            allowed_users: raw["allowed_users"] || []
+          }
+        when :wecom
+          {
+            bot_id: raw["bot_id"] || ""
+          }
+        else
+          {}
+        end
       end
 
       # Returns a mock brand skills list for use in brand-test mode.
