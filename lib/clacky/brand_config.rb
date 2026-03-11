@@ -33,7 +33,6 @@ module Clacky
 
     # OpenClacky Cloud API base URL
     API_BASE_URL = "https://openclacky.com"
-    #API_BASE_URL = "http://127.0.0.1:3000"
 
     # How often to send a heartbeat (seconds) — once per day
     HEARTBEAT_INTERVAL = 86_400

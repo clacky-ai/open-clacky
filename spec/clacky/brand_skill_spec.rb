@@ -281,7 +281,7 @@ RSpec.describe "Brand Skill system" do
         brand_skills_dir = File.join(tmp, "brand_skills")
         setup_brand_skill(brand_skills_dir, slug: "code-review-bot")
 
-        loader = Clacky::SkillLoader.new(working_dir: tmp, brand_config: config, home_dir: tmp)
+        loader = Clacky::SkillLoader.new(working_dir: tmp, brand_config: config)
         skill  = loader.find_by_name("code-review-bot")
 
         expect(skill).not_to be_nil
@@ -295,7 +295,7 @@ RSpec.describe "Brand Skill system" do
         brand_skills_dir = File.join(tmp, "brand_skills")
         setup_brand_skill(brand_skills_dir, slug: "code-review-bot")
 
-        loader = Clacky::SkillLoader.new(working_dir: tmp, brand_config: nil, home_dir: tmp)
+        loader = Clacky::SkillLoader.new(working_dir: tmp, brand_config: nil)
         expect(loader.find_by_name("code-review-bot")).to be_nil
       end
     end
@@ -306,7 +306,7 @@ RSpec.describe "Brand Skill system" do
         setup_brand_skill(brand_skills_dir, slug: "code-review-bot")
 
         inactive_config = Clacky::BrandConfig.new("brand_name" => "TestBrand")
-        loader = Clacky::SkillLoader.new(working_dir: tmp, brand_config: inactive_config, home_dir: tmp)
+        loader = Clacky::SkillLoader.new(working_dir: tmp, brand_config: inactive_config)
         expect(loader.find_by_name("code-review-bot")).to be_nil
       end
     end
@@ -317,7 +317,7 @@ RSpec.describe "Brand Skill system" do
         brand_skills_dir = File.join(tmp, "brand_skills")
         setup_brand_skill(brand_skills_dir, slug: "deploy-assistant")
 
-        loader = Clacky::SkillLoader.new(working_dir: tmp, brand_config: config, home_dir: tmp)
+        loader = Clacky::SkillLoader.new(working_dir: tmp, brand_config: config)
         expect(loader.loaded_from["deploy-assistant"]).to eq(:brand)
       end
     end
@@ -331,7 +331,7 @@ RSpec.describe "Brand Skill system" do
         ghost_dir = File.join(brand_skills_dir, "ghost-skill")
         FileUtils.mkdir_p(ghost_dir)
 
-        loader = Clacky::SkillLoader.new(working_dir: tmp, brand_config: config, home_dir: tmp)
+        loader = Clacky::SkillLoader.new(working_dir: tmp, brand_config: config)
         expect(loader.find_by_name("ghost-skill")).to be_nil
         expect(loader.errors).to be_empty
       end
