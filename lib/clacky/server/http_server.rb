@@ -436,49 +436,17 @@ module Clacky
       # platform-wide published public skills (not filtered by the user's own skills).
       # Falls back to the hardcoded catalog when license is not activated or API is unavailable.
       def api_store_skills(res)
-        # Hardcoded fallback catalog — shown when license is inactive or remote API is unavailable.
-        fallback_skills = [
-          {
-            "slug"        => "pdf",
-            "name"        => "PDF",
-            "description" => "Read, extract, merge, split, rotate, watermark, encrypt PDFs and run OCR on scanned documents.",
-            "icon"        => "📄",
-            "repo"        => "https://github.com/anthropics/skills/tree/main/skills/pdf"
-          },
-          {
-            "slug"        => "pptx",
-            "name"        => "PowerPoint",
-            "description" => "Create, edit, read and convert .pptx presentation files with beautiful slide design.",
-            "icon"        => "📊",
-            "repo"        => "https://github.com/anthropics/skills/tree/main/skills/pptx"
-          },
-          {
-            "slug"        => "xlsx",
-            "name"        => "Excel / Spreadsheet",
-            "description" => "Open, edit, create and convert .xlsx/.csv spreadsheet files, clean data and build charts.",
-            "icon"        => "📋",
-            "repo"        => "https://github.com/anthropics/skills/tree/main/skills/xlsx"
-          },
-          {
-            "slug"        => "frontend-design",
-            "name"        => "Frontend Design",
-            "description" => "Build distinctive, production-grade web UIs — components, landing pages, dashboards and more.",
-            "icon"        => "🎨",
-            "repo"        => "https://github.com/anthropics/skills/tree/main/skills/frontend-design"
-          }
-        ]
-
         brand  = Clacky::BrandConfig.load
         result = brand.fetch_store_skills!
 
         if result[:success]
           json_response(res, 200, { ok: true, skills: result[:skills] })
         else
-          # License not activated or remote API unavailable — serve fallback list
+          # License not activated or remote API unavailable — return empty list
           json_response(res, 200, {
             ok:      true,
-            skills:  fallback_skills,
-            warning: result[:error] || "Could not reach the skill store. Showing default catalog."
+            skills:  [],
+            warning: result[:error] || "Could not reach the skill store."
           })
         end
       end
