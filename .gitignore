@@ -13,3 +13,4 @@ CLAUDE.md
 .rspec_status
 *.gem
 .DS_Store
+.history
