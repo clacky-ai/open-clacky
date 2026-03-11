@@ -263,13 +263,19 @@ module Clacky
         return [] unless content.is_a?(Array)
 
         content.filter_map do |block|
-          next unless block.is_a?(Hash) && block[:type].to_s == "image"
+          next unless block.is_a?(Hash)
 
-          # Anthropic format: { type: "image", source: { type: "base64", media_type: "image/png", data: "..." } }
-          source = block[:source]
-          next unless source.is_a?(Hash) && source[:type].to_s == "base64"
+          case block[:type].to_s
+          when "image_url"
+            # OpenAI format: { type: "image_url", image_url: { url: "data:image/png;base64,..." } }
+            block.dig(:image_url, :url)
+          when "image"
+            # Anthropic format: { type: "image", source: { type: "base64", media_type: "image/png", data: "..." } }
+            source = block[:source]
+            next unless source.is_a?(Hash) && source[:type].to_s == "base64"
 
-          "data:#{source[:media_type]};base64,#{source[:data]}"
+            "data:#{source[:media_type]};base64,#{source[:data]}"
+          end
         end
       end
 
