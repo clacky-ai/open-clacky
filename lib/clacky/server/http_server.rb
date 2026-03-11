@@ -23,9 +23,10 @@ module Clacky
         @events     = events
       end
 
-      def show_user_message(content, created_at: nil)
+      def show_user_message(content, created_at: nil, images: [])
         ev = { type: "history_user_message", session_id: @session_id, content: content }
         ev[:created_at] = created_at if created_at
+        ev[:images]     = images if images && !images.empty?
         @events << ev
       end
 
@@ -1270,7 +1271,7 @@ module Clacky
       # Restore a persisted session from saved session_data (from SessionManager).
       # The agent keeps its original session_id so the frontend URL hash stays valid
       # across server restarts.
-      def build_session_from_data(session_data)
+      def build_session_from_data(session_data, permission_mode: :confirm_all)
         working_dir = session_data[:working_dir] || default_working_dir
         name        = session_data[:name] || "Session #{Time.now.strftime('%H:%M')}"
         original_id = session_data[:session_id]

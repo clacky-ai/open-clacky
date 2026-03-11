@@ -65,9 +65,10 @@ module Clacky
 
       # === Output display ===
 
-      def show_user_message(content, created_at: nil)
+      def show_user_message(content, created_at: nil, images: [])
         data = { content: content }
         data[:created_at] = created_at if created_at
+        data[:images]     = images if images && !images.empty?
         emit("history_user_message", **data)
       end
 

@@ -184,7 +184,7 @@ module Clacky
           system_injected: true
         }
 
-        @ui&.log("Injected skill content for /#{skill.identifier}", level: :info)
+        @ui&.show_info("Injected skill content for /#{skill.identifier}")
       end
 
       private
