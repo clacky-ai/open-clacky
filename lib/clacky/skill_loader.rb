@@ -27,7 +27,7 @@ module Clacky
     # @param working_dir [String] Current working directory for project-level discovery
     # @param brand_config [Clacky::BrandConfig, nil] Optional brand config used to
     #   decrypt brand skills. When nil, brand skills are silently skipped.
-    def initialize(working_dir = nil, brand_config: nil)
+    def initialize(working_dir:, brand_config:)
       @working_dir  = working_dir || Dir.pwd
       @brand_config = brand_config
       @skills = {}            # Map identifier -> Skill
@@ -45,7 +45,7 @@ module Clacky
     def load_all
       # Clear existing skills to ensure idempotent reloading
       clear
-      
+
       load_default_skills
       load_global_claude_skills
       load_global_clacky_skills
@@ -420,22 +420,22 @@ module Clacky
       # Get the gem's lib directory
       gem_lib_dir = File.expand_path("../", __dir__)
       default_skills_dir = File.join(gem_lib_dir, "clacky", "default_skills")
-      
+
       return unless Dir.exist?(default_skills_dir)
-      
+
       # Load each skill directory
       Dir.glob(File.join(default_skills_dir, "*/SKILL.md")).each do |skill_file|
         skill_dir = File.dirname(skill_file)
         skill_name = File.basename(skill_dir)
-        
+
         begin
           skill = Skill.new(Pathname.new(skill_dir))
-          
+
           # Check for duplicates (higher priority skills override)
           if @skills.key?(skill.identifier)
             next  # Skip if already loaded from higher priority location
           end
-          
+
           # Register skill
           @skills[skill.identifier] = skill
           @skills_by_command[skill.slash_command] = skill

@@ -90,6 +90,13 @@ module Clacky
         input_loop
       end
 
+      # Set skill loader for command suggestions in the input area
+      # @param skill_loader [Clacky::SkillLoader] The skill loader instance
+      # @param agent_profile [Clacky::AgentProfile, nil] Current agent profile for skill filtering
+      def set_skill_loader(skill_loader, agent_profile = nil)
+        @input_area.set_skill_loader(skill_loader, agent_profile)
+      end
+
       # Update session bar with current stats
       # @param tasks [Integer] Number of completed tasks (optional)
       # @param cost [Float] Total cost (optional)
@@ -170,11 +177,11 @@ module Clacky
         @time_machine_callback = block
       end
 
-      # Set skill loader for command suggestions
-      # @param skill_loader [Clacky::SkillLoader] The skill loader instance
+      # Set agent for command suggestions
+      # @param agent [Clacky::Agent] The agent instance with skill management
       # @param agent_profile [Clacky::AgentProfile, nil] Current agent profile for skill filtering
-      def set_skill_loader(skill_loader, agent_profile = nil)
-        @input_area.set_skill_loader(skill_loader, agent_profile)
+      def set_agent(agent, agent_profile = nil)
+        @input_area.set_agent(agent, agent_profile)
       end
 
       # Append output to the output area
@@ -450,6 +457,10 @@ module Clacky
         @progress_message = message || Clacky::THINKING_VERBS.sample
         @progress_start_time = Time.now
         @progress_output_buffer = output_buffer
+        # Flag used by the progress thread to know when to stop gracefully.
+        # Using a flag + join is safe because Thread#kill can interrupt a thread
+        # while it holds @render_mutex, causing a permanent deadlock.
+        @progress_thread_stop = false
 
         # Show initial progress (yellow, active)
         append_output("") if prefix_newline
@@ -459,15 +470,19 @@ module Clacky
 
         # Start background thread to update elapsed time
         @progress_thread = Thread.new do
-          while @progress_start_time
+          until @progress_thread_stop
             sleep 0.5
-            next unless @progress_start_time
+            next if @progress_thread_stop
 
-            elapsed = (Time.now - @progress_start_time).to_i
-            hint = output_buffer ? "(Ctrl+C to interrupt · Ctrl+O to view output · #{elapsed}s)" : "(Ctrl+C to interrupt · #{elapsed}s)"
+            start = @progress_start_time
+            next unless start
+
+            elapsed = (Time.now - start).to_i
+            buf = @progress_output_buffer
+            hint = buf ? "(Ctrl+C to interrupt · Ctrl+O to view output · #{elapsed}s)" : "(Ctrl+C to interrupt · #{elapsed}s)"
             update_progress_line(@renderer.render_working("#{@progress_message}… #{hint}"))
           end
-        rescue => e
+        rescue StandardError
           # Silently handle thread errors
         end
       end
@@ -489,14 +504,32 @@ module Clacky
         end
       end
 
-      # Stop the progress update thread
+      # Stop the fullscreen refresh thread gracefully via flag + join.
+      def stop_fullscreen_refresh_thread
+        @fullscreen_refresh_stop = true
+        if @fullscreen_refresh_thread&.alive?
+          joined = @fullscreen_refresh_thread.join(1.0)
+          @fullscreen_refresh_thread.kill unless joined
+        end
+        @fullscreen_refresh_thread = nil
+        @fullscreen_refresh_stop = false
+      end
+
+      # Stop the progress update thread gracefully.
+      # We signal the thread via a stop flag and then join it, avoiding Thread#kill
+      # which can interrupt a thread mid-critical-section (e.g. while holding
+      # @render_mutex) and leave the mutex permanently locked.
       def stop_progress_thread
         @progress_start_time = nil
-        @progress_output_buffer = nil  # Clear output buffer reference
+        @progress_output_buffer = nil
+        @progress_thread_stop = true
         if @progress_thread&.alive?
-          @progress_thread.kill
-          @progress_thread = nil
+          # Join with a short timeout; fall back to kill only as a last resort
+          joined = @progress_thread.join(1.0)
+          @progress_thread.kill unless joined
         end
+        @progress_thread = nil
+        @progress_thread_stop = false
       end
 
       # Show info message
@@ -703,12 +736,15 @@ module Clacky
         lines = build_command_output_lines
         @layout.enter_fullscreen(lines, hint: "Press Ctrl+O to return · Output updates in real-time")
 
-        # Start background thread to refresh fullscreen content in real-time
+        # Start background thread to refresh fullscreen content in real-time.
+        # Use a dedicated stop flag so we can join() the thread cleanly and
+        # avoid Thread#kill interrupting the thread while it holds @render_mutex.
         buffer_ref = @progress_output_buffer
+        @fullscreen_refresh_stop = false
         @fullscreen_refresh_thread = Thread.new do
-          while @layout.fullscreen_mode?
+          until @fullscreen_refresh_stop || !@layout.fullscreen_mode?
             sleep 0.3
-            break unless @layout.fullscreen_mode?
+            next if @fullscreen_refresh_stop || !@layout.fullscreen_mode?
 
             updated_lines = build_command_output_lines_from(buffer_ref)
             @layout.refresh_fullscreen(updated_lines)
@@ -863,9 +899,10 @@ module Clacky
         # If in fullscreen mode, only handle Ctrl+O to exit
         if @layout.fullscreen_mode?
           if key == :ctrl_o
-            # Kill the real-time refresh thread before exiting fullscreen
-            @fullscreen_refresh_thread&.kill
-            @fullscreen_refresh_thread = nil
+            # Signal the real-time refresh thread to stop gracefully, then join it.
+            # Avoid Thread#kill which can interrupt the thread mid-render and
+            # leave @render_mutex permanently locked.
+            stop_fullscreen_refresh_thread
             @layout.exit_fullscreen
             # Restore main screen content after returning from alternate buffer
             @layout.rerender_all

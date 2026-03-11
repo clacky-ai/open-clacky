@@ -15,6 +15,10 @@ module Clacky
         @buffer = []
         @last_input_time = nil
         @rapid_input_threshold = 0.01 # 10ms threshold for detecting paste-like rapid input
+
+        # Keep stdin in UTF-8 mode so getc returns complete multi-byte characters (e.g. CJK).
+        # Switching to BINARY would cause getc to return one byte at a time, breaking Chinese input.
+        $stdin.set_encoding('UTF-8')
       end
 
       # Move cursor to specific position (0-indexed)
@@ -138,8 +142,6 @@ module Clacky
       # @param timeout [Float] Timeout in seconds
       # @return [Symbol, String, Hash, nil] Key symbol, character, or { type: :rapid_input, text: String }
       def read_key(timeout: nil)
-        $stdin.set_encoding('UTF-8')
-
         current_time = Time.now.to_f
         is_rapid_input = @last_input_time && (current_time - @last_input_time) < @rapid_input_threshold
         @last_input_time = current_time
@@ -147,8 +149,9 @@ module Clacky
         char = read_char(timeout: timeout)
         return nil unless char
 
-        # Ensure character is UTF-8 encoded
-        char = char.force_encoding('UTF-8') if char.is_a?(String) && char.encoding != Encoding::UTF_8
+        # Convert raw BINARY bytes to valid UTF-8. Invalid/undefined bytes are dropped
+        # rather than raising ArgumentError (which would crash the input loop).
+        char = safe_to_utf8(char) if char.is_a?(String)
 
         # Handle escape sequences for special keys
         if char == "\e"
@@ -179,7 +182,6 @@ module Clacky
         # If this is rapid input or there are more characters available
         if is_rapid_input || has_more_input
           buffer = char.to_s.dup
-          buffer.force_encoding('UTF-8')
 
           # Keep reading available characters
           loop_count = 0
@@ -190,10 +192,10 @@ module Clacky
             has_data = IO.select([$stdin], nil, nil, 0)
 
             if has_data
-              next_char = $stdin.getc
+              next_char = $stdin.getc rescue nil
               break unless next_char
 
-              next_char = next_char.force_encoding('UTF-8') if next_char.encoding != Encoding::UTF_8
+              next_char = safe_to_utf8(next_char)
               buffer << next_char
               loop_count += 1
               empty_checks = 0  # Reset empty check counter
@@ -213,6 +215,8 @@ module Clacky
 
           # If we buffered multiple characters or newlines, treat as rapid input (paste)
           if buffer.length > 1 || buffer.include?("\n") || buffer.include?("\r")
+            # Ensure the accumulated buffer is valid UTF-8 before regex operations
+            buffer = safe_to_utf8(buffer)
             # Remove any trailing \r or \n from rapid input buffer
             cleaned_buffer = buffer.gsub(/[\r\n]+\z/, '')
             return { type: :rapid_input, text: cleaned_buffer } if cleaned_buffer.length > 0
@@ -251,6 +255,19 @@ module Clacky
       end
 
       private
+
+      # Ensure a string is valid UTF-8.
+      # stdin stays in UTF-8 mode so getc returns complete characters (including CJK).
+      # This method handles the rare case where an invalid byte slips through
+      # (e.g. a stray terminal escape or a partial sequence) by scrubbing it out
+      # rather than letting ArgumentError crash the input loop.
+      # @param str [String] String from getc (UTF-8 encoded, but may have invalid bytes)
+      # @return [String] Valid UTF-8 string
+      private def safe_to_utf8(str)
+        return str if str.valid_encoding?
+
+        str.encode('UTF-8', 'UTF-8', invalid: :replace, undef: :replace, replace: '')
+      end
     end
   end
 end

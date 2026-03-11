@@ -37,6 +37,36 @@ RSpec.describe "Agent#inject_skill_command_as_assistant_message" do
     end
   end
 
+  it "appends a synthetic user shim message after skill injection for Claude compat" do
+    Dir.mktmpdir do |tmpdir|
+      create_skill(tmpdir, name: "onboard", disable_model_invocation: true, content: "Onboard the user now.")
+
+      agent = Clacky::Agent.new(client, config, working_dir: tmpdir, ui: nil, profile: "general")
+      allow(agent).to receive(:think).and_return({ finish_reason: "stop", content: "Done", tool_calls: [] })
+      allow(agent).to receive(:inject_memory_prompt!).and_return(false)
+
+      agent.run("/onboard")
+
+      # After the injected assistant message there must be a user shim so the
+      # conversation sequence ends with a user turn (required by Claude / Anthropic API).
+      injected_msgs = agent.messages.select { |m| m[:system_injected] }
+      expect(injected_msgs.size).to eq(2)
+
+      assistant_shim = injected_msgs.find { |m| m[:role] == "assistant" }
+      user_shim      = injected_msgs.find { |m| m[:role] == "user" }
+
+      expect(assistant_shim).not_to be_nil
+      expect(user_shim).not_to be_nil
+      expect(user_shim[:content]).to include("proceed")
+
+      # The user shim must appear immediately after the assistant shim
+      all_msgs = agent.messages
+      assistant_idx = all_msgs.index(assistant_shim)
+      user_idx      = all_msgs.index(user_shim)
+      expect(user_idx).to eq(assistant_idx + 1)
+    end
+  end
+
   it "passes arguments as part of the expanded skill content" do
     Dir.mktmpdir do |tmpdir|
       create_skill(tmpdir, name: "onboard", disable_model_invocation: true, content: "Task: \$ARGUMENTS")
@@ -79,7 +109,7 @@ RSpec.describe "Agent#inject_skill_command_as_assistant_message" do
 
       agent.run("just a normal message")
 
-      injected = agent.messages.select { |m| m[:role] == "assistant" && m[:system_injected] }
+      injected = agent.messages.select { |m| m[:system_injected] }
       expect(injected).to be_empty
     end
   end

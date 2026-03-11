@@ -76,7 +76,7 @@ module Clacky
       @brand_config = Clacky::BrandConfig.load
 
       # Skill loader for skill management (brand_config enables encrypted skill loading)
-      @skill_loader = SkillLoader.new(@working_dir, brand_config: @brand_config)
+      @skill_loader = SkillLoader.new(working_dir: @working_dir, brand_config: @brand_config)
 
       # Background sync: compare remote skill versions and download updates quietly.
       # Runs in a daemon thread so Agent startup is never blocked.

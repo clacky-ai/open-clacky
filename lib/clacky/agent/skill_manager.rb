@@ -158,10 +158,28 @@ module Clacky
         # Expand skill content (substitutes $ARGUMENTS if present)
         expanded_content = skill.process_content(arguments, template_context: build_template_context)
 
-        # Inject as a synthetic assistant message so the LLM treats it as already read
+        # Inject as a synthetic assistant message so the LLM treats it as already read.
+        #
+        # Then immediately append a synthetic user message to keep the conversation
+        # sequence valid for strict providers like Claude (Anthropic API), which require
+        # alternating user/assistant turns. Without this extra user message the next
+        # real LLM call would find an assistant message at the tail of the history,
+        # causing a 400 "invalid message order" error.
+        #
+        # Final message order:
+        #   user:      "/skill-name [args]"          ← real user input
+        #   assistant: "[expanded skill content]"    ← system_injected (skill instructions)
+        #   user:      "[SYSTEM] Please proceed..."  ← system_injected (Claude compat shim)
         @messages << {
           role: "assistant",
           content: expanded_content,
+          task_id: task_id,
+          system_injected: true
+        }
+
+        @messages << {
+          role: "user",
+          content: "[SYSTEM] The skill instructions above have been loaded. Please proceed to execute the task now.",
           task_id: task_id,
           system_injected: true
         }

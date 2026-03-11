@@ -105,7 +105,7 @@ module Clacky
           session_registry: @registry,
           session_builder:  method(:build_session)
         )
-        @skill_loader    = Clacky::SkillLoader.new(nil, brand_config: Clacky::BrandConfig.load)
+        @skill_loader    = Clacky::SkillLoader.new(working_dir: nil, brand_config: Clacky::BrandConfig.load)
       end
 
       def start
@@ -163,6 +163,7 @@ module Clacky
         end
 
         puts "🌐 Clacky Web UI running at http://#{@host}:#{@port}"
+        puts "   Version: #{Clacky::VERSION}"
         puts "   Press Ctrl-C to stop."
 
         # Auto-create a default session on startup
@@ -385,7 +386,7 @@ module Clacky
         if result[:success]
           # Refresh skill_loader with the now-activated brand config so brand
           # skills are loadable from this point forward (e.g. after sync).
-          @skill_loader = Clacky::SkillLoader.new(nil, brand_config: brand)
+          @skill_loader = Clacky::SkillLoader.new(working_dir: nil, brand_config: brand)
           json_response(res, 200, { ok: true, brand_name: result[:brand_name] || brand.brand_name })
         else
           json_response(res, 422, { ok: false, error: result[:message] })

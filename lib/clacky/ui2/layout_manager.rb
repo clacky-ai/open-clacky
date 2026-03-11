@@ -233,6 +233,11 @@ module Clacky
       def append_output(content)
         return if content.nil?
 
+        # Scrub any invalid byte sequences before they reach the render pipeline.
+        # wrap_long_line calls each_char which raises ArgumentError on invalid UTF-8.
+        content = content.encode('UTF-8', 'UTF-8', invalid: :replace, undef: :replace, replace: '') \
+          unless content.valid_encoding?
+
         @render_mutex.synchronize do
           lines = content.split("\n", -1)  # -1 to keep trailing empty strings
 

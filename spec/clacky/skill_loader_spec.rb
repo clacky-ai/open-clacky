@@ -13,14 +13,14 @@ RSpec.describe Clacky::SkillLoader do
 
   describe "#initialize" do
     it "initializes with working directory" do
-      loader = described_class.new(working_dir)
+      loader = described_class.new(working_dir: working_dir, brand_config: nil)
 
       expect(loader).to be_a(described_class)
     end
 
     it "uses current directory when no working_dir given" do
       original_dir = Dir.pwd
-      loader = described_class.new
+      loader = described_class.new(working_dir: nil, brand_config: nil)
       expect(loader).to be_a(described_class)
     ensure
       Dir.chdir(original_dir)
@@ -30,7 +30,7 @@ RSpec.describe Clacky::SkillLoader do
   describe "#load_all" do
     context "with no skills directories" do
       it "returns default skills" do
-        loader = described_class.new(working_dir)
+        loader = described_class.new(working_dir: working_dir, brand_config: nil)
         skills = loader.load_all
 
         # User may have global skills in ~/.claude/skills/ or ~/.clacky/skills/
@@ -56,7 +56,7 @@ RSpec.describe Clacky::SkillLoader do
           Project skill content.
         CONTENT
 
-        loader = described_class.new(working_dir)
+        loader = described_class.new(working_dir: working_dir, brand_config: nil)
         skills = loader.load_all
 
         skill_identifiers = skills.map(&:identifier)
@@ -82,7 +82,7 @@ RSpec.describe Clacky::SkillLoader do
           CONTENT
         end
 
-        loader = described_class.new(working_dir)
+        loader = described_class.new(working_dir: working_dir, brand_config: nil)
         skills = loader.load_all
 
         skill_identifiers = skills.map(&:identifier)
@@ -106,7 +106,7 @@ RSpec.describe Clacky::SkillLoader do
         Content here.
       CONTENT
 
-      loader = described_class.new(working_dir)
+      loader = described_class.new(working_dir: working_dir, brand_config: nil)
       loader.load_all
 
       skill = loader.find_by_command("/find-me")
@@ -116,7 +116,7 @@ RSpec.describe Clacky::SkillLoader do
     end
 
     it "returns nil for non-existent command" do
-      loader = described_class.new(working_dir)
+      loader = described_class.new(working_dir: working_dir, brand_config: nil)
       loader.load_all
 
       skill = loader.find_by_command("/nonexistent")
@@ -127,7 +127,7 @@ RSpec.describe Clacky::SkillLoader do
 
   describe "#errors" do
     it "returns empty array when no errors" do
-      loader = described_class.new(working_dir)
+      loader = described_class.new(working_dir: working_dir, brand_config: nil)
       loader.load_all
 
       expect(loader.errors).to be_empty
@@ -147,7 +147,7 @@ RSpec.describe Clacky::SkillLoader do
         This frontmatter is not closed properly
       CONTENT
 
-      loader = described_class.new(working_dir)
+      loader = described_class.new(working_dir: working_dir, brand_config: nil)
       loader.load_all
 
       expect(loader.errors).not_to be_empty
@@ -158,7 +158,7 @@ RSpec.describe Clacky::SkillLoader do
   describe "#create_skill" do
     context "with project location" do
       it "creates skill in project .clacky/skills/" do
-        loader = described_class.new(working_dir)
+        loader = described_class.new(working_dir: working_dir, brand_config: nil)
         skill = loader.create_skill("new-project-skill", "Project skill content", "A project skill", location: :project)
 
         expect(skill.identifier).to eq("new-project-skill")
@@ -170,7 +170,7 @@ RSpec.describe Clacky::SkillLoader do
     end
 
     it "validates skill name format" do
-      loader = described_class.new(working_dir)
+      loader = described_class.new(working_dir: working_dir, brand_config: nil)
 
       expect do
         loader.create_skill("Invalid Name!", "content", "desc")
@@ -179,7 +179,7 @@ RSpec.describe Clacky::SkillLoader do
   end
 
   describe "#toggle_skill" do
-    let(:loader) { described_class.new(working_dir) }
+    let(:loader) { described_class.new(working_dir: working_dir, brand_config: nil) }
 
     before do
       loader.create_skill("my-skill", "Skill content", "A toggleable skill", location: :project)
@@ -224,7 +224,7 @@ RSpec.describe Clacky::SkillLoader do
   describe "#delete_skill" do
     it "deletes an existing skill" do
       # First create a skill
-      loader = described_class.new(working_dir)
+      loader = described_class.new(working_dir: working_dir, brand_config: nil)
       loader.create_skill("to-delete", "Content to delete", "Delete me", location: :project)
 
       skill_dir = File.join(working_dir, ".clacky", "skills", "to-delete")
@@ -237,7 +237,7 @@ RSpec.describe Clacky::SkillLoader do
     end
 
     it "does not error for non-existent skill" do
-      loader = described_class.new(working_dir)
+      loader = described_class.new(working_dir: working_dir, brand_config: nil)
 
       expect do
         loader.delete_skill("nonexistent-skill")
@@ -271,7 +271,7 @@ RSpec.describe Clacky::SkillLoader do
         CONTENT
       end
 
-      loader = described_class.new(working_dir)
+      loader = described_class.new(working_dir: working_dir, brand_config: nil)
 
       # Total skills must not exceed MAX_SKILLS
       expect(loader.count).to be <= 9
