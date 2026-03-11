@@ -243,7 +243,7 @@ module Clacky
     # force:      when true, use PATCH to overwrite an existing skill instead of POST
     #
     # Returns { success: true, skill: {...} } or { success: false, error: "...", already_exists: true/false }
-    def upload_skill!(skill_name, zip_data, force: false)
+    def upload_skill!(skill_name, zip_data, force: false, version_override: nil)
       return { success: false, error: "License not activated" } unless activated?
       return { success: false, error: "User license required to upload skills" } unless user_licensed?
 
@@ -279,7 +279,7 @@ module Clacky
       # in the ZIP data are preserved. Net::HTTP's body= raises on null bytes in
       # the body string — avoid by writing all parts as binary and using body_stream.
       parts = []
-      {
+      fields = {
         "key_hash"  => key_hash,
         "user_id"   => user_id,
         "device_id" => @device_id,
@@ -287,7 +287,11 @@ module Clacky
         "nonce"     => nonce,
         "signature" => signature,
         "slug"      => skill_name.to_s
-      }.each do |field, value|
+      }
+      # Include version override when bumping an existing skill version
+      fields["version"] = version_override.to_s if version_override
+
+      fields.each do |field, value|
         parts << "--#{boundary}#{crlf}"
         parts << "Content-Disposition: form-data; name=\"#{field}\"#{crlf}#{crlf}"
         parts << value.to_s
@@ -329,6 +333,45 @@ module Clacky
       end
     rescue StandardError => e
       { success: false, error: "Network error: #{e.message}" }
+    end
+
+    # Fetch the public store skills list from the OpenClacky Cloud API.
+    # Requires an activated license for HMAC authentication.
+    # Passes scope: "store" to retrieve platform-wide published public skills
+    # (not filtered by the authenticated user's own skills).
+    # Returns { success: bool, skills: [], error: }.
+    #
+    # Each skill in the returned array is a hash with at minimum:
+    #   "slug", "name", "description", "icon", "repo"
+    def fetch_store_skills!
+      return { success: false, error: "License not activated", skills: [] } unless activated?
+
+      user_id   = parse_user_id_from_key(@license_key)
+      key_hash  = Digest::SHA256.hexdigest(@license_key)
+      ts        = Time.now.utc.to_i.to_s
+      nonce     = SecureRandom.hex(16)
+      message   = "#{user_id}:#{@device_id}:#{ts}:#{nonce}"
+      signature = OpenSSL::HMAC.hexdigest("SHA256", @license_key, message)
+
+      payload = {
+        key_hash:  key_hash,
+        user_id:   user_id.to_s,
+        device_id: @device_id,
+        timestamp: ts,
+        nonce:     nonce,
+        signature: signature,
+        scope:     "store"
+      }
+
+      response = api_post("/api/v1/licenses/skills", payload)
+
+      if response[:success]
+        body   = response[:data]
+        skills = body["skills"] || []
+        { success: true, skills: skills }
+      else
+        { success: false, error: response[:error] || "Failed to fetch store skills", skills: [] }
+      end
     end
 
     # Fetch the brand skills list from the OpenClacky Cloud API.

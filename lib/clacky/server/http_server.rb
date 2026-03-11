@@ -219,6 +219,7 @@ module Clacky
         when ["GET",    "/api/onboard/status"]    then api_onboard_status(res)
         when ["POST",   "/api/onboard/complete"]  then api_onboard_complete(req, res)
         when ["POST",   "/api/onboard/skip-soul"] then api_onboard_skip_soul(res)
+        when ["GET",    "/api/store/skills"]          then api_store_skills(res)
         when ["GET",    "/api/brand/status"]      then api_brand_status(res)
         when ["POST",   "/api/brand/activate"]    then api_brand_activate(req, res)
         when ["GET",    "/api/brand/skills"]      then api_brand_skills(res)
@@ -430,6 +431,59 @@ module Clacky
       # Fetches the brand skills list from the cloud, enriched with local installed version.
       # Returns 200 with skill list, or 403 when license is not activated.
       # If the remote API call fails, falls back to locally installed skills with a warning.
+      # GET /api/store/skills
+      # Returns the public skill store catalog from the OpenClacky Cloud API.
+      # Requires an activated license — uses HMAC auth with scope: "store" to fetch
+      # platform-wide published public skills (not filtered by the user's own skills).
+      # Falls back to the hardcoded catalog when license is not activated or API is unavailable.
+      def api_store_skills(res)
+        # Hardcoded fallback catalog — shown when license is inactive or remote API is unavailable.
+        fallback_skills = [
+          {
+            "slug"        => "pdf",
+            "name"        => "PDF",
+            "description" => "Read, extract, merge, split, rotate, watermark, encrypt PDFs and run OCR on scanned documents.",
+            "icon"        => "📄",
+            "repo"        => "https://github.com/anthropics/skills/tree/main/skills/pdf"
+          },
+          {
+            "slug"        => "pptx",
+            "name"        => "PowerPoint",
+            "description" => "Create, edit, read and convert .pptx presentation files with beautiful slide design.",
+            "icon"        => "📊",
+            "repo"        => "https://github.com/anthropics/skills/tree/main/skills/pptx"
+          },
+          {
+            "slug"        => "xlsx",
+            "name"        => "Excel / Spreadsheet",
+            "description" => "Open, edit, create and convert .xlsx/.csv spreadsheet files, clean data and build charts.",
+            "icon"        => "📋",
+            "repo"        => "https://github.com/anthropics/skills/tree/main/skills/xlsx"
+          },
+          {
+            "slug"        => "frontend-design",
+            "name"        => "Frontend Design",
+            "description" => "Build distinctive, production-grade web UIs — components, landing pages, dashboards and more.",
+            "icon"        => "🎨",
+            "repo"        => "https://github.com/anthropics/skills/tree/main/skills/frontend-design"
+          }
+        ]
+
+        brand  = Clacky::BrandConfig.load
+        result = brand.fetch_store_skills!
+
+        if result[:success]
+          json_response(res, 200, { ok: true, skills: result[:skills] })
+        else
+          # License not activated or remote API unavailable — serve fallback list
+          json_response(res, 200, {
+            ok:      true,
+            skills:  fallback_skills,
+            warning: result[:error] || "Could not reach the skill store. Showing default catalog."
+          })
+        end
+      end
+
       def api_brand_skills(res)
         brand = Clacky::BrandConfig.load
 
@@ -861,15 +915,18 @@ module Clacky
       end
 
       # POST /api/my-skills/upload
-      # Upload a custom skill as a ZIP file (multipart/form-data).
+      # Upload a custom skill ZIP directly to the cloud.
       # Requires a user-licensed activation (license bound to a user_id).
       #
       # The ZIP must contain a SKILL.md at the root or inside a single top-level
       # directory. The skill name is derived from the directory name in the ZIP, or
       # falls back to the uploaded filename (without extension).
       #
+      # Supports ?force=true to overwrite an existing skill (PATCH instead of POST).
+      #
       # Request: multipart/form-data with field "skill_file" containing the ZIP.
       # Response: { ok: true, name: "skill-name" } on success.
+      #           { ok: false, error: "...", already_exists: true } on conflict.
       def api_upload_my_skill(req, res)
         brand = Clacky::BrandConfig.load
 
@@ -885,81 +942,73 @@ module Clacky
           return
         end
 
-        filename    = upload[:filename].to_s
-        file_data   = upload[:data]
+        filename  = upload[:filename].to_s
+        file_data = upload[:data]
 
         unless filename.end_with?(".zip")
           json_response(res, 422, { ok: false, error: "Only ZIP files are supported" })
           return
         end
 
+        # Parse ?force=true query parameter for overwrite
+        query = URI.decode_www_form(req.query_string.to_s).to_h
+        force = query["force"] == "true"
+
         begin
           require "zip"
-          require "tmpdir"
 
-          # Write the uploaded zip to a temp file
-          tmp_dir = Dir.mktmpdir("clacky_skill_upload_")
-          tmp_zip = File.join(tmp_dir, filename)
-          File.binwrite(tmp_zip, file_data)
-
-          # Detect skill name from zip structure
-          skill_name = nil
-          Zip::File.open(tmp_zip) do |zip|
-            entries = zip.entries.reject(&:directory?)
+          # Derive skill name and read version from ZIP structure (in memory, no disk I/O)
+          skill_name   = nil
+          skill_version = nil
+          Zip::File.open_buffer(file_data) do |zip|
+            entries  = zip.entries.reject(&:directory?)
             top_dirs = entries.map { |e| e.name.split("/").first }.uniq
 
             # Single root dir → use it as skill name
             if top_dirs.length == 1 && entries.any? { |e| e.name.include?("/") }
-              candidate = top_dirs.first.strip.downcase.gsub(/[^a-z0-9-]/, "-").gsub(/-+/, "-").gsub(/^-|-$/, "")
+              candidate = top_dirs.first.strip.downcase
+                                  .gsub(/[^a-z0-9-]/, "-").gsub(/-+/, "-").gsub(/^-|-$/, "")
               skill_name = candidate unless candidate.empty?
             end
 
-            # Check SKILL.md exists in zip
-            has_skill_md = entries.any? { |e| File.basename(e.name) == "SKILL.md" }
-            unless has_skill_md
-              raise "ZIP must contain a SKILL.md file"
+            # Validate SKILL.md exists and read version from frontmatter
+            skill_md_entry = entries.find { |e| File.basename(e.name) == "SKILL.md" }
+            raise "ZIP must contain a SKILL.md file" unless skill_md_entry
+
+            skill_md_content = skill_md_entry.get_input_stream.read.force_encoding("UTF-8")
+            if skill_md_content =~ /\A---\s*\n(.*?)\n---\s*\n/m
+              require "yaml"
+              frontmatter   = YAML.safe_load($1) rescue {}
+              skill_version = frontmatter["version"].to_s.strip
             end
           end
 
           # Fall back to filename without extension
           skill_name ||= File.basename(filename, ".zip").strip.downcase
-                              .gsub(/[^a-z0-9-]/, "-").gsub(/-+/, "-").gsub(/^-|-$/, "")
+                             .gsub(/[^a-z0-9-]/, "-").gsub(/-+/, "-").gsub(/^-|-$/, "")
           skill_name = "my-skill" if skill_name.empty?
 
-          # Install to ~/.clacky/skills/
-          dest_dir = File.join(Dir.home, ".clacky", "skills", skill_name)
-          FileUtils.mkdir_p(dest_dir)
-
-          # Extract ZIP contents into dest_dir, stripping single root folder if present
-          Zip::File.open(tmp_zip) do |zip|
-            entries  = zip.entries.reject(&:directory?)
-            top_dirs = entries.map { |e| e.name.split("/").first }.uniq
-            has_root = top_dirs.length == 1 && entries.any? { |e| e.name.include?("/") }
-
-            entries.each do |entry|
-              rel_path = if has_root
-                           parts = entry.name.split("/")
-                           parts[1..].join("/")
-                         else
-                           entry.name
-                         end
-
-              next if rel_path.nil? || rel_path.empty?
-
-              out = File.join(dest_dir, rel_path)
-              FileUtils.mkdir_p(File.dirname(out))
-              File.open(out, "wb") { |f| f.write(entry.get_input_stream.read) }
-            end
+          # When overwriting, auto-bump the patch version so the cloud accepts the new upload.
+          # Cloud rejects PATCH requests where the version is not greater than the current one.
+          version_override = nil
+          if force && skill_version.present?
+            version_override = bump_patch_version(skill_version)
           end
 
-          # Reload skills
-          @skill_loader.load_all
+          # Upload ZIP directly to cloud (no local installation)
+          result = brand.upload_skill!(skill_name, file_data, force: force, version_override: version_override)
 
-          json_response(res, 200, { ok: true, name: skill_name })
+          if result[:success]
+            json_response(res, 200, { ok: true, name: skill_name, version: version_override || skill_version })
+          else
+            json_response(res, 422, {
+              ok:             false,
+              error:          result[:error],
+              already_exists: result[:already_exists] || false
+            })
+          end
         rescue StandardError, ScriptError => e
           json_response(res, 422, { ok: false, error: e.message })
-        ensure
-          FileUtils.rm_rf(tmp_dir) if tmp_dir && Dir.exist?(tmp_dir)
         end
       end
 
@@ -1533,6 +1582,20 @@ module Clacky
       # @param req [WEBrick::HTTPRequest]
       # @param field_name [String] The form field name to look for
       # @return [Hash, nil] { filename: String, data: String (binary) }
+      # Increment the patch segment of a semver string (e.g. "1.2.3" → "1.2.4").
+      # Falls back to appending ".1" for non-standard version strings.
+      private def bump_patch_version(version)
+        parts = version.to_s.strip.split(".")
+        if parts.length >= 3
+          parts[-1] = (parts[-1].to_i + 1).to_s
+          parts.join(".")
+        elsif parts.length == 2
+          "#{parts[0]}.#{parts[1]}.1"
+        else
+          "#{version}.0.1"
+        end
+      end
+
       private def parse_multipart_upload(req, field_name)
         content_type = req["Content-Type"].to_s
         return nil unless content_type.include?("multipart/form-data")
