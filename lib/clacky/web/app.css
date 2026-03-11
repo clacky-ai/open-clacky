@@ -845,7 +845,8 @@ body {
   line-height: 1.6;
   word-break: break-word;
 }
-.msg-user      { background: var(--color-accent-primary); align-self: flex-end; border-bottom-right-radius: 2px; }
+.msg-user      { background: #3b82f6; color: #ffffff; align-self: flex-end; border-bottom-right-radius: 2px; }
+[data-theme="dark"] .msg-user { background: #2563eb; }
 .msg-assistant { background: var(--color-bg-secondary); border: 1px solid var(--color-border-primary); align-self: flex-start; white-space: pre-wrap; }
 .msg-tool      { background: var(--color-bg-primary); border: 1px solid var(--color-border-primary); font-family: monospace; font-size: 12px; color: var(--color-text-secondary); align-self: flex-start; }
 .msg-info      { color: var(--color-text-secondary); font-size: 12px; align-self: center; font-style: italic; }
@@ -1167,14 +1168,16 @@ body {
 }
 #btn-send           { background: var(--color-button-primary); color: #fff; }
 #btn-send:hover     { background: var(--color-button-primary-hover); }
+[data-theme="dark"] #btn-send       { background: #2563eb; }
+[data-theme="dark"] #btn-send:hover { background: #1d4ed8; }
 #btn-send:disabled  { background: var(--color-border-primary); color: var(--color-text-secondary); cursor: not-allowed; }
-#btn-interrupt      { background: var(--color-error); color: #fff; }
-#btn-interrupt:hover{ background: var(--color-error); }
+#btn-interrupt      { background: var(--color-error); color: #fff; font-size: 16px; line-height: 1; padding: 8px 16px; }
+#btn-interrupt:hover{ background: var(--color-error); opacity: 0.85; }
 
 /* ── Sidebar footer ──────────────────────────────────────────────────────── */
 #sidebar-footer {
   border-top: 1px solid var(--color-border-primary);
-  padding: 13px 8px 12px;
+  padding: 14px 8px;
   flex-shrink: 0;
 }
 .sidebar-nav-btn {
@@ -1559,7 +1562,8 @@ body {
 .btn-primary            { background: var(--color-button-primary); color: #fff; border: none; border-radius: 6px; padding: 8px 20px; cursor: pointer; }
 .btn-primary:hover      { background: var(--color-button-primary-hover); }
 .btn-secondary          { background: var(--color-border-primary); color: var(--color-text-primary); border: none; border-radius: 6px; padding: 8px 20px; cursor: pointer; }
-.btn-secondary:hover    { background: #3d444d; }
+.btn-secondary:hover    { background: var(--color-border-secondary); }
+[data-theme="dark"] .btn-secondary:hover { background: #3d444d; }
 .btn-danger             { background: var(--color-error); color: #fff; border: none; border-radius: 6px; padding: 8px 20px; cursor: pointer; }
 .btn-danger:hover       { background: var(--color-error); }
 
