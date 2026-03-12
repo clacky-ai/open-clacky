@@ -272,13 +272,17 @@ module Clacky
           @modified_files_in_task = []  # Reset for next task
         end
 
-        @ui&.show_complete(
-          iterations: result[:iterations],
-          cost: result[:total_cost_usd],
-          duration: result[:duration_seconds],
-          cache_stats: result[:cache_stats],
-          awaiting_user_feedback: awaiting_user_feedback
-        )
+        if @is_subagent
+          @ui&.show_info("Subagent done (#{result[:iterations]} iterations, $#{result[:total_cost_usd].round(4)})")
+        else
+          @ui&.show_complete(
+            iterations: result[:iterations],
+            cost: result[:total_cost_usd],
+            duration: result[:duration_seconds],
+            cache_stats: result[:cache_stats],
+            awaiting_user_feedback: awaiting_user_feedback
+          )
+        end
         @hooks.trigger(:on_complete, result)
         result
       rescue Clacky::AgentInterrupted
@@ -714,6 +718,7 @@ module Clacky
         ui: @ui,
         profile: @agent_profile.name
       )
+      subagent.instance_variable_set(:@is_subagent, true)
 
       # Deep clone messages to avoid cross-contamination
       subagent.instance_variable_set(:@messages, deep_clone(@messages))
