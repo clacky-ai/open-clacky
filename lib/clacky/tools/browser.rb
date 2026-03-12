@@ -11,19 +11,15 @@ module Clacky
     class Browser < Base
       self.tool_name = "browser"
       self.tool_description = <<~DESC
-        Control browser to open pages, fill forms, click, scroll, etc.
+        Browser automation for login-related operations (sign-in, OAuth, form submission requiring session). For simple page fetch or search, prefer web_fetch or web_search instead.
 
-        isolated param: true = built-in browser (works immediately, login persists). false = user's Chrome (keeps cookies/login, needs one-time debug setup).
+        isolated param: true = built-in browser (default, works immediately, login persists). false = user's Chrome (keeps cookies/login, needs one-time debug setup; opens URLs in new tab).
 
         WORKFLOW:
-        - If the user has already stated a preference (e.g. "use my Chrome" or "use built-in"), skip check and set isolated accordingly.
-        - If isolated is unknown, call command="check" first. If ask_user_preference=true, ask the user to choose:
-            - Use my Chrome: keeps login state/cookies; needs one-time remote debugging setup; Allow dialog once per Chrome restart.
-            - Use built-in: no setup, works immediately; login state also persists.
-        - If Chrome not installed or user chose built-in: use isolated=true.
-        - If user chose their Chrome: use isolated=false. We auto-open chrome://inspect when needed — guide user to enable the toggle.
+        - Default: use isolated=true (built-in browser). No setup, works immediately.
+        - If the user explicitly wants their Chrome (e.g. "use my Chrome"), set isolated=false. We auto-open chrome://inspect when needed — guide user to enable the toggle. When opening URLs, we use a new tab to avoid replacing the user's current page.
 
-        Commands: 'check', 'open <url>', 'snapshot -i', 'click @e1', 'fill @e2 "text"', 'screenshot', etc.
+        Commands: 'open <url>', 'snapshot -i', 'click @e1', 'fill @e2 "text"', 'screenshot', etc.
       DESC
       self.tool_category = "web"
       self.tool_parameters = {
@@ -31,7 +27,7 @@ module Clacky
         properties: {
           command: {
             type: "string",
-            description: "agent-browser command. Use 'check' only if isolated preference is unknown. Then 'open https://...', 'snapshot -i', etc."
+            description: "agent-browser command, e.g. 'open https://...', 'snapshot -i', 'click @e1', 'fill @e2 \"text\"', 'screenshot'"
           },
           session: {
             type: "string",
@@ -39,7 +35,7 @@ module Clacky
           },
           isolated: {
             type: "boolean",
-            description: "true = built-in browser (no setup, login state persists). false = user's Chrome (keeps login, needs one-time debug setup). Use per user's choice from check."
+            description: "true = built-in browser (default, no setup, login persists). false = user's Chrome (keeps login, needs one-time debug setup; opens URLs in new tab). Default true when omitted."
           }
         },
         required: ["command"]
@@ -57,12 +53,9 @@ module Clacky
           return install_result if install_result[:error]
         end
 
-        if check_command?(command)
-          return browser_check_status
-        end
-
-        use_auto_connect = !isolated
-        persistent_session_name = isolated ? DEFAULT_SESSION_NAME : nil
+        # Default to built-in browser (isolated=true). Only use user's Chrome when explicitly isolated=false.
+        use_auto_connect = isolated == false
+        persistent_session_name = use_auto_connect ? nil : DEFAULT_SESSION_NAME
 
         we_launched_chrome = false
         if use_auto_connect && !chrome_debug_running?
@@ -77,18 +70,22 @@ module Clacky
           end
         end
 
-        full_command = build_command(
-          command, session,
+        build_opts = {
           auto_connect: use_auto_connect,
           session_name: persistent_session_name,
           headed: use_auto_connect ? false : true
-        )
+        }
+        effective_command = command
+        if use_auto_connect && (m = command.strip.match(/\A(open|goto|navigate)\s+(.+)\z/i))
+          effective_command = "tab new #{m[2].strip}"
+        end
+        full_command = build_command(effective_command, session, **build_opts)
 
         result = Shell.new.execute(command: full_command, hard_timeout: BROWSER_COMMAND_TIMEOUT, working_dir: working_dir)
 
         if !result[:success] && session_closed_error?(result) && persistent_session_name
           full_command = build_command(
-            command, session,
+            effective_command, session,
             auto_connect: use_auto_connect,
             session_name: nil,
             headed: use_auto_connect ? false : true
@@ -127,14 +124,12 @@ module Clacky
         session = args[:session] || args["session"]
         isolated = args[:isolated] || args["isolated"]
         session_label = session ? " [#{session}]" : ""
-        isolated_label = isolated ? " [built-in]" : ""
+        isolated_label = (isolated != false) ? " [built-in]" : " [user Chrome]"
         "browser(#{cmd})#{session_label}#{isolated_label}"
       end
 
       def format_result(result)
-        if result[:status] == "check"
-          "[Check] #{result[:chrome_installed] ? "Chrome installed" : "Chrome not installed"} | #{result[:ask_user_preference] ? "ask user" : "built-in"}"
-        elsif result[:error]
+        if result[:error]
           "[Error] #{result[:error][0..80]}"
         elsif result[:success]
           stdout = result[:stdout] || ""
@@ -150,7 +145,6 @@ module Clacky
 
       def format_result_for_llm(result)
         return result if result[:error]
-        return result if result[:status] == "check"
 
         stdout = result[:stdout] || ""
         stderr = result[:stderr] || ""
@@ -207,34 +201,6 @@ module Clacky
       def timeout?(result)
         result[:state] == "TIMEOUT" ||
           result[:stderr].to_s.include?("timed out")
-      end
-
-      def check_command?(cmd)
-        c = (cmd || "").strip.downcase
-        c == "check" || c == "status"
-      end
-
-      def browser_check_status
-        chrome_installed = !!find_chrome
-        agent_ready = agent_browser_installed?
-
-        unless chrome_installed
-          return {
-            status: "check",
-            chrome_installed: false,
-            agent_browser_ready: agent_ready,
-            ask_user_preference: false,
-            recommendation: "isolated"
-          }
-        end
-
-        {
-          status: "check",
-          chrome_installed: true,
-          agent_browser_ready: agent_ready,
-          ask_user_preference: true,
-          pros_cons: "1) Use my Chrome: keeps your existing login state and cookies; needs one-time remote debugging setup; click Allow once per Chrome restart. 2) Use built-in: works out of the box, no config; login state also persists."
-        }
       end
 
       def find_chrome
