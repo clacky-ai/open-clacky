@@ -17,7 +17,7 @@ module Clacky
 
         WORKFLOW:
         - Default: use isolated=true (built-in browser). No setup, works immediately.
-        - If the user explicitly wants their Chrome (e.g. "use my Chrome"), set isolated=false. We auto-open chrome://inspect when needed — guide user to enable the toggle. When opening URLs, we use a new tab to avoid replacing the user's current page.
+        - If the user explicitly wants their Chrome (e.g. "use my Chrome"), set isolated=false. We auto-open chrome://inspect/#remote-debugging when needed — guide user to enable the toggle. When opening URLs, we use a new tab to avoid replacing the user's current page.
 
         Commands: 'open <url>', 'snapshot -i', 'click @e1', 'fill @e2 "text"', 'screenshot', etc.
       DESC
