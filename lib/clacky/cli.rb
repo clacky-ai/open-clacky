@@ -797,6 +797,9 @@ module Clacky
     def server
       require_relative "server/http_server"
 
+      # Kill any existing server process on the same port before starting
+      kill_existing_server(options[:port])
+
       agent_config = Clacky::AgentConfig.load
       agent_config.permission_mode = :confirm_all
 
@@ -829,6 +832,27 @@ module Clacky
         client_factory: client_factory,
         brand_test:     options[:brand_test]
       ).start
+    end
+
+    private def kill_existing_server(port)
+      pid_file = "/tmp/clacky-server-#{port}.pid"
+      return unless File.exist?(pid_file)
+
+      pid = File.read(pid_file).strip.to_i
+      return if pid <= 0
+
+      begin
+        Process.kill("TERM", pid)
+        say "Stopped existing server (PID: #{pid}) on port #{port}.", :yellow
+        # Give it a moment to release the port
+        sleep 0.5
+      rescue Errno::ESRCH
+        # Process already gone — nothing to do
+      rescue Errno::EPERM
+        say "Could not stop existing server (PID: #{pid}) — permission denied.", :red
+      ensure
+        File.delete(pid_file) if File.exist?(pid_file)
+      end
     end
   end
 end
