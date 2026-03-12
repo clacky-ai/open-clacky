@@ -1,18 +1,17 @@
 ---
 name: skill-add
-description: Create new skills or install from GitHub - supports interactive creation, quick setup, and repository imports
+description: Install skills from a zip URL or create new skills interactively
 disable-model-invocation: false
 user-invocable: true
 ---
 
-# Skill Add - Enhanced Skill Creation & Installation
+# Skill Add — Installation & Creation
 
-A comprehensive skill management tool that helps you create new skills interactively or install existing skills from GitHub repositories.
+A skill management tool that installs skills from a zip URL or creates new skills interactively.
 
 ## ⚠️ Usage Instructions
 
-- **Zip URL** (e.g. from Public Store): Call `ruby <skill_directory>/scripts/install_from_zip.rb <url>` via safe_shell
-- **GitHub URL**: Call `ruby <skill_directory>/scripts/install_from_github.rb <url>` via safe_shell
+- **Zip URL** (e.g. from Public Store): Call `ruby <skill_directory>/scripts/install_from_zip.rb <url> <slug>` via safe_shell
 - **Text description or no arguments**: Handle interactively via conversation, create files with write tool
 
 ## Usage Modes
@@ -39,29 +38,6 @@ The script will automatically:
 - Clean up temporary files
 
 **Do NOT manually download or unzip files - the script handles everything.**
-
-### 2. Install from GitHub Repository
-```
-/skill-add https://github.com/username/repo-name
-/skill-add https://github.com/username/repo-name.git
-```
-
-**When user provides a GitHub URL, execute the `install_from_github.rb` script:**
-
-Use the **Skill Directory** path shown below, and call:
-```bash
-ruby <skill_directory>/scripts/install_from_github.rb <github_url>
-```
-
-The script will automatically:
-- Validate the GitHub URL
-- Clone the repository to a temporary directory
-- Search for any `skills/` directory containing SKILL.md files
-- Copy all found skills to `.clacky/skills/` in the current project
-- Report installed skills with descriptions
-- Clean up temporary files
-
-**Do NOT manually clone or copy files - the script handles everything.**
 
 ### 2. Interactive Creation Mode
 ```
@@ -143,18 +119,6 @@ The Skill Directory path is shown at the bottom of this document.
 
 **Do NOT manually download or extract files - let the script handle everything.**
 
-### For GitHub Installation
-
-Use the `install_from_github.rb` script (available in Supporting Files):
-
-```bash
-ruby <skill_directory>/scripts/install_from_github.rb <github_url>
-```
-
-The Skill Directory path is shown at the bottom of this document.
-
-**Do NOT manually clone, search, or copy files - let the script handle everything.**
-
 ### For Interactive Creation
 
 When user provides a description or no arguments:
@@ -181,32 +145,6 @@ When user provides a description or no arguments:
    - Helper scripts with proper permissions
 
 5. **Confirm**: Show what was created and how to use it
-
-**Example conversation flow:**
-```
-User: /skill-add Create a skill for testing APIs
-
-Agent: I'll help you create an API testing skill. Let me ask a few questions:
-
-Q1: What should we call this skill?
-Suggestion: "api-tester"
-
-User: api-tester sounds good
-
-Agent: Q2: What inputs does it need?
-User: URL, HTTP method, and optional headers
-
-Agent: Q3: Should it have a helper script?
-User: Yes, a bash script using curl
-
-Agent: Perfect! Creating skill...
-
-Created:
-✓ .clacky/skills/api-tester/SKILL.md
-✓ .clacky/skills/api-tester/scripts/test.sh
-
-You can now use: /api-tester
-```
 
 ## Skill Structure
 
@@ -259,30 +197,6 @@ Run the appropriate migration script from scripts/ directory.
 
 ### 3. Report Results
 Show migration status and any errors.
-
-## Scripts
-
-Helper scripts in `scripts/` directory:
-- `create_migration.rb` - Generate migration file
-- `run_migrations.rb` - Execute pending migrations
-- `rollback.rb` - Rollback migrations
-
-## Examples
-
-Create a new migration:
-```bash
-/db-migrate create add_users_table
-```
-
-Run all pending migrations:
-```bash
-/db-migrate up
-```
-
-Rollback last migration:
-```bash
-/db-migrate down
-```
 ```
 
 ## Best Practices
@@ -293,23 +207,6 @@ Rollback last migration:
 4. **Helper Scripts**: Use scripts/ directory for complex logic
 5. **Examples**: Always include usage examples
 6. **Documentation**: Explain all parameters and options
-
-## Commands Used
-
-```bash
-# Clone from GitHub
-git clone <repo-url> /tmp/skills-repo
-cp -r /tmp/skills-repo/skills/* .clacky/skills/
-
-# Create skill directory
-mkdir -p .clacky/skills/{skill-name}
-mkdir -p .clacky/skills/{skill-name}/scripts
-
-# Write skill file
-cat > .clacky/skills/{skill-name}/SKILL.md << 'EOF'
-...
-EOF
-```
 
 ## Notes
 

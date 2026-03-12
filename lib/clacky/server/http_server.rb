@@ -6,6 +6,7 @@ require "json"
 require "thread"
 require "fileutils"
 require "uri"
+require "open3"
 require_relative "session_registry"
 require_relative "web_ui_controller"
 require_relative "scheduler"
@@ -259,6 +260,9 @@ module Clacky
           elsif method == "POST" && path.match?(%r{^/api/brand/skills/[^/]+/install$})
             slug = URI.decode_www_form_component(path.sub("/api/brand/skills/", "").sub("/install", ""))
             api_brand_skill_install(slug, req, res)
+          elsif method == "POST" && path.match?(%r{^/api/store/skills/[^/]+/install$})
+            slug = URI.decode_www_form_component(path.sub("/api/store/skills/", "").sub("/install", ""))
+            api_store_skill_install(slug, req, res)
           elsif method == "POST" && path.match?(%r{^/api/my-skills/[^/]+/publish$})
             name = URI.decode_www_form_component(path.sub("/api/my-skills/", "").sub("/publish", ""))
             api_publish_my_skill(name, req, res)
@@ -450,6 +454,57 @@ module Clacky
             warning: result[:error] || "Could not reach the skill store."
           })
         end
+      end
+
+      # POST /api/store/skills/:slug/install
+      # Installs a public store skill by downloading and extracting its zip archive.
+      # Body: { download_url: "https://..." }
+      # Returns: { ok: true, slug: "...", name: "..." } on success.
+      def api_store_skill_install(slug, req, res)
+        body         = parse_json_body(req)
+        download_url = body["download_url"].to_s.strip
+
+        if download_url.empty?
+          json_response(res, 422, { ok: false, error: "download_url is required" })
+          return
+        end
+
+        unless download_url.match?(%r{\Ahttps?://.+\.zip(\?.*)?\z}i)
+          json_response(res, 422, { ok: false, error: "download_url must be an http(s) URL ending with .zip" })
+          return
+        end
+
+        # Locate the install_from_zip.rb script that ships with the skill-add skill.
+        script_path = File.expand_path(
+          "../../default_skills/skill-add/scripts/install_from_zip.rb",
+          __dir__
+        )
+
+        unless File.exist?(script_path)
+          json_response(res, 500, { ok: false, error: "install_from_zip.rb not found" })
+          return
+        end
+
+        # Run the installer in the server's working directory so the skill lands in
+        # <working_dir>/.clacky/skills/<slug>/
+        working_dir = default_working_dir
+        output, status = Open3.capture2e(
+          RbConfig.ruby, script_path, download_url, slug,
+          chdir: working_dir
+        )
+
+        unless status.success?
+          json_response(res, 422, { ok: false, error: output.strip })
+          return
+        end
+
+        # Reload the skill loader so the newly installed skill is available immediately.
+        brand = Clacky::BrandConfig.load
+        @skill_loader = Clacky::SkillLoader.new(working_dir: nil, brand_config: brand)
+
+        json_response(res, 200, { ok: true, slug: slug })
+      rescue StandardError => e
+        json_response(res, 500, { ok: false, error: e.message })
       end
 
       def api_brand_skills(res)
