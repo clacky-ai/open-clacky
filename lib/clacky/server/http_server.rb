@@ -575,6 +575,7 @@ module Clacky
         config   = Clacky::ChannelConfig.load
 
         fields = body.transform_keys(&:to_sym).reject { |k, _| k == :platform }
+        fields = fields.transform_values { |v| v.is_a?(String) ? v.strip : v }
         config.set_platform(platform, **fields)
         config.save
 
