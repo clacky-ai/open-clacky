@@ -147,15 +147,15 @@ RSpec.describe Clacky::Server::HttpServer do
       end
     end
 
-    it "auto-generates a name when none is provided" do
+    it "returns 400 when name is not provided" do
       with_server(agent_config: agent_config) do |server|
         req = fake_req(method: "POST", path: "/api/sessions", body: {})
         res = fake_res
         dispatch(server, req, res)
 
-        expect(res.status).to eq(201)
+        expect(res.status).to eq(400)
         body = parsed_body(res)
-        expect(body["session"]["name"]).not_to be_nil
+        expect(body["error"]).to match(/name is required/i)
       end
     end
   end

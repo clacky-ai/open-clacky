@@ -32,16 +32,17 @@ module Clacky
     include TimeMachine
     include MemoryUpdater
 
-    attr_reader :session_id, :messages, :iterations, :total_cost, :working_dir, :created_at, :total_tasks, :todos,
+    attr_reader :session_id, :name, :messages, :iterations, :total_cost, :working_dir, :created_at, :total_tasks, :todos,
                 :cache_stats, :cost_source, :ui, :skill_loader, :agent_profile
 
-    def initialize(client, config , working_dir: , ui: , profile: )
+    def initialize(client, config, working_dir:, ui:, profile:, session_id:)
       @client = client  # Client for current model
       @config = config.is_a?(AgentConfig) ? config : AgentConfig.new(config)
       @agent_profile = AgentProfile.load(profile)
       @tool_registry = ToolRegistry.new
       @hooks = HookManager.new
-      @session_id = SecureRandom.uuid
+      @session_id = session_id
+      @name = ""
       @messages = []
       @todos = []  # Store todos in memory
       @iterations = 0
@@ -92,7 +93,8 @@ module Clacky
     # Restore from a saved session
     def self.from_session(client, config, session_data, ui: nil, profile:)
       working_dir = session_data[:working_dir] || session_data["working_dir"] || Dir.pwd
-      agent = new(client, config, working_dir: working_dir, ui: ui, profile: profile)
+      original_id = session_data[:session_id] || session_data["session_id"] || Clacky::SessionManager.generate_id
+      agent = new(client, config, working_dir: working_dir, ui: ui, profile: profile, session_id: original_id)
       agent.restore_session(session_data)
       agent
     end
@@ -139,6 +141,11 @@ module Clacky
     # Get current model name
     private def current_model
       @config.model_name
+    end
+
+    # Rename this session. Called by auto-naming (first message) or user explicit rename.
+    def rename(new_name)
+      @name = new_name.to_s.strip
     end
 
     def run(user_input, images: [], files: [])
@@ -717,12 +724,14 @@ module Clacky
       )
 
       # Create subagent (reuses all tools from parent, inherits agent profile from parent)
+      # Subagent gets its own unique session_id.
       subagent = self.class.new(
         subagent_client,
         subagent_config,
         working_dir: @working_dir,
         ui: @ui,
-        profile: @agent_profile.name
+        profile: @agent_profile.name,
+        session_id: Clacky::SessionManager.generate_id
       )
       subagent.instance_variable_set(:@is_subagent, true)
 

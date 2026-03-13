@@ -13,7 +13,7 @@ RSpec.describe Clacky::Agent do
       permission_mode: :auto_approve
     )
   end
-  let(:agent) { described_class.new(client, config, working_dir: Dir.pwd, ui: nil, profile: "coding") }
+  let(:agent) { described_class.new(client, config, working_dir: Dir.pwd, ui: nil, profile: "coding", session_id: Clacky::SessionManager.generate_id) }
 
   describe "#initialize" do
     it "sets initial state" do
@@ -387,7 +387,7 @@ RSpec.describe Clacky::Agent do
         keep_recent_messages: 5
       )
     end
-    let(:compression_agent) { described_class.new(client, compression_config, working_dir: Dir.pwd, ui: nil, profile: "coding") }
+    let(:compression_agent) { described_class.new(client, compression_config, working_dir: Dir.pwd, ui: nil, profile: "coding", session_id: Clacky::SessionManager.generate_id) }
 
     before do
       # Mock send_messages for LLM compression
@@ -461,7 +461,7 @@ RSpec.describe Clacky::Agent do
         enable_compression: false,
         keep_recent_messages: 5
       )
-      no_compression_agent = described_class.new(client, no_compression_config, working_dir: Dir.pwd, ui: nil, profile: "coding")
+      no_compression_agent = described_class.new(client, no_compression_config, working_dir: Dir.pwd, ui: nil, profile: "coding", session_id: Clacky::SessionManager.generate_id)
 
       messages = no_compression_agent.instance_variable_get(:@messages)
 
@@ -624,7 +624,7 @@ RSpec.describe Clacky::Agent do
         hook_data = nil
         
         # Create a new agent to add the hook
-        agent_with_hook = described_class.new(client, config, working_dir: Dir.pwd, ui: nil, profile: "coding")
+        agent_with_hook = described_class.new(client, config, working_dir: Dir.pwd, ui: nil, profile: "coding", session_id: Clacky::SessionManager.generate_id)
         agent_with_hook.add_hook(:session_rollback) do |data|
           hook_data = data
         end

@@ -9,6 +9,7 @@ module Clacky
       # @param session_data [Hash] Saved session data
       def restore_session(session_data)
         @session_id = session_data[:session_id]
+        @name = session_data[:name] || ""
         @messages = session_data[:messages]
         @todos = session_data[:todos] || []  # Restore todos from session
         @iterations = session_data.dig(:stats, :total_iterations) || 0
@@ -64,24 +65,6 @@ module Clacky
       # @param error_message [String] Error message if status is :error
       # @return [Hash] Session data ready for serialization
       def to_session_data(status: :success, error_message: nil)
-        # Get last real user message for preview (skip compressed system messages)
-        last_user_msg = @messages.reverse.find do |m|
-          m[:role] == "user" && !m[:content].to_s.start_with?("[SYSTEM]")
-        end
-
-        # Extract preview text from last user message
-        last_message_preview = if last_user_msg
-          content = last_user_msg[:content]
-          if content.is_a?(String)
-            # Truncate to 100 characters for preview
-            content.length > 100 ? "#{content[0..100]}..." : content
-          else
-            "User message (non-string content)"
-          end
-        else
-          "No messages"
-        end
-
         stats_data = {
           total_tasks: @total_tasks,
           total_iterations: @iterations,
@@ -98,6 +81,7 @@ module Clacky
 
         {
           session_id: @session_id,
+          name: @name,
           created_at: @created_at,
           updated_at: Time.now.iso8601,
           working_dir: @working_dir,
@@ -116,8 +100,7 @@ module Clacky
             verbose: @config.verbose
           },
           stats: stats_data,
-          messages: @messages,
-          last_user_message: last_message_preview
+          messages: @messages
         }
       end
 

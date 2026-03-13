@@ -23,7 +23,7 @@ RSpec.describe "Agent#inject_skill_command_as_assistant_message" do
     Dir.mktmpdir do |tmpdir|
       create_skill(tmpdir, name: "onboard", disable_model_invocation: true, content: "Onboard the user now.")
 
-      agent = Clacky::Agent.new(client, config, working_dir: tmpdir, ui: nil, profile: "general")
+      agent = Clacky::Agent.new(client, config, working_dir: tmpdir, ui: nil, profile: "general", session_id: Clacky::SessionManager.generate_id)
 
       # Stub run's LLM call so we can inspect messages without hitting the API
       allow(agent).to receive(:think).and_return({ finish_reason: "stop", content: "Done", tool_calls: [] })
@@ -41,7 +41,7 @@ RSpec.describe "Agent#inject_skill_command_as_assistant_message" do
     Dir.mktmpdir do |tmpdir|
       create_skill(tmpdir, name: "onboard", disable_model_invocation: true, content: "Onboard the user now.")
 
-      agent = Clacky::Agent.new(client, config, working_dir: tmpdir, ui: nil, profile: "general")
+      agent = Clacky::Agent.new(client, config, working_dir: tmpdir, ui: nil, profile: "general", session_id: Clacky::SessionManager.generate_id)
       allow(agent).to receive(:think).and_return({ finish_reason: "stop", content: "Done", tool_calls: [] })
       allow(agent).to receive(:inject_memory_prompt!).and_return(false)
 
@@ -71,7 +71,7 @@ RSpec.describe "Agent#inject_skill_command_as_assistant_message" do
     Dir.mktmpdir do |tmpdir|
       create_skill(tmpdir, name: "onboard", disable_model_invocation: true, content: "Task: \$ARGUMENTS")
 
-      agent = Clacky::Agent.new(client, config, working_dir: tmpdir, ui: nil, profile: "general")
+      agent = Clacky::Agent.new(client, config, working_dir: tmpdir, ui: nil, profile: "general", session_id: Clacky::SessionManager.generate_id)
       allow(agent).to receive(:think).and_return({ finish_reason: "stop", content: "Done", tool_calls: [] })
       allow(agent).to receive(:inject_memory_prompt!).and_return(false)
 
@@ -87,7 +87,7 @@ RSpec.describe "Agent#inject_skill_command_as_assistant_message" do
       # No disable-model-invocation: true => model_invocation_allowed? == true
       create_skill(tmpdir, name: "my-skill", disable_model_invocation: false, content: "Normal skill content.")
 
-      agent = Clacky::Agent.new(client, config, working_dir: tmpdir, ui: nil, profile: "general")
+      agent = Clacky::Agent.new(client, config, working_dir: tmpdir, ui: nil, profile: "general", session_id: Clacky::SessionManager.generate_id)
       allow(agent).to receive(:think).and_return({ finish_reason: "stop", content: "Done", tool_calls: [] })
       allow(agent).to receive(:inject_memory_prompt!).and_return(false)
 
@@ -103,7 +103,7 @@ RSpec.describe "Agent#inject_skill_command_as_assistant_message" do
     Dir.mktmpdir do |tmpdir|
       create_skill(tmpdir, name: "onboard", disable_model_invocation: true, content: "Onboard.")
 
-      agent = Clacky::Agent.new(client, config, working_dir: tmpdir, ui: nil, profile: "general")
+      agent = Clacky::Agent.new(client, config, working_dir: tmpdir, ui: nil, profile: "general", session_id: Clacky::SessionManager.generate_id)
       allow(agent).to receive(:think).and_return({ finish_reason: "stop", content: "Done", tool_calls: [] })
       allow(agent).to receive(:inject_memory_prompt!).and_return(false)
 

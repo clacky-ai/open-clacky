@@ -108,7 +108,7 @@ module Clacky
     def parse_compressed_result(result, chunk_path: nil)
       # Return the compressed result as a single assistant message
       # Keep the <analysis> or <summary> tags as they provide semantic context
-      content = result.strip
+      content = result.to_s.strip
 
       if content.empty?
         []

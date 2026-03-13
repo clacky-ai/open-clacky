@@ -380,6 +380,16 @@ body {
 }
 .session-item:hover .session-delete-btn { display: flex; }
 .session-delete-btn:hover { background: var(--color-error-bg); color: var(--color-error); }
+.session-rename-input {
+  width: 100%;
+  background: var(--color-bg-input, var(--color-bg-secondary));
+  border: 1px solid var(--color-border-focus, var(--color-accent));
+  border-radius: 3px;
+  color: var(--color-text-primary);
+  font-size: 13px;
+  padding: 0 4px;
+  outline: none;
+}
 .session-name {
   font-size: 13px;
   white-space: nowrap;

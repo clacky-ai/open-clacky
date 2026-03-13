@@ -1,7 +1,5 @@
 # frozen_string_literal: true
 
-require "securerandom"
-
 module Clacky
   module Server
     # SessionRegistry manages multiple in-memory Agent sessions for the web server.
@@ -17,12 +15,13 @@ module Clacky
       end
 
       # Create a new session and return its id.
-      # Pass session_id to reuse an existing id (e.g. when restoring a persisted session).
-      def create(name: nil, working_dir: Dir.pwd, session_id: nil)
-        session_id ||= SecureRandom.hex(8)
+      # All arguments are required — use SessionManager.generate_id for session_id.
+      def create(name:, working_dir:, session_id:)
+        raise ArgumentError, "session_id is required" if session_id.nil? || session_id.empty?
+
         session = {
           id:          session_id,
-          name:        name || "Session #{Time.now.strftime('%H:%M')}",
+          name:        name,
           working_dir: working_dir,
           status:      :idle,         # :idle | :running | :error
           created_at:  Time.now,

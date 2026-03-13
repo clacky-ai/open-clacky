@@ -274,6 +274,9 @@ module Clacky
           elsif method == "GET" && path.match?(%r{^/api/sessions/[^/]+/messages$})
             session_id = path.sub("/api/sessions/", "").sub("/messages", "")
             api_session_messages(session_id, req, res)
+          elsif method == "PATCH" && path.match?(%r{^/api/sessions/[^/]+$})
+            session_id = path.sub("/api/sessions/", "")
+            api_rename_session(session_id, req, res)
           elsif method == "DELETE" && path.start_with?("/api/sessions/")
             session_id = path.sub("/api/sessions/", "")
             api_delete_session(session_id, res)
@@ -308,11 +311,11 @@ module Clacky
       end
 
       def api_create_session(req, res)
-        body        = parse_json_body(req)
-        name        = body["name"]
-        working_dir = body["working_dir"]&.then { |d| File.expand_path(d) } || default_working_dir
+        body = parse_json_body(req)
+        name = body["name"]
+        return json_response(res, 400, { error: "name is required" }) if name.nil? || name.strip.empty?
 
-        # Auto-create the working directory if it does not exist yet
+        working_dir = default_working_dir
         FileUtils.mkdir_p(working_dir)
 
         session_id = build_session(name: name, working_dir: working_dir)
@@ -1184,6 +1187,21 @@ module Clacky
         json_response(res, 200, { events: collected, has_more: result[:has_more] })
       end
 
+      def api_rename_session(session_id, req, res)
+        body = JSON.parse(req.body.read.to_s) rescue {}
+        new_name = body["name"].to_s.strip
+
+        return json_response(res, 400, { error: "name is required" }) if new_name.empty?
+        return json_response(res, 404, { error: "Session not found" }) unless @registry.exist?(session_id)
+
+        @registry.update(session_id, name: new_name)
+        @registry.with_session(session_id) { |s| s[:agent]&.rename(new_name) }
+        broadcast(session_id, { type: "session_renamed", session_id: session_id, name: new_name })
+        json_response(res, 200, { ok: true, name: new_name })
+      rescue => e
+        json_response(res, 500, { error: e.message })
+      end
+
       def api_delete_session(session_id, res)
         if @registry.delete(session_id)
           # Notify connected clients the session is gone
@@ -1328,6 +1346,15 @@ module Clacky
           content = [content, *pdf_lines].join("\n")
         end
 
+        # Auto-name the session from the first user message (before agent starts running)
+        if agent.name.empty? && agent.messages.empty?
+          auto_name = content.gsub(/\s+/, " ").strip[0, 30]
+          auto_name += "…" if content.strip.length > 30
+          agent.rename(auto_name)
+          @registry.update(session_id, name: auto_name)
+          broadcast(session_id, { type: "session_renamed", session_id: session_id, name: auto_name })
+        end
+
         @registry.update(session_id, status: :running)
         broadcast_session_update(session_id)
 
@@ -1460,14 +1487,16 @@ module Clacky
       # @param permission_mode [Symbol] :confirm_all (default, human present) or
       #   :auto_approve (unattended — suppresses request_user_feedback waits)
       def build_session(name:, working_dir:, permission_mode: :confirm_all, profile: "general")
-        session_id = @registry.create(name: name, working_dir: working_dir)
+        session_id = Clacky::SessionManager.generate_id
+        @registry.create(name: name, working_dir: working_dir, session_id: session_id)
 
         client = @client_factory.call
         config = @agent_config.deep_copy
         config.permission_mode = permission_mode
         broadcaster = method(:broadcast)
         ui = WebUIController.new(session_id, broadcaster)
-        agent  = Clacky::Agent.new(client, config, working_dir: working_dir, ui: ui, profile: profile)
+        agent = Clacky::Agent.new(client, config, working_dir: working_dir, ui: ui, profile: profile,
+                                  session_id: session_id)
 
         @registry.with_session(session_id) do |s|
           s[:agent] = agent
@@ -1482,29 +1511,28 @@ module Clacky
       # across server restarts.
       def build_session_from_data(session_data, permission_mode: :confirm_all)
         working_dir = session_data[:working_dir] || default_working_dir
-        name        = session_data[:name] || "Session #{Time.now.strftime('%H:%M')}"
+        name        = session_data[:name] || ""
         original_id = session_data[:session_id]
 
         # Skip if this session is already registered (e.g., restored by a previous call)
         return nil if @registry.exist?(original_id)
 
         # Register with the original session_id so frontend hashes stay valid
-        session_id = @registry.create(name: name, working_dir: working_dir,
-                                      session_id: original_id)
+        @registry.create(name: name, working_dir: working_dir, session_id: original_id)
 
         client = @client_factory.call
         config = @agent_config.deep_copy
         config.permission_mode = permission_mode
         broadcaster = method(:broadcast)
-        ui = WebUIController.new(session_id, broadcaster)
-        agent  = Clacky::Agent.from_session(client, config, session_data, ui: ui, profile: "general")
+        ui = WebUIController.new(original_id, broadcaster)
+        agent = Clacky::Agent.from_session(client, config, session_data, ui: ui, profile: "general")
 
-        @registry.with_session(session_id) do |s|
+        @registry.with_session(original_id) do |s|
           s[:agent] = agent
           s[:ui]    = ui
         end
 
-        session_id
+        original_id
       end
 
       # Mask API key for display: show first 8 + last 4 chars, middle replaced with ****

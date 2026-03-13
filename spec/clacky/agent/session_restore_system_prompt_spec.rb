@@ -47,7 +47,7 @@ RSpec.describe "Agent#restore_session refreshes system prompt" do
         This is the new skill content.
       MD
 
-      agent = Clacky::Agent.new(client, config, working_dir: tmpdir, ui: nil, profile: "general")
+      agent = Clacky::Agent.new(client, config, working_dir: tmpdir, ui: nil, profile: "general", session_id: Clacky::SessionManager.generate_id)
       session_data = minimal_session_data(working_dir: tmpdir)
 
       # Before restore, the @messages contain the stale system prompt
@@ -66,7 +66,7 @@ RSpec.describe "Agent#restore_session refreshes system prompt" do
 
   it "preserves conversation history (non-system messages) after restore" do
     Dir.mktmpdir do |tmpdir|
-      agent = Clacky::Agent.new(client, config, working_dir: tmpdir, ui: nil, profile: "general")
+      agent = Clacky::Agent.new(client, config, working_dir: tmpdir, ui: nil, profile: "general", session_id: Clacky::SessionManager.generate_id)
       session_data = minimal_session_data(working_dir: tmpdir)
 
       agent.restore_session(session_data)
@@ -79,7 +79,7 @@ RSpec.describe "Agent#restore_session refreshes system prompt" do
 
   it "does not duplicate system messages after restore" do
     Dir.mktmpdir do |tmpdir|
-      agent = Clacky::Agent.new(client, config, working_dir: tmpdir, ui: nil, profile: "general")
+      agent = Clacky::Agent.new(client, config, working_dir: tmpdir, ui: nil, profile: "general", session_id: Clacky::SessionManager.generate_id)
       session_data = minimal_session_data(working_dir: tmpdir)
 
       agent.restore_session(session_data)

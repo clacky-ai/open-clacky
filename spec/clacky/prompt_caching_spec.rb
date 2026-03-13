@@ -35,7 +35,7 @@ RSpec.describe "Prompt Caching Feature" do
         enable_prompt_caching: true
       )
     end
-    let(:agent) { Clacky::Agent.new(client, config, working_dir: Dir.pwd, ui: nil, profile: "coding") }
+    let(:agent) { Clacky::Agent.new(client, config, working_dir: Dir.pwd, ui: nil, profile: "coding", session_id: Clacky::SessionManager.generate_id) }
 
     it "passes enable_caching flag to client" do
       allow(client).to receive(:send_messages_with_tools).and_return(
@@ -59,7 +59,7 @@ RSpec.describe "Prompt Caching Feature" do
         enable_prompt_caching: false
       )
     end
-    let(:agent) { Clacky::Agent.new(client, config, working_dir: Dir.pwd, ui: nil, profile: "coding") }
+    let(:agent) { Clacky::Agent.new(client, config, working_dir: Dir.pwd, ui: nil, profile: "coding", session_id: Clacky::SessionManager.generate_id) }
 
     it "does not add cache_control to system message in agent messages" do
       allow(client).to receive(:send_messages_with_tools).and_return(
@@ -203,7 +203,7 @@ RSpec.describe "Prompt Caching Feature" do
         enable_prompt_caching: true
       )
     end
-    let(:agent) { Clacky::Agent.new(client, config, working_dir: Dir.pwd, ui: nil, profile: "coding") }
+    let(:agent) { Clacky::Agent.new(client, config, working_dir: Dir.pwd, ui: nil, profile: "coding", session_id: Clacky::SessionManager.generate_id) }
 
     it "includes enable_prompt_caching in session data" do
       allow(client).to receive(:send_messages_with_tools).and_return(

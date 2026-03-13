@@ -102,7 +102,8 @@ module Clacky
       end
 
       # Create new agent if no session loaded
-      agent ||= Clacky::Agent.new(client, agent_config, working_dir: working_dir, ui: nil, profile: agent_profile)
+      agent ||= Clacky::Agent.new(client, agent_config, working_dir: working_dir, ui: nil, profile: agent_profile,
+                                   session_id: Clacky::SessionManager.generate_id)
 
       # Change to working directory
       original_dir = Dir.pwd
@@ -358,11 +359,11 @@ module Clacky
           session_id = session[:session_id][0..7]
           tasks = session.dig(:stats, :total_tasks) || 0
           cost = session.dig(:stats, :total_cost_usd) || 0.0
-          last_msg = session[:last_user_message] || "No message"
+          name = session[:name].to_s.empty? ? "Unnamed session" : session[:name]
           is_current_dir = session[:working_dir] == working_dir
 
           dir_marker = is_current_dir ? "📍" : "  "
-          say "#{dir_marker} #{index + 1}. [#{session_id}] #{created_at} (#{tasks} tasks, $#{cost.round(4)}) - #{last_msg}", :cyan
+          say "#{dir_marker} #{index + 1}. [#{session_id}] #{created_at} (#{tasks} tasks, $#{cost.round(4)}) - #{name}", :cyan
         end
         say "\n\n💡 Use `clacky -a <session_id>` to resume a session.", :yellow
         say ""
@@ -413,8 +414,8 @@ module Clacky
             matching_sessions.each_with_index do |session, idx|
               created_at = Time.parse(session[:created_at]).strftime("%Y-%m-%d %H:%M")
               session_id = session[:session_id][0..7]
-              last_msg = session[:last_user_message] || "No message"
-              say "  #{idx + 1}. [#{session_id}] #{created_at} - #{last_msg}", :cyan
+              name = session[:name].to_s.empty? ? "Unnamed session" : session[:name]
+              say "  #{idx + 1}. [#{session_id}] #{created_at} - #{name}", :cyan
             end
             say "\nPlease use a more specific prefix.", :yellow
             exit 1
@@ -514,7 +515,8 @@ module Clacky
             when "/exit", "/quit"
               break
             when "/clear"
-              agent = Clacky::Agent.new(client, agent_config, working_dir: working_dir, ui: nil, profile: profile)
+              agent = Clacky::Agent.new(client, agent_config, working_dir: working_dir, ui: nil, profile: profile,
+                                        session_id: Clacky::SessionManager.generate_id)
               agent.instance_variable_set(:@ui, json_ui)
               json_ui.emit("info", message: "Session cleared. Starting fresh.")
               next
@@ -647,7 +649,7 @@ module Clacky
             # Clear output area
             ui_controller.layout.clear_output
             # Clear session by creating a new agent
-            agent = Clacky::Agent.new(client, agent_config, working_dir: working_dir, ui: ui_controller, profile: agent.agent_profile.name)
+            agent = Clacky::Agent.new(client, agent_config, working_dir: working_dir, ui: ui_controller, profile: agent.agent_profile.name, session_id: Clacky::SessionManager.generate_id)
             ui_controller.show_info("Session cleared. Starting fresh.")
             # Update session bar with reset values
             ui_controller.update_sessionbar(tasks: agent.total_tasks, cost: agent.total_cost)
