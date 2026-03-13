@@ -1316,17 +1316,17 @@ module Clacky
         @registry.with_session(session_id) { |s| agent = s[:agent] }
         return unless agent
 
-        # Append PDF file paths to the message text so the agent can use the pdf skill
-        # to read them — avoids passing huge base64 data through WebSocket / API
-        pdf_files = (files || []).select { |f| (f["mime_type"] || f[:mime_type]) == "application/pdf" }
-        unless pdf_files.empty?
-          pdf_lines = pdf_files.map do |f|
-            path = f["path"] || f[:path]
-            name = f["name"] || f[:name]
-            "[PDF attached: #{name} — file path: #{path}]"
-          end
-          content = [content, *pdf_lines].join("\n")
+        # Append all uploaded file paths to the message text so the agent can read them on demand.
+        # Files are already saved to disk by /api/upload — no need to re-save here.
+        file_refs = (files || []).filter_map do |f|
+          path = f["path"] || f[:path]
+          name = f["name"] || f[:name]
+          mime = f["mime_type"] || f[:mime_type]
+          next unless path && name
+          label = mime == "application/pdf" ? "PDF attached" : "File attached"
+          "[#{label}: #{name} — file path: #{path}]"
         end
+        content = [content, *file_refs].join("\n") unless file_refs.empty?
 
         @registry.update(session_id, status: :running)
         broadcast_session_update(session_id)

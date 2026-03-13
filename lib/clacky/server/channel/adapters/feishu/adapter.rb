@@ -3,6 +3,7 @@
 require_relative "../../adapters/base"
 require_relative "bot"
 require_relative "message_parser"
+require_relative "file_processor"
 require_relative "ws_client"
 
 module Clacky
@@ -161,7 +162,76 @@ module Clacky
               return unless allowed_users.include?(event[:user_id])
             end
 
+            # Download images and attach as data URLs
+            if event[:image_keys] && !event[:image_keys].empty?
+              images, errors = download_images(event[:image_keys], event[:message_id])
+              if images.empty? && !errors.empty?
+                @bot.send_text(event[:chat_id], "#{errors.first}", reply_to: event[:message_id])
+                return
+              end
+              event = event.merge(images: images)
+            end
+
+            # Download and process file attachments
+            if event[:file_attachments] && !event[:file_attachments].empty?
+              # Reject unsupported formats before downloading
+              unsupported = event[:file_attachments].filter_map do |a|
+                FileProcessor.unsupported_error(a[:name])
+              end
+              if unsupported.size == event[:file_attachments].size && event[:text].to_s.strip.empty?
+                @bot.send_text(event[:chat_id], "#{unsupported.first}", reply_to: event[:message_id])
+                return
+              end
+              file_text = process_files(event[:file_attachments], event[:message_id])
+              combined = [event[:text], file_text].reject(&:empty?).join("\n\n")
+              event = event.merge(text: combined)
+            end
+
             @on_message&.call(event)
+          end
+
+          # Download images from Feishu and return as base64 data URLs
+          # Process file attachments: download and extract content/path for prompt
+          # @param attachments [Array<Hash>] [{key:, name:}]
+          # @param message_id [String]
+          # @return [String] text to inject into prompt
+          def process_files(attachments, message_id)
+            attachments.filter_map do |attachment|
+              name = attachment[:name]
+              if (err = FileProcessor.unsupported_error(name))
+                next err
+              end
+              result = @bot.download_message_resource(message_id, attachment[:key], type: "file")
+              FileProcessor.process(result[:body], name)
+            rescue => e
+              warn "[Feishu] Failed to download file #{attachment[:name]}: #{e.message}"
+              "[Attachment: #{attachment[:name]}]\nDownload failed: #{e.message}"
+            end.join("\n\n")
+          end
+
+          MAX_IMAGE_BYTES = Clacky::Tools::FileAttachment::MAX_IMAGE_BYTES
+
+          # @param image_keys [Array<String>]
+          # @param message_id [String]
+          # @return [Array<String>, Array<String>] [data_urls, error_messages]
+          def download_images(image_keys, message_id)
+            require "base64"
+            data_urls = []
+            errors = []
+            image_keys.each do |image_key|
+              result = @bot.download_message_resource(message_id, image_key, type: "image")
+              if result[:body].bytesize > MAX_IMAGE_BYTES
+                errors << "Image too large (#{(result[:body].bytesize / 1024.0 / 1024).round(1)}MB), max #{MAX_IMAGE_BYTES / 1024 / 1024}MB"
+                next
+              end
+              mime = result[:content_type]
+              mime = "image/jpeg" if mime.nil? || mime.empty? || !mime.start_with?("image/")
+              data_urls << "data:#{mime};base64,#{Base64.strict_encode64(result[:body])}"
+            rescue => e
+              warn "[Feishu] Failed to download image #{image_key}: #{e.message}"
+              errors << "Image download failed: #{e.message}"
+            end
+            [data_urls, errors]
           end
         end
 
