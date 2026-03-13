@@ -48,6 +48,15 @@ module Clacky
         .max_by { |s| Time.parse(s[:updated_at]) }
     end
 
+    # Get the most recent N sessions for a specific working directory
+    def latest_n_for_directory(working_dir, n = 5)
+      all_sessions
+        .select { |s| s[:working_dir] == working_dir }
+        .sort_by { |s| Time.parse(s[:updated_at]) }
+        .reverse
+        .first(n)
+    end
+
     # List recent sessions, prioritizing those from current directory
     def list(current_dir: nil, limit: 5)
       sessions = all_sessions.sort_by { |s| Time.parse(s[:updated_at]) }.reverse

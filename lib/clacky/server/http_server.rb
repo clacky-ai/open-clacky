@@ -332,11 +332,11 @@ module Clacky
         working_dir = default_working_dir
         FileUtils.mkdir_p(working_dir) unless Dir.exist?(working_dir)
 
-        # Try to restore the most recent session for this working directory
-        session_data = @session_manager.latest_for_directory(working_dir)
+        # Restore the most recent 5 sessions for this working directory
+        sessions_data = @session_manager.latest_n_for_directory(working_dir, 5)
 
-        if session_data
-          build_session_from_data(session_data)
+        if sessions_data.any?
+          sessions_data.each { |session_data| build_session_from_data(session_data) }
         else
           build_session(name: "Session 1", working_dir: working_dir)
         end
@@ -1484,6 +1484,9 @@ module Clacky
         working_dir = session_data[:working_dir] || default_working_dir
         name        = session_data[:name] || "Session #{Time.now.strftime('%H:%M')}"
         original_id = session_data[:session_id]
+
+        # Skip if this session is already registered (e.g., restored by a previous call)
+        return nil if @registry.exist?(original_id)
 
         # Register with the original session_id so frontend hashes stay valid
         session_id = @registry.create(name: name, working_dir: working_dir,
