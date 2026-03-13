@@ -28,7 +28,7 @@ Always be flexible. If the user says "skip the evals, just vibe with me", do tha
 
 This skill runs inside **Clacky** (openclacky). Key platform specifics:
 
-- **Skills** live at `~/.clacky/skills/<skill-name>/` — **always create new skills here** (global user skills, visible to Web UI and all sessions)
+- **Skills** live at `~/.clacky/skills/<skill-name>/` — **always create new skills here** (global user skills, visible to Web UI and all sessions). To locate an existing skill, check these paths in order using `glob` or `ls`: (1) `.clacky/skills/` — project-level skills, (2) `~/.clacky/skills/` — user-level skills. Built-in skills (shipped with the gem) are always available via `invoke_skill` by name — no file lookup needed. Never use `find /` or broad filesystem searches to locate skills.
 - **No parallel subagents** — Clacky runs as a single agent; all test cases execute serially in the current session
 - **No external agent CLI** — for evals, just execute the task directly in-session (read the skill, follow instructions, save outputs)
 - **Scripts** — prefer **Ruby** (`.rb` files); Clacky is Ruby-native. Run with `ruby path/to/script.rb`. Python is available but Ruby is the default choice
