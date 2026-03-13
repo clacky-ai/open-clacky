@@ -471,7 +471,7 @@ suggest_ruby_installation() {
 # Note: bash -c passes positional args starting at $0, so real flags are in $@
 # when invoked with the `--` separator; they land in $1..$N of the script.
 parse_args() {
-    for arg in "$@"; do
+    for arg in "$0" "$@"; do
         case "$arg" in
             --brand-name=*)
                 BRAND_NAME="${arg#--brand-name=}"
@@ -628,6 +628,8 @@ install_agent_browser() {
 
 # Post-installation information
 show_post_install_info() {
+    local cmd="${BRAND_COMMAND:-openclacky}"
+
     echo ""
     echo "╔═══════════════════════════════════════════════════════════╗"
     echo "║                                                           ║"
@@ -638,14 +640,14 @@ show_post_install_info() {
     print_step "Quick Start Guide:"
     echo ""
     print_info "1. Configure your API key:"
-    echo "   openclacky"
+    echo "   $cmd"
     echo "   > /config"
     echo ""
     print_info "2. Start (Terminal / CLI mode):"
-    echo "   openclacky"
+    echo "   $cmd"
     echo ""
     print_info "3. Start (Web UI mode):"
-    echo "   openclacky server"
+    echo "   $cmd server"
     echo "   Then open http://localhost:7070 in your browser"
     echo ""
     print_info "4. Create a new project:"
@@ -660,7 +662,7 @@ show_post_install_info() {
     echo ""
     echo -e "  ${RED}IMPORTANT: Please restart your terminal${NC}"
     echo ""
-    echo -e "  After restarting, type: ${GREEN}openclacky${NC}"
+    echo -e "  After restarting, type: ${GREEN}$cmd${NC}"
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo ""
