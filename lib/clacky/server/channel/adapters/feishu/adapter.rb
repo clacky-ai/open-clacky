@@ -174,14 +174,6 @@ module Clacky
 
             # Download and process file attachments
             if event[:file_attachments] && !event[:file_attachments].empty?
-              # Reject unsupported formats before downloading
-              unsupported = event[:file_attachments].filter_map do |a|
-                FileProcessor.unsupported_error(a[:name])
-              end
-              if unsupported.size == event[:file_attachments].size && event[:text].to_s.strip.empty?
-                @bot.send_text(event[:chat_id], "#{unsupported.first}", reply_to: event[:message_id])
-                return
-              end
               file_text = process_files(event[:file_attachments], event[:message_id])
               combined = [event[:text], file_text].reject(&:empty?).join("\n\n")
               event = event.merge(text: combined)
@@ -197,19 +189,15 @@ module Clacky
           # @return [String] text to inject into prompt
           def process_files(attachments, message_id)
             attachments.filter_map do |attachment|
-              name = attachment[:name]
-              if (err = FileProcessor.unsupported_error(name))
-                next err
-              end
               result = @bot.download_message_resource(message_id, attachment[:key], type: "file")
-              FileProcessor.process(result[:body], name)
+              FileProcessor.process(result[:body], attachment[:name])
             rescue => e
               warn "[Feishu] Failed to download file #{attachment[:name]}: #{e.message}"
               "[Attachment: #{attachment[:name]}]\nDownload failed: #{e.message}"
             end.join("\n\n")
           end
 
-          MAX_IMAGE_BYTES = Clacky::Tools::FileAttachment::MAX_IMAGE_BYTES
+          MAX_IMAGE_BYTES = Clacky::FileAttachment::MAX_IMAGE_BYTES
 
           # @param image_keys [Array<String>]
           # @param message_id [String]

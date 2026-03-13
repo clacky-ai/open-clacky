@@ -29,7 +29,7 @@ require_relative "clacky/utils/path_helper"
 require_relative "clacky/utils/file_ignore_helper"
 require_relative "clacky/utils/string_matcher"
 require_relative "clacky/tools/base"
-require_relative "clacky/tools/file_attachment"
+require_relative "clacky/utils/file_attachment"
 
 require_relative "clacky/tools/shell"
 require_relative "clacky/tools/file_reader"

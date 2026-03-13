@@ -103,10 +103,6 @@ module Clacky
               aeskey   = raw.dig("file", "aeskey")
               return unless url
               filename = raw.dig("file", "name") || raw.dig("file", "filename") || "attachment"
-              if (err = Feishu::FileProcessor.unsupported_error(filename))
-                @ws_client.send_message(chat_id, "#{err}")
-                return
-              end
               result = MediaDownloader.download(url, aeskey)
               filename = result[:filename] || filename
               text = Feishu::FileProcessor.process(result[:body], filename)
@@ -135,7 +131,7 @@ module Clacky
             end
           end
 
-          MAX_IMAGE_BYTES = Clacky::Tools::FileAttachment::MAX_IMAGE_BYTES
+          MAX_IMAGE_BYTES = Clacky::FileAttachment::MAX_IMAGE_BYTES
         end
 
         Adapters.register(:wecom, Adapter)
