@@ -13,14 +13,24 @@ module Clacky
       self.tool_description = <<~DESC
         Browser automation for login-related operations (sign-in, OAuth, form submission requiring session). For simple page fetch or search, prefer web_fetch or web_search instead.
 
-        isolated param: true = built-in browser (default, works immediately, login persists). false = user's Chrome (keeps cookies/login, needs one-time debug setup; opens URLs in new tab).
+        isolated: true = built-in browser (default, no setup, login persists). false = user's Chrome (keeps cookies/login, needs one-time debug setup; opens URLs in new tab).
 
-        WORKFLOW:
-        - Default: use isolated=true (built-in browser). No setup, works immediately.
-        - If the user explicitly wants their Chrome (e.g. "use my Chrome"), set isolated=false. We auto-open chrome://inspect/#remote-debugging when needed — guide user to enable the toggle. When opening URLs, we use a new tab to avoid replacing the user's current page.
+        SNAPSHOT — always run before interacting with a page. Refs (@e1, @e2...) expire after page changes, always re-snapshot before acting on a changed page:
+        - 'snapshot -i -C' — interactive + cursor-clickable elements (recommended default)
+        - 'snapshot -i' — interactive elements only (faster, for simple forms)
+        - 'snapshot' — full accessibility tree (when above miss elements)
 
-        Commands: 'open <url>', 'snapshot -i', 'click @e1', 'fill @e2 "text"', etc.
-        IMPORTANT: Always use 'snapshot -i' to inspect page state. NEVER use 'screenshot' without explicit user permission — it costs significantly more tokens. If snapshot is insufficient, tell the user and ask if they want a screenshot.
+        ELEMENT SELECTION — prefer in this order:
+        1. Refs: 'click @e1', 'fill @e2 "text"'
+        2. Semantic find: 'find text "Submit" click', 'find role button "Login" click', 'find label "Email" fill "user@example.com"'
+        3. CSS: 'click "#submit-btn"'
+
+        OTHER COMMANDS:
+        - 'open <url>', 'back', 'reload', 'press Enter', 'key Control+a'
+        - 'scroll down/up', 'scrollintoview @e1', 'wait @e1', 'wait --text "..."', 'wait --load networkidle'
+        - 'dialog accept/dismiss', 'tab new <url>', 'tab <n>'
+
+        SCREENSHOT: NEVER call on your own — costs far more tokens than snapshot. Last resort only. Ask user first: "Screenshots cost more tokens. Approve?" When approved: 'screenshot --screenshot-format jpeg --screenshot-quality 50'.
       DESC
       self.tool_category = "web"
       self.tool_parameters = {
@@ -47,11 +57,29 @@ module Clacky
       CHROME_DEBUG_PORT = 9222
       BROWSER_COMMAND_TIMEOUT = 30
       CHROME_DEBUG_PAGE = "chrome://inspect/#remote-debugging"
+      MIN_AGENT_BROWSER_VERSION = "0.20.0"
 
       def execute(command:, session: nil, isolated: nil, working_dir: nil)
-        unless agent_browser_installed?
-          install_result = auto_install_agent_browser
-          return install_result if install_result[:error]
+        # Handle explicit install command
+        if command.strip == "install"
+          return do_install_agent_browser
+        end
+
+        if !agent_browser_installed?
+          return {
+            error: "agent-browser not installed",
+            message: "agent-browser is required for browser automation but is not installed.",
+            instructions: "Tell the user: 'agent-browser is not installed. It's required for browser automation. Run `browser(command: \"install\")` to install it — this may take a minute. Would you like me to install it now?' Wait for user confirmation before calling install."
+          }
+        end
+
+        if agent_browser_outdated?
+          current = `agent-browser --version 2>/dev/null`.strip.split.last
+          return {
+            error: "agent-browser version too old",
+            message: "agent-browser #{current} is installed but version >= #{MIN_AGENT_BROWSER_VERSION} is required.",
+            instructions: "Tell the user: 'agent-browser needs to be upgraded from #{current} to #{MIN_AGENT_BROWSER_VERSION}+. Run `browser(command: \"install\")` to upgrade — this may take a minute. Would you like me to upgrade it now?' Wait for user confirmation before calling install."
+          }
         end
 
         # Default to built-in browser (isolated=true). Only use user's Chrome when explicitly isolated=false.
@@ -91,12 +119,6 @@ module Clacky
             session_name: nil,
             headed: use_auto_connect ? false : true
           )
-          result = Shell.new.execute(command: full_command, hard_timeout: BROWSER_COMMAND_TIMEOUT, working_dir: working_dir)
-        end
-
-        if playwright_missing?(result)
-          pw_result = install_playwright_chromium
-          return pw_result if pw_result[:error]
           result = Shell.new.execute(command: full_command, hard_timeout: BROWSER_COMMAND_TIMEOUT, working_dir: working_dir)
         end
 
@@ -363,52 +385,23 @@ module Clacky
         !!find_in_path(AGENT_BROWSER_BIN)
       end
 
-      def auto_install_agent_browser
-        npm = find_or_install_npm
-        unless npm
-          return {
-            error: "agent-browser not installed",
-            message: "agent-browser is required for browser automation but is not installed. " \
-              "Node.js not found; tried to install via mise but failed.\n\n" \
-              "Please run: mise install node@22 && mise use -g node@22"
-          }
-        end
-
-        result = Shell.new.execute(command: "#{npm} install -g agent-browser", hard_timeout: 120)
-        unless result[:success]
-          return {
-            error: "Failed to auto-install agent-browser",
-            message: "npm install -g agent-browser failed: #{result[:stderr]}\n\nPlease run it manually."
-          }
-        end
-
-        {}
+      def agent_browser_outdated?
+        version = `agent-browser --version 2>/dev/null`.strip.split.last
+        return false if version.nil? || version.empty?
+        Gem::Version.new(version) < Gem::Version.new(MIN_AGENT_BROWSER_VERSION)
+      rescue StandardError
+        false
       end
 
-      def find_or_install_npm
-        npm = find_in_path("npm")
-        return npm if npm
-
-        mise = find_mise_bin
-        return nil unless mise
-
-        path = `#{Shellwords.escape(mise)} which npm 2>/dev/null`.strip
-        return path if path && !path.empty? && File.executable?(path)
-        system(mise, "install", "node@22", out: File::NULL, err: File::NULL)
-        system(mise, "use", "-g", "node@22", out: File::NULL, err: File::NULL)
-
-        path = `#{Shellwords.escape(mise)} which npm 2>/dev/null`.strip
-        return path if path && !path.empty? && File.executable?(path)
-
-        nil
-      end
-
-      def find_mise_bin
-        mise = find_in_path("mise")
-        return mise if mise
-
-        candidate = "#{Dir.home}/.local/bin/mise"
-        File.executable?(candidate) ? candidate : nil
+      def do_install_agent_browser
+        script = File.expand_path("../../../../scripts/install_agent_browser.sh", __FILE__)
+        result = Shell.new.execute(command: "bash #{Shellwords.escape(script)}", hard_timeout: 180)
+        if result[:success]
+          version = `agent-browser --version 2>/dev/null`.strip.split.last
+          { success: true, message: "agent-browser #{version} installed successfully. You can now use browser commands." }
+        else
+          { error: "Failed to install agent-browser", message: result[:stdout].to_s.strip }
+        end
       end
 
       def command_name_for_temp(command)
@@ -445,25 +438,6 @@ module Clacky
         { content: first_part.join + notice, temp_file: temp_file }
       end
 
-      def playwright_missing?(result)
-        output = "#{result[:stdout]}#{result[:stderr]}"
-        output.include?("Executable doesn't exist") ||
-          output.include?("Please run the following command to download new browsers")
-      end
-
-      def install_playwright_chromium
-        playwright = find_in_path("playwright")
-        cmd = playwright ? "#{playwright} install chromium" : "npx playwright install chromium"
-
-        result = Shell.new.execute(command: cmd, hard_timeout: 300)
-        unless result[:success]
-          return {
-            error: "Failed to install Playwright Chromium",
-            message: "Automatic browser installation failed. Please run manually:\n  npx playwright install chromium"
-          }
-        end
-        {}
-      end
     end
   end
 end
