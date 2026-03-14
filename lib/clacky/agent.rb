@@ -182,6 +182,9 @@ module Clacky
         @messages << system_message
       end
 
+      # Inject session context (date + model) if not yet present or date has changed
+      inject_session_context_if_needed
+
       # Format user message with images and files if provided
       user_content = format_user_content(user_input, images, files)
       @messages << { role: "user", content: user_content, task_id: task_id, created_at: Time.now.to_f }
@@ -872,6 +875,33 @@ module Clacky
       end
 
       content
+    end
+
+    # Inject a session context message (date + model) into the conversation.
+    # Only injects when:
+    #   1. No context message exists yet in this session, OR
+    #   2. The existing context is from a previous day (cross-day session)
+    # Marked with system_injected: true so existing filters (replay_history,
+    # get_recent_user_messages, etc.) automatically skip it.
+    # Cache-safe: always inserted just before the current user message,
+    # so no historical cache entries are ever invalidated.
+    private def inject_session_context_if_needed
+      today = Time.now.strftime("%Y-%m-%d")
+
+      # Find the last injected context message
+      last_ctx = @messages.reverse.find { |m| m[:session_context] }
+
+      # Skip if we already have a context for today
+      return if last_ctx && last_ctx[:context_date] == today
+
+      content = "[Session context: Today is #{Time.now.strftime('%Y-%m-%d, %A')}. Current model: #{current_model}]"
+      @messages << {
+        role: "user",
+        content: content,
+        system_injected: true,
+        session_context: true,
+        context_date: today
+      }
     end
 
     # Track modified files for Time Machine snapshots

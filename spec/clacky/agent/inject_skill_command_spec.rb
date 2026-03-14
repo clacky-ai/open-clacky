@@ -49,7 +49,8 @@ RSpec.describe "Agent#inject_skill_command_as_assistant_message" do
 
       # After the injected assistant message there must be a user shim so the
       # conversation sequence ends with a user turn (required by Claude / Anthropic API).
-      injected_msgs = agent.messages.select { |m| m[:system_injected] }
+      # Exclude session_context messages which are also system_injected but unrelated to skills.
+      injected_msgs = agent.messages.select { |m| m[:system_injected] && !m[:session_context] }
       expect(injected_msgs.size).to eq(2)
 
       assistant_shim = injected_msgs.find { |m| m[:role] == "assistant" }
@@ -109,7 +110,8 @@ RSpec.describe "Agent#inject_skill_command_as_assistant_message" do
 
       agent.run("just a normal message")
 
-      injected = agent.messages.select { |m| m[:system_injected] }
+      # Only check skill-injected messages; session_context messages are also system_injected but expected
+      injected = agent.messages.select { |m| m[:system_injected] && !m[:session_context] }
       expect(injected).to be_empty
     end
   end
