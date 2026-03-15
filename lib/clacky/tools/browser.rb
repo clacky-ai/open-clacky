@@ -100,15 +100,6 @@ module Clacky
                                    hard_timeout: BROWSER_COMMAND_TIMEOUT,
                                    working_dir: working_dir)
 
-        # --headed ignored because daemon was already running in headless mode — restart it
-        if headed_ignored?(result) && cfg.headed
-          Shell.new.execute(command: "#{AGENT_BROWSER_BIN} close", hard_timeout: 10)
-          sleep 0.5
-          result = Shell.new.execute(command: full_command,
-                                     hard_timeout: BROWSER_COMMAND_TIMEOUT,
-                                     working_dir: working_dir)
-        end
-
         # Session may have been closed — retry without session name
         if !result[:success] && session_closed_error?(result) && cfg.session_name
           full_command = build_command(effective_command,
@@ -217,10 +208,6 @@ module Clacky
       def session_closed_error?(result)
         output = "#{result[:stderr]}#{result[:stdout]}"
         output.include?("has been close") || output.include?("has been closed")
-      end
-
-      def headed_ignored?(result)
-        result[:stderr].to_s.include?("--headed ignored")
       end
 
       def snapshot_command?(command)
