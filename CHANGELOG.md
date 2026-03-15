@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.4] - 2026-03-16
+
+### Fixed
+- **Prompt cache strategy reverted to simple last-message anchoring**: the experimental assistant-message-anchored cache strategy introduced in v0.9.3 was causing regressions; caching is now restored to a simpler, proven approach where the last message is used as the cache breakpoint
+
 ## [0.9.3] - 2026-03-16
 
 ### Added
