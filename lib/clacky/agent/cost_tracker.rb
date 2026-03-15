@@ -37,8 +37,8 @@ module Clacky
           end
         end
 
-        # Display token usage statistics for this iteration
-        display_iteration_tokens(usage, iteration_cost)
+        # Collect token usage data for this iteration (returned to caller for deferred display)
+        token_data = collect_iteration_tokens(usage, iteration_cost)
 
         # Update session bar cost in real-time (don't wait for agent.run to finish)
         @ui&.update_sessionbar(cost: @total_cost)
@@ -75,6 +75,9 @@ module Clacky
             @task_cache_stats[:cache_hit_requests] += 1
           end
         end
+
+        # Return token_data so the caller can display it at the right moment
+        token_data
       end
 
       # Estimate token count for a message content
@@ -147,10 +150,13 @@ module Clacky
 
       private
 
-      # Display token usage for current iteration
+      # Collect token usage data for current iteration and return it.
+      # Does NOT call @ui directly — the caller is responsible for displaying
+      # at the right moment (e.g. after show_assistant_message).
       # @param usage [Hash] Usage data from API
       # @param cost [Float] Cost for this iteration
-      def display_iteration_tokens(usage, cost)
+      # @return [Hash] token_data ready for show_token_usage
+      def collect_iteration_tokens(usage, cost)
         prompt_tokens = usage[:prompt_tokens] || 0
         completion_tokens = usage[:completion_tokens] || 0
         total_tokens = usage[:total_tokens] || (prompt_tokens + completion_tokens)
@@ -161,8 +167,7 @@ module Clacky
         delta_tokens = total_tokens - @previous_total_tokens
         @previous_total_tokens = total_tokens  # Update for next iteration
 
-        # Prepare data for UI to format and display
-        token_data = {
+        {
           delta_tokens: delta_tokens,
           prompt_tokens: prompt_tokens,
           completion_tokens: completion_tokens,
@@ -171,9 +176,6 @@ module Clacky
           cache_read: cache_read,
           cost: cost
         }
-
-        # Let UI handle formatting and display
-        @ui&.show_token_usage(token_data)
       end
     end
   end

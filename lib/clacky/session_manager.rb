@@ -2,10 +2,19 @@
 
 require "json"
 require "fileutils"
+require "securerandom"
 
 module Clacky
   class SessionManager
     SESSIONS_DIR = File.join(Dir.home, ".clacky", "sessions")
+
+    # Generate a new unique session ID (16-char hex string).
+    # This is the single authoritative source for session IDs — all components
+    # (Agent, SessionRegistry) should receive an ID generated here rather than
+    # creating their own.
+    def self.generate_id
+      SecureRandom.hex(8)
+    end
 
     def initialize(sessions_dir: nil)
       @sessions_dir = sessions_dir || SESSIONS_DIR
@@ -46,6 +55,15 @@ module Clacky
       sessions
         .select { |s| s[:working_dir] == working_dir }
         .max_by { |s| Time.parse(s[:updated_at]) }
+    end
+
+    # Get the most recent N sessions for a specific working directory
+    def latest_n_for_directory(working_dir, n = 5)
+      all_sessions
+        .select { |s| s[:working_dir] == working_dir }
+        .sort_by { |s| Time.parse(s[:updated_at]) }
+        .reverse
+        .first(n)
     end
 
     # List recent sessions, prioritizing those from current directory

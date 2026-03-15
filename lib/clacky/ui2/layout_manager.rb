@@ -59,8 +59,15 @@ module Clacky
               screen.clear_line
             end
 
-            # Re-render fixed areas at new position
-            render_fixed_areas
+            # When input is paused (InlineInput active), fixed_area_start_row has grown
+            # (input_area.required_height returns 0 while paused), so the cleared rows
+            # now belong to the output area. Re-render output from buffer to fill them in.
+            if input_area.paused?
+              render_output_from_buffer
+            else
+              # Re-render fixed areas at new position
+              render_fixed_areas
+            end
             screen.flush
           end
         end

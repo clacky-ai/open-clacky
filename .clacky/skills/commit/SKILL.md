@@ -207,52 +207,11 @@ Based on the holistic analysis, generate commit messages following the conventio
 - `refactor: simplify database connection logic` (not one commit per file)
 - `docs: update API documentation` (only if pure documentation change)
 
-### 6. Present Suggestions
+### 6. Execute Commits Immediately
 
-Show the user:
-- **The overall purpose/goal you identified**
-- List of proposed commits (prefer fewer, consolidated commits)
-- Files included in each commit
-- Commit message for each group
-- **Brief explanation of WHY changes were grouped this way**
+No confirmation needed — analyze, group, and commit right away.
 
-Format:
-```
-Overall goal: Implementing user authentication system
-
-Proposed commits:
-
-Commit 1: feat: add user authentication
-  - lib/api/auth.rb (authentication logic)
-  - lib/user.rb (user model updates)
-  - lib/session.rb (session management)
-  - spec/api/auth_spec.rb (tests)
-  - spec/user_spec.rb (updated user tests)
-  - config/routes.rb (auth routes)
-  
-  Reason: All these files work together to implement the authentication
-  feature. Tests and configuration belong with the implementation.
-
-Commit 2: fix: resolve database timeout issue
-  - lib/database/connection.rb
-  - spec/database/connection_spec.rb
-  
-  Reason: Separate bug fix unrelated to authentication.
-
-Total: 2 commits (not 6+ small commits)
-```
-
-### 7. Get User Confirmation
-
-Ask the user:
-- Review the proposed commits
-- Confirm if they want to proceed
-- Allow modifications if needed
-- Get explicit approval before committing
-
-### 8. Execute Commits
-
-For each approved commit:
+For each commit group:
 ```bash
 # Stage specific files
 git add <file1> <file2> ...
@@ -261,22 +220,17 @@ git add <file1> <file2> ...
 git commit -m "<type>: <description>"
 ```
 
-**IMPORTANT**: 
+**IMPORTANT**:
 - Use ONLY `git commit -m "single line message"` format
 - DO NOT use multi-line commits with additional body text
 - DO NOT use `-m` flag multiple times
 - Keep the commit message as a single, concise line
 
-Provide feedback after each commit:
-- Confirm successful commit
-- Show commit hash
-- Display summary
+### 7. Final Summary
 
-### 9. Final Summary
-
-After all commits:
-- Show total number of commits created
-- List all commit messages
+After all commits, show:
+- Total number of commits created
+- Each commit hash + message
 - Suggest next steps (e.g., git push)
 
 ## Commands Used
@@ -370,11 +324,7 @@ AI (CORRECT APPROACH):
 
    Total: 3 meaningful commits instead of 5 fragmented ones
 
-   Do you want to proceed? (yes/no)
-
-User: yes
-
-AI:
+AI (executes immediately, no confirmation):
 Commit 1 created (a1b2c3d): feat: add user registration
 Commit 2 created (e4f5g6h): fix: correct password validation logic
 Commit 3 created (i7j8k9l): chore: update gem dependencies
@@ -438,11 +388,8 @@ For each set of changes, ask:
 
 ## Safety Features
 
-- Always review changes before committing
-- Require user confirmation before executing commits
-- Show exactly which files will be in each commit
-- Allow user to modify suggestions
-- Never force commits without approval
+- Always review changes before committing (read diffs first)
+- Execute commits immediately after analysis — no confirmation step
 - Preserve git history integrity
 
 ## Integration with Workflow

@@ -63,11 +63,22 @@ module Clacky
             ignored: 0
           }
 
+          # Auto-expand bare patterns (no slash, no **) to recursive search.
+          # e.g. "*install*" -> "**/*install*", "*.rb" -> "**/*.rb"
+          # This avoids surprising empty results when files are in subdirectories.
+          effective_pattern = if !File.absolute_path?(pattern) &&
+                                  !pattern.include?("/") &&
+                                  !pattern.start_with?("**")
+                                "**/#{pattern}"
+                              else
+                                pattern
+                              end
+
           # Build full pattern - handle absolute paths correctly
-          full_pattern = if File.absolute_path?(pattern)
-                          pattern
+          full_pattern = if File.absolute_path?(effective_pattern)
+                          effective_pattern
                         else
-                          File.join(base_path, pattern)
+                          File.join(base_path, effective_pattern)
                         end
           # Always-ignored directory names that should never appear in results
           always_ignored_dirs = Clacky::Utils::FileIgnoreHelper::ALWAYS_IGNORED_DIRS

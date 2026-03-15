@@ -32,16 +32,20 @@ module Clacky
     include TimeMachine
     include MemoryUpdater
 
-    attr_reader :session_id, :messages, :iterations, :total_cost, :working_dir, :created_at, :total_tasks, :todos,
-                :cache_stats, :cost_source, :ui, :skill_loader, :agent_profile
+    attr_reader :session_id, :name, :messages, :iterations, :total_cost, :working_dir, :created_at, :total_tasks, :todos,
+                :cache_stats, :cost_source, :ui, :skill_loader, :agent_profile,
+                :status, :error, :updated_at
 
-    def initialize(client, config , working_dir: , ui: , profile: )
+    def permission_mode = @config&.permission_mode&.to_s || ""
+
+    def initialize(client, config, working_dir:, ui:, profile:, session_id:)
       @client = client  # Client for current model
       @config = config.is_a?(AgentConfig) ? config : AgentConfig.new(config)
       @agent_profile = AgentProfile.load(profile)
       @tool_registry = ToolRegistry.new
       @hooks = HookManager.new
-      @session_id = SecureRandom.uuid
+      @session_id = session_id
+      @name = ""
       @messages = []
       @todos = []  # Store todos in memory
       @iterations = 0
@@ -92,7 +96,8 @@ module Clacky
     # Restore from a saved session
     def self.from_session(client, config, session_data, ui: nil, profile:)
       working_dir = session_data[:working_dir] || session_data["working_dir"] || Dir.pwd
-      agent = new(client, config, working_dir: working_dir, ui: ui, profile: profile)
+      original_id = session_data[:session_id] || session_data["session_id"] || Clacky::SessionManager.generate_id
+      agent = new(client, config, working_dir: working_dir, ui: ui, profile: profile, session_id: original_id)
       agent.restore_session(session_data)
       agent
     end
@@ -141,6 +146,11 @@ module Clacky
       @config.model_name
     end
 
+    # Rename this session. Called by auto-naming (first message) or user explicit rename.
+    def rename(new_name)
+      @name = new_name.to_s.strip
+    end
+
     def run(user_input, images: [], files: [])
       # Start new task for Time Machine
       task_id = start_new_task
@@ -171,6 +181,9 @@ module Clacky
 
         @messages << system_message
       end
+
+      # Inject session context (date + model) if not yet present or date has changed
+      inject_session_context_if_needed
 
       # Format user message with images and files if provided
       user_content = format_user_content(user_input, images, files)
@@ -210,10 +223,13 @@ module Clacky
           if response[:finish_reason] == "stop" || response[:tool_calls].nil? || response[:tool_calls].empty?
             # During memory update phase, show LLM response as info (not a chat bubble)
             if @memory_updating && response[:content] && !response[:content].empty?
-              @ui&.show_info("🧠 " + response[:content].strip)
+              @ui&.show_info(response[:content].strip)
             elsif response[:content] && !response[:content].empty?
               @ui&.show_assistant_message(response[:content])
             end
+
+            # Show token usage after the assistant message so WebUI renders it below the bubble
+            @ui&.show_token_usage(response[:token_usage]) if response[:token_usage]
 
             # Debug: log why we're stopping
             if @config.verbose && (response[:tool_calls].nil? || response[:tool_calls].empty?)
@@ -236,6 +252,10 @@ module Clacky
           if response[:content] && !response[:content].empty? && !@memory_updating
             @ui&.show_assistant_message(response[:content])
           end
+
+          # Show token usage after assistant message (or immediately if no message).
+          # This ensures WebUI renders the token line below the assistant bubble.
+          @ui&.show_token_usage(response[:token_usage]) if response[:token_usage]
 
           # Act: Execute tool calls
           action_result = act(response[:tool_calls])
@@ -404,6 +424,11 @@ module Clacky
       if response[:tool_calls]&.any?
         msg[:tool_calls] = format_tool_calls_for_api(response[:tool_calls])
       end
+      # Store token_usage in the message so replay_history can re-emit it
+      msg[:token_usage] = response[:token_usage] if response[:token_usage]
+      # Preserve reasoning_content so it is echoed back to APIs that require it
+      # (e.g. Kimi/Moonshot extended thinking — omitting it causes HTTP 400)
+      msg[:reasoning_content] = response[:reasoning_content] if response[:reasoning_content]
       @messages << msg
 
       response
@@ -668,7 +693,7 @@ module Clacky
       @tool_registry.register(Tools::WebSearch.new)
       @tool_registry.register(Tools::WebFetch.new)
       @tool_registry.register(Tools::TodoManager.new)
-      @tool_registry.register(Tools::RunProject.new)
+      # @tool_registry.register(Tools::RunProject.new) # temporarily disabled
       @tool_registry.register(Tools::RequestUserFeedback.new)
       @tool_registry.register(Tools::InvokeSkill.new)
       @tool_registry.register(Tools::UndoTask.new)
@@ -717,12 +742,14 @@ module Clacky
       )
 
       # Create subagent (reuses all tools from parent, inherits agent profile from parent)
+      # Subagent gets its own unique session_id.
       subagent = self.class.new(
         subagent_client,
         subagent_config,
         working_dir: @working_dir,
         ui: @ui,
-        profile: @agent_profile.name
+        profile: @agent_profile.name,
+        session_id: Clacky::SessionManager.generate_id
       )
       subagent.instance_variable_set(:@is_subagent, true)
 
@@ -848,6 +875,33 @@ module Clacky
       end
 
       content
+    end
+
+    # Inject a session context message (date + model) into the conversation.
+    # Only injects when:
+    #   1. No context message exists yet in this session, OR
+    #   2. The existing context is from a previous day (cross-day session)
+    # Marked with system_injected: true so existing filters (replay_history,
+    # get_recent_user_messages, etc.) automatically skip it.
+    # Cache-safe: always inserted just before the current user message,
+    # so no historical cache entries are ever invalidated.
+    private def inject_session_context_if_needed
+      today = Time.now.strftime("%Y-%m-%d")
+
+      # Find the last injected context message
+      last_ctx = @messages.reverse.find { |m| m[:session_context] }
+
+      # Skip if we already have a context for today
+      return if last_ctx && last_ctx[:context_date] == today
+
+      content = "[Session context: Today is #{Time.now.strftime('%Y-%m-%d, %A')}. Current model: #{current_model}]"
+      @messages << {
+        role: "user",
+        content: content,
+        system_injected: true,
+        session_context: true,
+        context_date: today
+      }
     end
 
     # Track modified files for Time Machine snapshots

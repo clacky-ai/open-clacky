@@ -659,13 +659,20 @@ module Clacky
           end
         end
 
-        {
+        result = {
           content: message["content"],
           tool_calls: parse_tool_calls(message["tool_calls"]),
           finish_reason: data["choices"].first["finish_reason"],
           usage: usage_data,
           raw_api_usage: raw_api_usage
         }
+
+        # Preserve reasoning_content if present (e.g. Kimi/Moonshot extended thinking).
+        # The API requires this field to be echoed back in the message history on
+        # subsequent requests, otherwise it returns HTTP 400.
+        result[:reasoning_content] = message["reasoning_content"] if message["reasoning_content"]
+
+        result
       else
         raise_error(response)
       end

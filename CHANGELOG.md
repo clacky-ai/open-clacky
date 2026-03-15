@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-03-15
+
+### Fixed
+- **Version upgrade button now appears reliably**: the new version check now queries RubyGems directly instead of relying on local gem mirror sources (which often lag behind by hours or days), so the upgrade badge shows up promptly when a new version is available. Falls back to the local mirror if RubyGems is unreachable.
+- **Edit confirmation diff output restored**: the file diff was not displaying correctly when the input area paused during an edit confirmation prompt; this is now fixed.
+
+## [0.9.1] - 2026-03-15
+
+### Added
+- **Session context auto-injection**: the agent now automatically injects the current date and active model name into each conversation turn, so it always knows what day it is and which model it's running — helpful for time-sensitive tasks and multi-model setups
+- **Kimi/Moonshot extended thinking support**: reasoning content is now preserved and echoed back correctly in message history, fixing HTTP 400 errors when using Kimi's extended thinking API
+
+### Improved
+- **Browser tool install UX**: the `agent-browser` setup flow has been redesigned with a dedicated install script and clearer guidance, making first-time setup smoother
+
+## [0.9.0] - 2026-03-14
+
+### Added
+- **Version check and one-click upgrade in WebUI**: a version badge in the sidebar shows when a newer gem is available; clicking it opens an upgrade popover with a live install log and a restart button — no terminal needed
+- **Upgrade badge state machine**: the badge cycles through four visual states — amber pulsing dot (update available), spinning ring (installing), orange bouncing dot (restart needed), green check (restarted successfully)
+- **Markdown rendering in WebUI chat**: assistant responses are now rendered as rich markdown — headings, bold, code blocks, lists, and inline code are all formatted properly instead of displayed as raw text
+- **Session naming with auto-name and inline rename**: sessions are automatically named after the first exchange; users can double-click any session in the sidebar to rename it inline
+- **Session info bar with live status animation**: a slim bar below the chat header shows the session name, working directory, and a pulsing animation while the agent is thinking or executing tools
+- **Restore last 5 sessions on startup**: the WebUI now reopens the five most recent sessions on startup instead of just the last one
+- **Image and file support for Feishu and WeCom**: users can now send images and file attachments through Feishu and WeCom IM channels; the agent reads and processes them like any other input
+- **Idle compression in WebUI**: the agent now compresses long conversation history automatically when the session has been idle, keeping context efficient without manual intervention
+
+### Improved
+- **Glob tool recursive search**: bare pattern names like `controller` are now automatically expanded to `**/*controller*` so searches always return results across all subdirectories
+- **Onboard flow**: soul setup is now non-blocking; the confirmation page is skipped for a faster first-run experience; onboard now asks the user to name the AI first, then collects the user profile
+- **Token usage display ordering**: the token usage line in WebUI now always appears below the assistant message bubble, not above it
+- **i18n coverage**: settings panel dynamically-rendered fields are now translated correctly at render time
+
+### Fixed
+- **Upgrade popover stays open during install and reconnect**: the popover is now locked while a gem install or server restart is in progress, preventing accidental dismissal that would leave the badge stuck in a spinning state
+- **Session auto-name respects default placeholders**: session names are now assigned based on message history only, not the agent's internal name field, so placeholder names like "Session 1" no longer block the auto-naming logic
+- **Token usage line disappears after page refresh**: token usage data is now persisted in session history and correctly re-rendered when the page is reloaded
+- **Shell tool hangs on background commands**: commands containing `&` (background operator) no longer cause the shell tool to block indefinitely
+- **White flash on page load**: the page is now hidden until boot completes, preventing a flash of unstyled content or the wrong view on startup
+- **Theme flash on refresh**: the theme (dark/light) is now initialized inline in `<head>` so the correct colours are applied before any content renders
+- **Onboard flash on reload**: the onboard panel no longer briefly appears when a session already exists during soul setup
+
+### More
+- Rename channels "Test" button to "Diagnostics" for clarity
+- Default-highlight the first item in skill autocomplete
+
 ## [0.8.8] - 2026-03-13
 
 ### Added

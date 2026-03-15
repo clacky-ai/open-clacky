@@ -107,6 +107,73 @@ RSpec.describe Clacky::Tools::Glob do
       end
     end
 
+    context "auto-completion for bare patterns (no slash, no **)" do
+      it "auto-expands bare filename pattern to recursive search across subdirectories" do
+        Dir.mktmpdir do |dir|
+          # File is inside a subdirectory, NOT in root
+          FileUtils.mkdir_p(File.join(dir, "scripts"))
+          FileUtils.touch(File.join(dir, "scripts", "install.sh"))
+
+          # Pattern has no slash and no **, should auto-expand to **/*install*
+          result = tool.execute(pattern: "*install*", base_path: dir)
+
+          expect(result[:error]).to be_nil
+          expect(result[:returned]).to eq(1)
+          expect(result[:matches].first).to end_with("install.sh")
+        end
+      end
+
+      it "auto-expands bare extension pattern to recursive search" do
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, "deep", "nested"))
+          FileUtils.touch(File.join(dir, "deep", "nested", "app.rb"))
+          FileUtils.touch(File.join(dir, "deep", "lib.rb"))
+
+          result = tool.execute(pattern: "*.rb", base_path: dir)
+
+          expect(result[:error]).to be_nil
+          expect(result[:returned]).to eq(2)
+        end
+      end
+
+      it "still finds files in root dir when using bare pattern" do
+        Dir.mktmpdir do |dir|
+          FileUtils.touch(File.join(dir, "install.sh"))
+          FileUtils.mkdir_p(File.join(dir, "scripts"))
+          FileUtils.touch(File.join(dir, "scripts", "install.sh"))
+
+          result = tool.execute(pattern: "*install*", base_path: dir)
+
+          expect(result[:error]).to be_nil
+          expect(result[:returned]).to eq(2)
+        end
+      end
+
+      it "does NOT auto-expand pattern that already contains slash" do
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, "scripts"))
+          FileUtils.touch(File.join(dir, "scripts", "install.sh"))
+          # Pattern with slash should NOT auto-expand, so root-level search finds nothing
+          result = tool.execute(pattern: "scripts/*.sh", base_path: dir)
+
+          expect(result[:error]).to be_nil
+          expect(result[:returned]).to eq(1)
+        end
+      end
+
+      it "does NOT auto-expand pattern that already starts with **" do
+        Dir.mktmpdir do |dir|
+          FileUtils.mkdir_p(File.join(dir, "scripts"))
+          FileUtils.touch(File.join(dir, "scripts", "install.sh"))
+
+          result = tool.execute(pattern: "**/*install*", base_path: dir)
+
+          expect(result[:error]).to be_nil
+          expect(result[:returned]).to eq(1)
+        end
+      end
+    end
+
     it "excludes directories from results" do
       Dir.mktmpdir do |dir|
         FileUtils.mkdir(File.join(dir, "subdir"))

@@ -60,6 +60,12 @@ module Clacky
         @events << { type: "tool_result", session_id: @session_id, result: result }
       end
 
+      def show_token_usage(token_data)
+        return unless token_data.is_a?(Hash)
+
+        @events << { type: "token_usage", session_id: @session_id }.merge(token_data)
+      end
+
       # Ignore all other UI methods (progress, errors, etc.) during history replay
       def method_missing(name, *args, **kwargs); end
       def respond_to_missing?(name, include_private = false) = true
@@ -125,10 +131,20 @@ module Clacky
         @agent_config   = agent_config
         @client_factory = client_factory  # callable: -> { Clacky::Client.new(...) }
         @brand_test     = brand_test      # when true, skip remote API calls for license activation
+        # Capture the absolute path of the entry script and original ARGV at startup,
+        # so api_restart can re-exec the correct binary even if cwd changes later.
+        @restart_script = File.expand_path($0)
+        @restart_argv   = ARGV.dup
         @registry        = SessionRegistry.new
         @session_manager = Clacky::SessionManager.new
         @ws_clients      = {}  # session_id => [WebSocketConnection, ...]
         @ws_mutex        = Mutex.new
+        # Version cache: { latest: "x.y.z", checked_at: Time }
+        @version_cache   = nil
+        @version_mutex   = Mutex.new
+        # Version cache: { latest: "x.y.z", checked_at: Time }
+        @version_cache   = nil
+        @version_mutex   = Mutex.new
         @scheduler       = Scheduler.new(
           session_registry: @registry,
           session_builder:  method(:build_session)
@@ -258,6 +274,9 @@ module Clacky
         when ["GET",    "/api/brand"]             then api_brand_info(res)
         when ["GET",    "/api/channels"]          then api_list_channels(res)
         when ["POST",   "/api/upload"]            then api_upload_file(req, res)
+        when ["GET",    "/api/version"]           then api_get_version(res)
+        when ["POST",   "/api/version/upgrade"]   then api_upgrade_version(req, res)
+        when ["POST",   "/api/restart"]           then api_restart(req, res)
         else
           if method == "POST" && path.match?(%r{^/api/channels/[^/]+/test$})
             platform = path.sub("/api/channels/", "").sub("/test", "")
@@ -274,6 +293,9 @@ module Clacky
           elsif method == "GET" && path.match?(%r{^/api/sessions/[^/]+/messages$})
             session_id = path.sub("/api/sessions/", "").sub("/messages", "")
             api_session_messages(session_id, req, res)
+          elsif method == "PATCH" && path.match?(%r{^/api/sessions/[^/]+$})
+            session_id = path.sub("/api/sessions/", "")
+            api_rename_session(session_id, req, res)
           elsif method == "DELETE" && path.start_with?("/api/sessions/")
             session_id = path.sub("/api/sessions/", "")
             api_delete_session(session_id, res)
@@ -308,11 +330,11 @@ module Clacky
       end
 
       def api_create_session(req, res)
-        body        = parse_json_body(req)
-        name        = body["name"]
-        working_dir = body["working_dir"]&.then { |d| File.expand_path(d) } || default_working_dir
+        body = parse_json_body(req)
+        name = body["name"]
+        return json_response(res, 400, { error: "name is required" }) if name.nil? || name.strip.empty?
 
-        # Auto-create the working directory if it does not exist yet
+        working_dir = default_working_dir
         FileUtils.mkdir_p(working_dir)
 
         session_id = build_session(name: name, working_dir: working_dir)
@@ -332,11 +354,11 @@ module Clacky
         working_dir = default_working_dir
         FileUtils.mkdir_p(working_dir) unless Dir.exist?(working_dir)
 
-        # Try to restore the most recent session for this working directory
-        session_data = @session_manager.latest_for_directory(working_dir)
+        # Restore the most recent 5 sessions for this working directory
+        sessions_data = @session_manager.latest_n_for_directory(working_dir, 5)
 
-        if session_data
-          build_session_from_data(session_data)
+        if sessions_data.any?
+          sessions_data.each { |session_data| build_session_from_data(session_data) }
         else
           build_session(name: "Session 1", working_dir: working_dir)
         end
@@ -585,6 +607,139 @@ module Clacky
       def api_brand_info(res)
         brand = Clacky::BrandConfig.load
         json_response(res, 200, brand.to_h)
+      end
+
+      # ── Version API ───────────────────────────────────────────────────────────
+
+      # GET /api/version
+      # Returns current version and latest version from RubyGems (cached for 1 hour).
+      def api_get_version(res)
+        current = Clacky::VERSION
+        latest  = fetch_latest_version_cached
+        json_response(res, 200, {
+          current:      current,
+          latest:       latest,
+          needs_update: latest ? version_older?(current, latest) : false
+        })
+      end
+
+      # POST /api/version/upgrade
+      # Runs `gem update openclacky --no-document` via Clacky::Tools::Shell (login shell)
+      # in a background thread, streaming output via WebSocket broadcast.
+      # On success, re-execs the process so the new gem version is loaded.
+      def api_upgrade_version(req, res)
+        json_response(res, 202, { ok: true, message: "Upgrade started" })
+
+        Thread.new do
+          begin
+            broadcast_all(type: "upgrade_log", line: "Starting upgrade: gem update openclacky --no-document\n")
+
+            shell  = Clacky::Tools::Shell.new
+            result = shell.execute(command: "gem update openclacky --no-document",
+                                   soft_timeout: 300, hard_timeout: 600)
+            output  = [result[:stdout], result[:stderr]].join
+            success = result[:exit_code] == 0
+
+            broadcast_all(type: "upgrade_log", line: output)
+
+            if success
+              broadcast_all(type: "upgrade_log", line: "\n✓ Upgrade successful! Please restart the server to apply the new version.\n")
+              broadcast_all(type: "upgrade_complete", success: true)
+            else
+              broadcast_all(type: "upgrade_log", line: "\n✗ Upgrade failed. Please try manually: gem update openclacky\n")
+              broadcast_all(type: "upgrade_complete", success: false)
+            end
+          rescue StandardError => e
+            broadcast_all(type: "upgrade_log", line: "\n✗ Error during upgrade: #{e.message}\n")
+            broadcast_all(type: "upgrade_complete", success: false)
+          end
+        end
+      end
+
+      # POST /api/restart
+      # Re-execs the current process so the newly installed gem version is loaded.
+      # Uses the absolute script path captured at startup to avoid relative-path issues.
+      # Responds 200 first, then waits briefly for WEBrick to flush the response before exec.
+      def api_restart(req, res)
+        json_response(res, 200, { ok: true, message: "Restarting…" })
+
+        script = @restart_script
+        argv   = @restart_argv
+        Thread.new do
+          sleep 0.5  # Let WEBrick flush the HTTP response
+          Clacky::Logger.info("[Restart] exec: #{RbConfig.ruby} #{script} #{argv.join(' ')}")
+          exec(RbConfig.ruby, script, *argv)
+        end
+      end
+
+      # Fetch the latest gem version using `gem list -r`, with a 1-hour in-memory cache.
+      # Uses Clacky::Tools::Shell (login shell) so rbenv/mise shims and gem mirrors work correctly.
+      private def fetch_latest_version_cached
+        @version_mutex.synchronize do
+          now = Time.now
+          if @version_cache && (now - @version_cache[:checked_at]) < 3600
+            return @version_cache[:latest]
+          end
+        end
+
+        # Fetch outside the mutex to avoid blocking other requests
+        latest = fetch_latest_version_from_gem
+
+        @version_mutex.synchronize do
+          @version_cache = { latest: latest, checked_at: Time.now }
+        end
+
+        latest
+      end
+
+      # Query the latest openclacky version.
+      # Strategy: try RubyGems official REST API first (most accurate, not affected by mirror lag),
+      # then fall back to `gem list -r` (respects user's configured gem source).
+      private def fetch_latest_version_from_gem
+        fetch_latest_version_from_rubygems_api || fetch_latest_version_from_gem_command
+      end
+
+      # Try RubyGems official REST API — fast and always up-to-date.
+      # Returns nil if the request fails or times out.
+      private def fetch_latest_version_from_rubygems_api
+        require "net/http"
+        require "json"
+
+        uri      = URI("https://rubygems.org/api/v1/gems/openclacky.json")
+        http     = Net::HTTP.new(uri.host, uri.port)
+        http.use_ssl     = true
+        http.open_timeout = 5
+        http.read_timeout = 8
+
+        res = http.get(uri.request_uri)
+        return nil unless res.is_a?(Net::HTTPSuccess)
+
+        data = JSON.parse(res.body)
+        data["version"].to_s.strip.then { |v| v.empty? ? nil : v }
+      rescue StandardError
+        nil
+      end
+
+      # Fall back to `gem list -r openclacky` via login shell.
+      # Respects the user's configured gem source (rbenv/mise mirrors, etc.).
+      # Output format: "openclacky (0.9.0)"
+      private def fetch_latest_version_from_gem_command
+        shell  = Clacky::Tools::Shell.new
+        result = shell.execute(command: "gem list -r openclacky", soft_timeout: 15, hard_timeout: 30)
+        return nil unless result[:exit_code] == 0
+
+        out   = result[:stdout].to_s
+        match = out.match(/^openclacky\s+\(([^)]+)\)/)
+        match ? match[1].strip : nil
+      rescue StandardError
+        nil
+      end
+
+      # Returns true if version string `a` is strictly older than `b`.
+      private def version_older?(a, b)
+        Gem::Version.new(a) < Gem::Version.new(b)
+      rescue ArgumentError
+        false
       end
 
       # ── Channel API ───────────────────────────────────────────────────────────
@@ -1189,6 +1344,23 @@ module Clacky
         json_response(res, 200, { events: collected, has_more: result[:has_more] })
       end
 
+      def api_rename_session(session_id, req, res)
+        body = parse_json_body(req)
+        new_name = body["name"].to_s.strip
+
+        return json_response(res, 400, { error: "name is required" }) if new_name.empty?
+        return json_response(res, 404, { error: "Session not found" }) unless @registry.exist?(session_id)
+
+        agent = nil
+        @registry.with_session(session_id) { |s| agent = s[:agent] }
+        agent.rename(new_name)
+        @session_manager.save(agent.to_session_data)
+        broadcast(session_id, { type: "session_renamed", session_id: session_id, name: new_name })
+        json_response(res, 200, { ok: true, name: new_name })
+      rescue => e
+        json_response(res, 500, { error: e.message })
+      end
+
       def api_delete_session(session_id, res)
         if @registry.delete(session_id)
           # Notify connected clients the session is gone
@@ -1321,38 +1493,29 @@ module Clacky
         @registry.with_session(session_id) { |s| agent = s[:agent] }
         return unless agent
 
-        # Append PDF file paths to the message text so the agent can use the pdf skill
-        # to read them — avoids passing huge base64 data through WebSocket / API
-        pdf_files = (files || []).select { |f| (f["mime_type"] || f[:mime_type]) == "application/pdf" }
-        unless pdf_files.empty?
-          pdf_lines = pdf_files.map do |f|
-            path = f["path"] || f[:path]
-            name = f["name"] || f[:name]
-            "[PDF attached: #{name} — file path: #{path}]"
-          end
-          content = [content, *pdf_lines].join("\n")
+        # Append all uploaded file paths to the message text so the agent can read them on demand.
+        # Files are already saved to disk by /api/upload — no need to re-save here.
+        file_refs = (files || []).filter_map do |f|
+          path = f["path"] || f[:path]
+          name = f["name"] || f[:name]
+          mime = f["mime_type"] || f[:mime_type]
+          next unless path && name
+          label = mime == "application/pdf" ? "PDF attached" : "File attached"
+          "[#{label}: #{name} — file path: #{path}]"
+        end
+        content = [content, *file_refs].join("\n") unless file_refs.empty?
+
+        # Auto-name the session from the first user message (before agent starts running).
+        # Check messages.empty? only — agent.name may already hold a default placeholder
+        # like "Session 1" assigned at creation time, so it's not a reliable signal.
+        if agent.messages.empty?
+          auto_name = content.gsub(/\s+/, " ").strip[0, 30]
+          auto_name += "…" if content.strip.length > 30
+          agent.rename(auto_name)
+          broadcast(session_id, { type: "session_renamed", session_id: session_id, name: auto_name })
         end
 
-        @registry.update(session_id, status: :running)
-        broadcast_session_update(session_id)
-
-        thread = Thread.new do
-          agent.run(content, images: images, files: [])
-          @registry.update(session_id, status: :idle, error: nil)
-          broadcast_session_update(session_id)
-          @session_manager.save(agent.to_session_data(status: :success))
-        rescue Clacky::AgentInterrupted
-          @registry.update(session_id, status: :idle)
-          broadcast_session_update(session_id)
-          broadcast(session_id, { type: "interrupted", session_id: session_id })
-          @session_manager.save(agent.to_session_data(status: :interrupted))
-        rescue => e
-          @registry.update(session_id, status: :error, error: e.message)
-          broadcast_session_update(session_id)
-          broadcast(session_id, { type: "error", session_id: session_id, message: e.message })
-          @session_manager.save(agent.to_session_data(status: :error, error_message: e.message))
-        end
-        @registry.with_session(session_id) { |s| s[:thread] = thread }
+        run_agent_task(session_id, agent) { agent.run(content, images: images, files: []) }
       end
 
       def deliver_confirmation(session_id, conf_id, result)
@@ -1363,6 +1526,7 @@ module Clacky
 
       def interrupt_session(session_id)
         @registry.with_session(session_id) do |s|
+          s[:idle_timer]&.cancel
           s[:thread]&.raise(Clacky::AgentInterrupted, "Interrupted by user")
         end
       end
@@ -1385,14 +1549,29 @@ module Clacky
         @registry.with_session(session_id) { |s| agent = s[:agent] }
         return unless agent
 
+        run_agent_task(session_id, agent) { agent.run(prompt) }
+      end
+
+      # Run an agent task in a background thread, handling status updates,
+      # session persistence, and idle compression timer lifecycle.
+      # Yields to the caller to perform the actual agent.run call.
+      private def run_agent_task(session_id, agent, &task)
+        idle_timer = nil
+        @registry.with_session(session_id) { |s| idle_timer = s[:idle_timer] }
+
+        # Cancel any pending idle compression before starting a new task
+        idle_timer&.cancel
+
         @registry.update(session_id, status: :running)
         broadcast_session_update(session_id)
 
         thread = Thread.new do
-          agent.run(prompt)
+          task.call
           @registry.update(session_id, status: :idle, error: nil)
           broadcast_session_update(session_id)
           @session_manager.save(agent.to_session_data(status: :success))
+          # Start idle compression timer now that the agent is idle
+          idle_timer&.start
         rescue Clacky::AgentInterrupted
           @registry.update(session_id, status: :idle)
           broadcast_session_update(session_id)
@@ -1465,18 +1644,23 @@ module Clacky
       # @param permission_mode [Symbol] :confirm_all (default, human present) or
       #   :auto_approve (unattended — suppresses request_user_feedback waits)
       def build_session(name:, working_dir:, permission_mode: :confirm_all, profile: "general")
-        session_id = @registry.create(name: name, working_dir: working_dir)
+        session_id = Clacky::SessionManager.generate_id
+        @registry.create(session_id: session_id)
 
         client = @client_factory.call
         config = @agent_config.deep_copy
         config.permission_mode = permission_mode
         broadcaster = method(:broadcast)
         ui = WebUIController.new(session_id, broadcaster)
-        agent  = Clacky::Agent.new(client, config, working_dir: working_dir, ui: ui, profile: profile)
+        agent = Clacky::Agent.new(client, config, working_dir: working_dir, ui: ui, profile: profile,
+                                  session_id: session_id)
+        agent.rename(name) unless name.nil? || name.empty?
+        idle_timer = build_idle_timer(session_id, agent)
 
         @registry.with_session(session_id) do |s|
-          s[:agent] = agent
-          s[:ui]    = ui
+          s[:agent]      = agent
+          s[:ui]         = ui
+          s[:idle_timer] = idle_timer
         end
 
         session_id
@@ -1486,27 +1670,40 @@ module Clacky
       # The agent keeps its original session_id so the frontend URL hash stays valid
       # across server restarts.
       def build_session_from_data(session_data, permission_mode: :confirm_all)
-        working_dir = session_data[:working_dir] || default_working_dir
-        name        = session_data[:name] || "Session #{Time.now.strftime('%H:%M')}"
         original_id = session_data[:session_id]
 
+        # Skip if this session is already registered (e.g., restored by a previous call)
+        return nil if @registry.exist?(original_id)
+
         # Register with the original session_id so frontend hashes stay valid
-        session_id = @registry.create(name: name, working_dir: working_dir,
-                                      session_id: original_id)
+        @registry.create(session_id: original_id)
 
         client = @client_factory.call
         config = @agent_config.deep_copy
         config.permission_mode = permission_mode
         broadcaster = method(:broadcast)
-        ui = WebUIController.new(session_id, broadcaster)
-        agent  = Clacky::Agent.from_session(client, config, session_data, ui: ui, profile: "general")
+        ui = WebUIController.new(original_id, broadcaster)
+        agent = Clacky::Agent.from_session(client, config, session_data, ui: ui, profile: "general")
+        idle_timer = build_idle_timer(original_id, agent)
 
-        @registry.with_session(session_id) do |s|
-          s[:agent] = agent
-          s[:ui]    = ui
+        @registry.with_session(original_id) do |s|
+          s[:agent]      = agent
+          s[:ui]         = ui
+          s[:idle_timer] = idle_timer
         end
 
-        session_id
+        original_id
+      end
+
+      # Build an IdleCompressionTimer for a session.
+      # Broadcasts session_update after successful compression so clients see the new cost.
+      private def build_idle_timer(session_id, agent)
+        Clacky::IdleCompressionTimer.new(
+          agent:           agent,
+          session_manager: @session_manager
+        ) do |_success|
+          broadcast_session_update(session_id)
+        end
       end
 
       # Mask API key for display: show first 8 + last 4 chars, middle replaced with ****
@@ -1591,15 +1788,23 @@ module Clacky
 
         pid = File.read(pid_file).strip.to_i
         return if pid <= 0
+        # After exec-restart, the new process inherits the same PID as the old one.
+        # Skip sending TERM to ourselves — we are already the new server.
+        if pid == Process.pid
+          Clacky::Logger.info("[Server] exec-restart detected (PID=#{pid}), skipping self-kill.")
+          return
+        end
 
         begin
           Process.kill("TERM", pid)
+          Clacky::Logger.info("[Server] Stopped existing server (PID=#{pid}) on port #{port}.")
           puts "Stopped existing server (PID: #{pid}) on port #{port}."
           # Give it a moment to release the port
           sleep 0.5
         rescue Errno::ESRCH
-          # Process already gone — nothing to do
+          Clacky::Logger.info("[Server] Existing server PID=#{pid} already gone.")
         rescue Errno::EPERM
+          Clacky::Logger.warn("[Server] Could not stop existing server (PID=#{pid}) — permission denied.")
           puts "Could not stop existing server (PID: #{pid}) — permission denied."
         ensure
           File.delete(pid_file) if File.exist?(pid_file)

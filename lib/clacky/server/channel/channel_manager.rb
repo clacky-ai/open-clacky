@@ -123,7 +123,9 @@ module Clacky
       def adapter_loop(adapter)
         Clacky::Logger.info("[ChannelManager] :#{adapter.platform_id} adapter loop started")
         adapter.start do |event|
-          Clacky::Logger.info("[ChannelManager] :#{adapter.platform_id} message from #{event[:user_id]} in #{event[:chat_id]}: #{event[:text].to_s[0, 80]}")
+          summary = event[:text].to_s.lines.first.to_s.strip[0, 80]
+          summary = "[image]" if summary.empty? && !event[:images].to_a.empty?
+          Clacky::Logger.info("[ChannelManager] :#{adapter.platform_id} message from #{event[:user_id]} in #{event[:chat_id]}: #{summary}")
           route_message(adapter, event)
         rescue StandardError => e
           Clacky::Logger.warn("[ChannelManager] Error routing :#{adapter.platform_id} message: #{e.message}\n#{e.backtrace.first(3).join("\n")}")
@@ -140,7 +142,8 @@ module Clacky
 
       def route_message(adapter, event)
         text = event[:text]&.strip
-        return if text.nil? || text.empty?
+        images = event[:images] || []
+        return if (text.nil? || text.empty?) && images.empty?
 
         session_id = resolve_session(event)
         unless session_id
@@ -166,6 +169,8 @@ module Clacky
         agent  = session[:agent]
         web_ui = session[:ui]
 
+        adapter.send_text(event[:chat_id], "⏳ Working...")
+
         channel_ui = ChannelUIController.new(event, adapter)
 
         # Subscribe channel UI to receive all agent output events
@@ -175,7 +180,7 @@ module Clacky
         task_thread = Thread.new do
           Thread.current.name = "channel-task-#{session_id[0, 8]}"
           @registry.update(session_id, status: :running)
-          agent.run(text)
+          agent.run(text, images: images)
         rescue StandardError => e
           warn "[ChannelManager] Agent error (#{session_id}): #{e.message}"
           channel_ui.show_error("Agent error: #{e.message}")

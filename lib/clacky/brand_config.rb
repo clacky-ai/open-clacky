@@ -468,6 +468,7 @@ module Clacky
       # Auto-detect whether the zip has a single root folder to strip.
       # Uses get_input_stream instead of entry.extract to avoid rubyzip 3.x
       # path-safety restrictions on absolute destination paths.
+      # Uses chunked read + size verification for robustness.
       Zip::File.open(tmp_zip) do |zip|
         entries  = zip.entries.reject(&:directory?)
         top_dirs = entries.map { |e| e.name.split("/").first }.uniq
@@ -485,7 +486,22 @@ module Clacky
 
           out = File.join(dest_dir, rel_path)
           FileUtils.mkdir_p(File.dirname(out))
-          File.open(out, "wb") { |f| f.write(entry.get_input_stream.read) }
+
+          # Chunked copy with size verification
+          written = 0
+          File.open(out, "wb") do |f|
+            entry.get_input_stream do |input|
+              while (chunk = input.read(65536))
+                f.write(chunk)
+                written += chunk.bytesize
+              end
+            end
+          end
+
+          # Verify file size matches ZIP entry declaration
+          if written != entry.size
+            raise "Size mismatch for #{entry.name}: expected #{entry.size}, got #{written}"
+          end
         end
       end
 

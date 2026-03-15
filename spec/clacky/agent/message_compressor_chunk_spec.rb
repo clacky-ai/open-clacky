@@ -168,8 +168,7 @@ RSpec.describe "Compression chunk MD archiving" do
                   enable_prompt_caching: false, max_tokens: 8192, verbose: false },
         stats: { total_iterations: 0, total_cost_usd: 0.0, total_tasks: 0,
                  last_status: "ok", previous_total_tokens: 0,
-                 cache_stats: {}, debug_logs: [] },
-        last_user_message: ""
+                 cache_stats: {}, debug_logs: [] }
       }
     end
 

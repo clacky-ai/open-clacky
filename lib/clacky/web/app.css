@@ -7,37 +7,38 @@
   --color-bg-hover: #1f2a44;
   --color-bg-input: #141a2b;
   --color-bg-card: #141a2b;
-  
+
   --color-border-primary: #1f2a44;
   --color-border-secondary: #1f2a44;
-  
+
   --color-text-primary: #e5e7eb;
   --color-text-secondary: #a3a9b8;
   --color-text-tertiary: #7e8594;
   --color-text-muted: #5c6270;
-  
+
   --color-accent-primary: #60a5fa;
   --color-accent-hover: #3d8bd8;
-  
+
   --color-success: #34d399;
   --color-success-bg: #0f2922;
   --color-success-border: #1a4033;
-  
+
   --color-error: #f87171;
   --color-error-bg: #2d1818;
   --color-error-border: #4d2020;
-  
+
   --color-warning: #f59e0b;
   --color-warning-bg: #2d1f00;
   --color-warning-border: #4d3200;
-  
+
   --color-button-primary: #60a5fa;
   --color-button-primary-hover: #3d8bd8;
-  
+  --color-button-primary-text: #ffffff;
+
   --color-info: #38bdf8;
   --color-secondary: #34d399;
   --color-accent-alt: #f472b6;
-  
+
   --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.3);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
   --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.5);
@@ -51,37 +52,38 @@
   --color-bg-hover: #e8ecef;
   --color-bg-input: #ffffff;
   --color-bg-card: #ffffff;
-  
+
   --color-border-primary: #e5e7eb;
   --color-border-secondary: #eaecef;
-  
+
   --color-text-primary: #1f2937;
   --color-text-secondary: #4b5563;
   --color-text-tertiary: #6b7280;
   --color-text-muted: #9ca3af;
-  
+
   --color-accent-primary: #3b82f6;
   --color-accent-hover: #2563eb;
-  
+
   --color-success: #10b981;
   --color-success-bg: #d1fae5;
   --color-success-border: #6ee7b7;
-  
+
   --color-error: #ef4444;
   --color-error-bg: #fee2e2;
   --color-error-border: #fca5a5;
-  
+
   --color-warning: #f59e0b;
   --color-warning-bg: #fef3c7;
   --color-warning-border: #fcd34d;
-  
+
   --color-button-primary: #3b82f6;
   --color-button-primary-hover: #2563eb;
-  
+  --color-button-primary-text: #ffffff;
+
   --color-info: #38bdf8;
   --color-secondary: #10b981;
   --color-accent-alt: #f59e0b;
-  
+
   --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.1);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.12);
   --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.15);
@@ -285,11 +287,11 @@ body {
 }
 
 /* ── Sidebar combined list ───────────────────────────────────────────────── */
-#sidebar-list { 
-  flex: 1; 
+#sidebar-list {
+  flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
-  display: flex; 
+  display: flex;
   flex-direction: column;
   min-height: 0;
 }
@@ -312,9 +314,9 @@ body {
 .sidebar-divider:first-child {
   margin-top: 0;
 }
-.sidebar-divider span { 
+.sidebar-divider span {
   flex: 1;
-  white-space: nowrap; 
+  white-space: nowrap;
 }
 /* Inline New Session button in Chat divider */
 .btn-new-inline {
@@ -418,11 +420,28 @@ body {
 }
 .session-item:hover .session-delete-btn { display: flex; }
 .session-delete-btn:hover { background: var(--color-error-bg); color: var(--color-error); }
+.session-rename-input {
+  width: 100%;
+  background: var(--color-bg-input, var(--color-bg-secondary));
+  border: 1px solid var(--color-border-focus, var(--color-accent));
+  border-radius: 3px;
+  color: var(--color-text-primary);
+  font-size: 13px;
+  padding: 0 4px;
+  outline: none;
+  box-sizing: border-box;
+}
 .session-name {
   font-size: 13px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+/* While renaming, lift overflow so the input is fully visible */
+.session-name:has(input),
+.session-name.renaming {
+  overflow: visible;
+  white-space: normal;
 }
 .session-meta { font-size: 11px; color: var(--color-text-secondary); margin-top: 3px; }
 .session-dot {
@@ -758,10 +777,10 @@ body {
 }
 
 /* ── Main area ───────────────────────────────────────────────────────────── */
-#main { 
-  flex: 1; 
-  display: flex; 
-  flex-direction: column; 
+#main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
   width: 100%;
   background: var(--color-bg-primary);
@@ -885,13 +904,123 @@ body {
 }
 .msg-user      { background: #3b82f6; color: #ffffff; align-self: flex-end; border-bottom-right-radius: 2px; }
 [data-theme="dark"] .msg-user { background: #2563eb; }
-.msg-assistant { background: var(--color-bg-secondary); border: 1px solid var(--color-border-primary); align-self: flex-start; white-space: pre-wrap; }
+.msg-assistant { background: var(--color-bg-secondary); border: 1px solid var(--color-border-primary); align-self: flex-start; }
+
+/* ── Markdown rendering inside assistant messages ────────────────────────── */
+.msg-assistant p          { margin: 0 0 0.6em; }
+.msg-assistant p:last-child { margin-bottom: 0; }
+.msg-assistant h1, .msg-assistant h2, .msg-assistant h3,
+.msg-assistant h4, .msg-assistant h5, .msg-assistant h6 {
+  margin: 0.8em 0 0.4em;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--color-text-primary);
+}
+.msg-assistant h1 { font-size: 1.25em; }
+.msg-assistant h2 { font-size: 1.1em; }
+.msg-assistant h3 { font-size: 1em; }
+.msg-assistant ul, .msg-assistant ol {
+  margin: 0.4em 0 0.6em 1.4em;
+  padding: 0;
+}
+.msg-assistant li { margin: 0.15em 0; }
+.msg-assistant li p { margin: 0; }
+.msg-assistant code {
+  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font-size: 0.88em;
+  background: var(--color-bg-tertiary);
+  border: 1px solid var(--color-border-primary);
+  border-radius: 3px;
+  padding: 0.1em 0.35em;
+}
+.msg-assistant pre {
+  background: var(--color-bg-primary);
+  border: 1px solid var(--color-border-primary);
+  border-radius: 6px;
+  padding: 12px 14px;
+  overflow-x: auto;
+  margin: 0.5em 0;
+  font-size: 0.85em;
+  line-height: 1.5;
+}
+.msg-assistant pre code {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: inherit;
+  border-radius: 0;
+}
+.msg-assistant blockquote {
+  border-left: 3px solid var(--color-accent-primary);
+  margin: 0.5em 0;
+  padding: 0.2em 0.8em;
+  color: var(--color-text-secondary);
+  background: var(--color-bg-tertiary);
+  border-radius: 0 4px 4px 0;
+}
+.msg-assistant blockquote p { margin: 0; }
+.msg-assistant table {
+  border-collapse: collapse;
+  margin: 0.5em 0;
+  font-size: 0.9em;
+  width: auto;
+  max-width: 100%;
+}
+.msg-assistant th, .msg-assistant td {
+  border: 1px solid var(--color-border-primary);
+  padding: 5px 10px;
+  text-align: left;
+}
+.msg-assistant th {
+  background: var(--color-bg-tertiary);
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+.msg-assistant tr:nth-child(even) { background: var(--color-bg-tertiary); }
+.msg-assistant a {
+  color: var(--color-accent-primary);
+  text-decoration: none;
+}
+.msg-assistant a:hover { text-decoration: underline; }
+.msg-assistant hr {
+  border: none;
+  border-top: 1px solid var(--color-border-primary);
+  margin: 0.8em 0;
+}
+.msg-assistant strong { font-weight: 600; color: var(--color-text-primary); }
+.msg-assistant em { font-style: italic; color: var(--color-text-secondary); }
 .msg-tool      { background: var(--color-bg-primary); border: 1px solid var(--color-border-primary); font-family: monospace; font-size: 12px; color: var(--color-text-secondary); align-self: flex-start; }
 .msg-info      { color: var(--color-text-secondary); font-size: 12px; align-self: center; font-style: italic; }
 .msg-error     { background: var(--color-error-bg); border: 1px solid var(--color-error); color: var(--color-error); align-self: flex-start; }
 .msg-success   { color: var(--color-success); align-self: flex-start; font-size: 13px; }
 .tool-name     { color: var(--color-warning); font-weight: 600; }
 .progress-msg  { color: var(--color-accent-primary); font-size: 12px; align-self: center; animation: pulse 1.2s infinite; }
+
+/* ── Token usage line ────────────────────────────────────────────────────── */
+.token-usage-line {
+  align-self: flex-start;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font-size: 11px;
+  color: var(--color-text-muted);
+  opacity: 0.7;
+  padding: 2px 4px;
+  margin-top: -8px;
+}
+.token-usage-line b { font-weight: 600; color: var(--color-text-secondary); }
+.tu-label { color: var(--color-text-tertiary); font-weight: 600; }
+.tu-sep   { color: var(--color-text-muted); opacity: 0.45; padding: 0 1px; }
+.tu-cache { color: var(--color-accent-primary); font-weight: 600; }   /* [*] */
+.tu-field { color: var(--color-text-muted); }
+.tu-cost  { color: var(--color-text-tertiary); }
+.tu-delta       { font-weight: 700; }
+.tu-delta-ok    { color: #34d399; }   /* green — normal */
+.tu-delta-mid   { color: #f59e0b; }   /* yellow — moderate */
+.tu-delta-high  { color: #f87171; }   /* red — large */
+.tu-delta-neg   { color: var(--color-accent-primary); }  /* cyan — compression */
 
 /* ── Tool group (collapsible tool call list) ─────────────────────────────── */
 .tool-group {
@@ -1013,6 +1142,55 @@ body {
   margin-bottom: 4px;
 }
 
+/* ── Session info bar (above input area, mirrors CLI bottom status bar) ─── */
+#session-info-bar {
+  display: flex;
+  align-items: center;
+  padding: 4px 14px;
+  background: var(--color-bg-primary);
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  font-family: var(--font-mono, monospace);
+  white-space: nowrap;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+#sib-id {
+  opacity: 0.5;
+  font-size: 10px;
+  letter-spacing: 0.03em;
+  flex-shrink: 0;
+}
+
+.sib-sep {
+  margin: 0 8px;
+  opacity: 0.25;
+  flex-shrink: 0;
+}
+
+.sib-status-idle    { color: var(--color-text-secondary); }
+.sib-status-running { color: var(--color-accent-primary); animation: sib-pulse 1s ease-in-out infinite; }
+.sib-status-error   { color: #e05f5f; }
+
+@keyframes sib-pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.35; }
+}
+
+#sib-dir {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 220px;
+  flex-shrink: 1;
+  min-width: 0;
+}
+
+#sib-mode  { opacity: 0.7; flex-shrink: 0; }
+#sib-model { opacity: 0.85; flex-shrink: 0; }
+#sib-tasks,
+#sib-cost  { flex-shrink: 0; }
+
 /* ── Input area (wraps preview strip + input bar) ────────────────────────── */
 #input-area {
   position: relative;
@@ -1126,7 +1304,7 @@ body {
   border: none;
   border-radius: 8px 8px 0 0;
   overflow: hidden;
-  box-shadow: 
+  box-shadow:
     0 -8px 12px -4px rgba(0, 0, 0, .12),
     -8px -4px 12px -4px rgba(0, 0, 0, .12),
     8px -4px 12px -4px rgba(0, 0, 0, .12);
@@ -1198,7 +1376,7 @@ body {
 
 /* ── Input bar ───────────────────────────────────────────────────────────── */
 #input-bar {
-  padding: 12px 16px;
+  padding: 13.5px 16px;
   display: flex;
   gap: 8px;
   align-items: center;
@@ -3089,3 +3267,314 @@ body {
   border: 1px dashed var(--color-border-primary);
   border-radius: 8px;
 }
+
+/* ── Version badge (inline in Settings row, right-aligned) ──────────────── */
+
+/* Settings button stretches to fill width; version badge pushes to the right */
+#btn-settings {
+  position: relative;
+}
+
+.version-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;        /* push to right inside flex btn-settings */
+  padding: 2px 6px;
+  border-radius: 4px;
+  cursor: default;
+  transition: background .15s;
+  flex-shrink: 0;
+}
+/* When actionable, clicking the badge opens the popover.
+   We intercept click on the badge span, stop propagation to avoid
+   opening the settings panel at the same time. */
+.version-badge.has-update,
+.version-badge.upgrade-done,
+.version-badge.is-upgrading { cursor: pointer; }
+
+.version-text {
+  font-size: 10.5px;
+  color: var(--color-text-muted);
+  font-family: monospace;
+  letter-spacing: 0.03em;
+  transition: color .15s;
+  line-height: 1;
+}
+/* Highlight version text when badge is actionable and btn is hovered */
+#btn-settings:hover .version-text { color: var(--color-text-tertiary); }
+.version-badge.has-update .version-text,
+.version-badge.upgrade-done .version-text { color: var(--color-accent-primary); }
+
+/* Amber pulsing dot — update available */
+.version-update-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--color-warning);
+  flex-shrink: 0;
+  box-shadow: 0 0 5px var(--color-warning);
+  animation: vbadge-pulse 2s ease-in-out infinite;
+}
+@keyframes vbadge-pulse {
+  0%, 100% { opacity: 1;   box-shadow: 0 0 5px var(--color-warning); }
+  50%       { opacity: 0.4; box-shadow: 0 0 2px var(--color-warning); }
+}
+
+/* Tiny spinning ring — upgrade in progress */
+.version-spinner {
+  width: 9px;
+  height: 9px;
+  border: 1.5px solid var(--color-border-primary);
+  border-top-color: var(--color-accent-primary);
+  border-radius: 50%;
+  flex-shrink: 0;
+  animation: vbadge-spin .7s linear infinite;
+}
+@keyframes vbadge-spin { to { transform: rotate(360deg); } }
+
+/* Orange bouncing dot — needs restart (upgrade done, waiting for restart) */
+.version-restart-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #f97316;   /* orange-500 */
+  flex-shrink: 0;
+  animation: vbadge-bounce 1s ease-in-out infinite;
+}
+@keyframes vbadge-bounce {
+  0%, 100% { transform: translateY(0);    opacity: 1;   }
+  50%       { transform: translateY(-3px); opacity: 0.7; }
+}
+
+/* Green check — restarted successfully */
+.version-done-check {
+  font-size: 10px;
+  color: #22c55e;
+  flex-shrink: 0;
+  line-height: 1;
+  animation: vbadge-popin .25s cubic-bezier(.34,1.56,.64,1) both;
+}
+@keyframes vbadge-popin {
+  from { transform: scale(0); opacity: 0; }
+  to   { transform: scale(1); opacity: 1; }
+}
+
+/* ── Upgrade popover (fixed, floats above badge) ─────────────────────────── */
+.vup {
+  position: fixed;
+  z-index: 9999;
+  width: 240px;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border-primary);
+  border-radius: 10px;
+  box-shadow: 0 8px 32px rgba(0,0,0,.22), 0 2px 8px rgba(0,0,0,.12);
+  padding: 14px 16px 12px;
+  display: none;
+  /* Slide-up + fade entrance */
+  opacity: 0;
+  transform: translateY(6px);
+  transition: opacity .18s ease, transform .18s ease;
+}
+.vup--visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+/* Tiny arrow pointing down toward badge */
+.vup::after {
+  content: "";
+  position: absolute;
+  bottom: -6px;
+  left: 20px;
+  width: 10px;
+  height: 10px;
+  background: var(--color-bg-secondary);
+  border-right: 1px solid var(--color-border-primary);
+  border-bottom: 1px solid var(--color-border-primary);
+  transform: rotate(45deg);
+}
+
+/* Confirm state */
+.vup-desc {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  line-height: 1.55;
+  margin: 0 0 8px;
+}
+.vup-versions {
+  font-size: 12px;
+  font-family: monospace;
+  color: var(--color-text-primary);
+  margin: 0 0 12px;
+  font-weight: 600;
+}
+.vup-arrow {
+  color: var(--color-accent-primary);
+  margin: 0 4px;
+}
+.vup-actions {
+  display: flex;
+  gap: 8px;
+}
+.vup-btn-primary {
+  flex: 1;
+  padding: 7px 0;
+  background: var(--color-button-primary);
+  color: var(--color-button-primary-text);
+  border: none;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background .15s, transform .1s;
+}
+.vup-btn-primary:hover  { background: var(--color-button-primary-hover); }
+.vup-btn-primary:active { transform: scale(.97); }
+.vup-btn-cancel {
+  padding: 7px 12px;
+  background: transparent;
+  color: var(--color-text-muted);
+  border: 1px solid var(--color-border-primary);
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background .15s, color .15s;
+}
+.vup-btn-cancel:hover { background: var(--color-bg-hover); color: var(--color-text-secondary); }
+
+/* Progress state */
+.vup-progress-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.vup-installing-label {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+/* Animated 3-dot ellipsis */
+.vup-installing-dot {
+  display: inline-flex;
+  gap: 3px;
+}
+.vup-installing-dot::before,
+.vup-installing-dot::after,
+.vup-installing-dot b {
+  content: "";
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--color-accent-primary);
+  animation: vup-bounce 1.2s ease-in-out infinite;
+}
+.vup-installing-dot::after  { animation-delay: .2s; }
+/* We use a pseudo trick — actual 3 dots via box-shadow instead */
+.vup-installing-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--color-accent-primary);
+  animation: vup-bounce 1.2s ease-in-out infinite;
+  box-shadow: 10px 0 0 var(--color-accent-primary), 20px 0 0 var(--color-accent-primary);
+  margin-right: 24px; /* make room for box-shadow dots */
+  flex-shrink: 0;
+}
+.vup-installing-dot::before,
+.vup-installing-dot::after { display: none; }
+
+/* Stagger the shadow dots via custom animation composition */
+.vup-installing-dot {
+  animation: vup-bounce1 1.2s ease-in-out infinite;
+}
+@keyframes vup-bounce1 {
+  0%, 80%, 100% { box-shadow: 10px 0 0 var(--color-accent-primary), 20px 0 0 var(--color-accent-primary); opacity: 1; }
+  40%            { box-shadow: 10px 0 0 var(--color-accent-primary), 20px 0 0 var(--color-accent-primary); opacity: .4; }
+}
+@keyframes vup-bounce { 0%, 80%, 100% { opacity: 1; } 40% { opacity: .3; } }
+
+.vup-log {
+  background: var(--color-bg-primary);
+  border: 1px solid var(--color-border-primary);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 10.5px;
+  font-family: monospace;
+  line-height: 1.5;
+  color: var(--color-text-muted);
+  max-height: 140px;
+  min-height: 60px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  margin: 0;
+}
+
+/* Done state */
+.vup-done-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+.vup-done-icon {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #22c55e;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  flex-shrink: 0;
+  animation: vbadge-popin .3s cubic-bezier(.34,1.56,.64,1) both;
+}
+.vup-btn-restart {
+  width: 100%;
+  padding: 9px 0;
+  background: var(--color-button-primary);
+  color: var(--color-button-primary-text);
+  border: none;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background .15s, transform .1s;
+  letter-spacing: .02em;
+}
+.vup-btn-restart:hover  { background: var(--color-button-primary-hover); }
+.vup-btn-restart:active { transform: scale(.97); }
+
+/* Reconnect state */
+.vup-reconnect {
+  text-align: center;
+  padding: 8px 0 4px;
+}
+.vup-reconnect-spinner {
+  width: 28px;
+  height: 28px;
+  border: 2.5px solid var(--color-border-primary);
+  border-top-color: var(--color-accent-primary);
+  border-radius: 50%;
+  animation: vbadge-spin .7s linear infinite;
+  margin: 0 auto 10px;
+}
+.vup-reconnect-msg {
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+/* Error state */
+.vup-error {
+  font-size: 12px;
+  color: var(--color-error, #ef4444);
+  margin: 0;
+  line-height: 1.5;
+}
+
+

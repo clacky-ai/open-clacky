@@ -13,7 +13,7 @@ RSpec.describe Clacky::Agent, "#fork_subagent" do
   end
   
   let(:client) { instance_double(Clacky::Client) }
-  let(:agent) { described_class.new(client, config, working_dir: Dir.pwd, ui: nil, profile: "coding") }
+  let(:agent) { described_class.new(client, config, working_dir: Dir.pwd, ui: nil, profile: "coding", session_id: Clacky::SessionManager.generate_id) }
 
   before do
     # Mock client to avoid actual API calls

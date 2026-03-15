@@ -10,6 +10,7 @@ require_relative "clacky/agent_config"
 require_relative "clacky/agent_profile"
 require_relative "clacky/providers"
 require_relative "clacky/session_manager"
+require_relative "clacky/idle_compression_timer"
 
 # Agent modules
 require_relative "clacky/agent/message_compressor"
@@ -29,6 +30,7 @@ require_relative "clacky/utils/path_helper"
 require_relative "clacky/utils/file_ignore_helper"
 require_relative "clacky/utils/string_matcher"
 require_relative "clacky/tools/base"
+require_relative "clacky/utils/file_attachment"
 
 require_relative "clacky/tools/shell"
 require_relative "clacky/tools/file_reader"

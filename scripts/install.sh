@@ -635,40 +635,9 @@ main() {
 # Install agent-browser (browser automation tool)
 # This step is optional — failures are silently skipped with a hint.
 install_agent_browser() {
-    print_step "Installing agent-browser (optional)..."
-
-    # Try to find npm; if missing, attempt to install Node.js via mise
-    if ! command_exists npm; then
-        if command_exists mise || [ -x "$HOME/.local/bin/mise" ]; then
-            print_info "Installing Node.js via mise..."
-            "$HOME/.local/bin/mise" install node@22 > /dev/null 2>&1 || true
-            "$HOME/.local/bin/mise" use -g node@22 > /dev/null 2>&1 || true
-            # Reload mise so node/npm are on PATH
-            eval "$("$HOME/.local/bin/mise" activate bash 2>/dev/null)" 2>/dev/null || true
-        fi
-    fi
-
-    if ! command_exists npm; then
-        print_warning "agent-browser skipped (Node.js/npm not found)."
-        print_info "To enable browser automation later:"
-        print_info "  mise install node@22 && mise use -g node@22 && npm install -g agent-browser"
-        return 0
-    fi
-
-    if command_exists agent-browser; then
-        print_success "agent-browser already installed"
-        return 0
-    fi
-
-    print_info "Running: npm install -g agent-browser"
-    if npm install -g agent-browser > /dev/null 2>&1; then
-        print_success "agent-browser installed"
-    else
-        print_warning "agent-browser installation failed — skipping."
-        print_info "To install manually later: npm install -g agent-browser"
-    fi
-
-    return 0
+    local script_dir
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    bash "$script_dir/install_agent_browser.sh" || true
 }
 
 # Post-installation information

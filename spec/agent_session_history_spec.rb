@@ -6,7 +6,7 @@ RSpec.describe "Agent session history" do
   describe "#get_recent_user_messages" do
     let(:client) { instance_double(Clacky::Client) }
     let(:config) { Clacky::AgentConfig.new }
-    let(:agent) { Clacky::Agent.new(client, config, working_dir: Dir.pwd, ui: nil, profile: "coding") }
+    let(:agent) { Clacky::Agent.new(client, config, working_dir: Dir.pwd, ui: nil, profile: "coding", session_id: Clacky::SessionManager.generate_id) }
 
     before do
       # Simulate a conversation with multiple user/assistant exchanges

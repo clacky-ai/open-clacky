@@ -38,35 +38,39 @@ Example (Chinese):
 > 嗨！我是你的专属 AI 助手 ⚡
 > 只需 30 秒完成个性化设置，我会问你两个简单问题。
 
-### 2. Ask the user's name (card)
+### 2. Ask the user to name the AI (card)
 
-Call `request_user_feedback` to get the user's preferred name.
+Call `request_user_feedback` to let the user pick or type a name for their AI assistant.
+Offer a few fun suggestions as options, plus a free-text fallback.
 
 If `lang == "zh"`, use:
 ```json
 {
-  "question": "先告诉我，我该怎么称呼你？"
+  "question": "先来点有意思的 —— 你想叫我什么名字？可以选一个，也可以直接输入你喜欢的：",
+  "options": ["🐟 摸鱼王", "📚 卷王", "🌟 小天才", "🐱 本喵", "🌅 拾光", "自己输入名字…"]
 }
 ```
 
 Otherwise (English):
 ```json
 {
-  "question": "First, what should I call you?"
+  "question": "Let's start with something fun — what would you like to call me? Pick one or type your own:",
+  "options": ["✨ Aria", "🤖 Max", "🌙 Luna", "⚡ Zap", "🎯 Ace", "Type your own name…"]
 }
 ```
 
-Store the reply as `user.name` (default `"there"` for English, `"朋友"` for Chinese if blank).
+If the user selects the last option or types a custom name, use that as-is. If they chose from the list, strip any emoji prefix.
+Store the result as `ai.name` (default `"Clacky"` if blank).
 
 ### 3. Collect AI personality (card)
 
 Call `request_user_feedback` with a card to set the assistant's personality.
-Address the user by `user.name` in the question.
+Address the AI by `ai.name` in the question.
 
 If `lang == "zh"`, use:
 ```json
 {
-  "question": "好的，[user.name]！来设置一下你的助手吧。",
+  "question": "好的！[ai.name] 应该是什么风格呢？",
   "options": [
     "🎯 专业型 — 精准、结构化、不废话",
     "😊 友好型 — 热情、鼓励、像一位博学的朋友",
@@ -79,7 +83,7 @@ If `lang == "zh"`, use:
 Otherwise (English):
 ```json
 {
-  "question": "Nice to meet you, [user.name]! Now let's set up your assistant.",
+  "question": "Great! What personality should [ai.name] have?",
   "options": [
     "🎯 Professional — Precise, structured, minimal filler",
     "😊 Friendly — Warm, encouraging, like a knowledgeable friend",
@@ -99,12 +103,12 @@ Store: `ai.personality`.
 
 ### 4. Collect user profile (card)
 
-Call `request_user_feedback` again.
+Call `request_user_feedback` again. This is where we learn about the user themselves.
 
 If `lang == "zh"`, use:
 ```json
 {
-  "question": "再简单了解一下你自己吧 —— 全部可选，随便填：\n• 职业\n• 最希望用 AI 做什么\n• 社交 / 作品链接（GitHub、微博、个人网站等）—— AI 会读取公开信息来了解你",
+  "question": "那你呢？随便聊聊自己吧 —— 全部可选，填多少都行：\n• 你的名字（我该怎么称呼你？）\n• 职业\n• 最希望用 AI 做什么\n• 社交 / 作品链接（GitHub、微博、个人网站等）—— 我会读取公开信息来更了解你",
   "options": []
 }
 ```
@@ -112,12 +116,13 @@ If `lang == "zh"`, use:
 Otherwise (English):
 ```json
 {
-  "question": "Now a bit about you — all optional, skip anything you like.\n• Occupation\n• What you want to use AI for most\n• Social / portfolio links (GitHub, Twitter/X, personal site…) — AI will read them to learn about you",
+  "question": "Now a bit about you — all optional, skip anything you like.\n• Your name (what should I call you?)\n• Occupation\n• What you want to use AI for most\n• Social / portfolio links (GitHub, Twitter/X, personal site…) — I'll read them to learn about you",
   "options": []
 }
 ```
 
 Parse the user's reply as free text; extract whatever they provide.
+Store the user's name as `user.name` (default `"老大"` for Chinese, `"Boss"` for English if blank).
 
 ### 5. Learn from links (if any)
 

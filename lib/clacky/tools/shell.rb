@@ -98,6 +98,12 @@ module Clacky
                   sleep 0.5
                   Process.kill('KILL', wait_thr.pid) if wait_thr.alive? rescue nil
 
+                  # Force-close stdout/stderr pipes so that any orphaned child
+                  # processes (e.g. backgrounded with &) that still hold the pipe
+                  # open don't keep popen3's block alive forever.
+                  stdout.close rescue nil
+                  stderr.close rescue nil
+
                   return format_timeout_result(
                     command,
                     stdout_buffer.string,
@@ -116,6 +122,8 @@ module Clacky
                   interaction = detect_interaction(stdout_buffer.string)
                   if interaction
                     Process.kill('TERM', wait_thr.pid) rescue nil
+                    stdout.close rescue nil
+                    stderr.close rescue nil
                     return format_waiting_input_result(
                       command,
                       stdout_buffer.string,
@@ -151,13 +159,32 @@ module Clacky
                 sleep 0.1
               end
 
-              begin
-                stdout_buffer.write(stdout.read)
-              rescue StandardError
-              end
-              begin
-                stderr_buffer.write(stderr.read)
-              rescue StandardError
+              # Drain any remaining output from pipes.
+              # We must NOT use a plain blocking stdout.read here because
+              # background processes launched with & inherit the pipe's write-end
+              # fd and keep it open, causing read to block forever even after the
+              # shell process itself has exited.
+              # Use a short non-blocking drain loop instead so we flush any
+              # buffered data without hanging indefinitely.
+              drain_deadline = Time.now + 2
+              [stdout, stderr].each do |io|
+                buf = io == stdout ? stdout_buffer : stderr_buffer
+                begin
+                  loop do
+                    remaining = drain_deadline - Time.now
+                    break if remaining <= 0
+                    ready = IO.select([io], nil, nil, [remaining, 0.1].min)
+                    break unless ready
+                    begin
+                      buf.write(io.read_nonblock(4096))
+                    rescue IO::WaitReadable
+                      # no data right now, keep looping until deadline
+                    rescue EOFError
+                      break # pipe closed cleanly
+                    end
+                  end
+                rescue StandardError
+                end
               end
 
               stdout_output = stdout_buffer.string

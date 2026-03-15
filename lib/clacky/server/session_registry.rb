@@ -1,11 +1,14 @@
 # frozen_string_literal: true
 
-require "securerandom"
-
 module Clacky
   module Server
-    # SessionRegistry manages multiple in-memory Agent sessions for the web server.
-    # Each session holds an Agent instance, its WebUIController, and metadata.
+    # SessionRegistry manages runtime state for active Agent sessions in the web server.
+    # Each entry holds the Agent instance plus web-server-specific runtime fields that
+    # the Agent itself doesn't own: status, error, execution thread, UI controller, and
+    # transient scheduling fields (pending_task / pending_working_dir).
+    #
+    # Fields that already live on the Agent (name, created_at, working_dir, total_tasks,
+    # total_cost) are read directly from the agent — the registry never duplicates them.
     #
     # Thread safety: all public methods are protected by a Mutex.
     class SessionRegistry
@@ -16,21 +19,23 @@ module Clacky
         @mutex    = Mutex.new
       end
 
-      # Create a new session and return its id.
-      # Pass session_id to reuse an existing id (e.g. when restoring a persisted session).
-      def create(name: nil, working_dir: Dir.pwd, session_id: nil)
-        session_id ||= SecureRandom.hex(8)
+      # Create a new session entry and return its id.
+      # session_id must come from the caller (use SessionManager.generate_id).
+      # agent/ui/thread are set later via with_session once they are constructed.
+      def create(session_id:)
+        raise ArgumentError, "session_id is required" if session_id.nil? || session_id.empty?
+
         session = {
-          id:          session_id,
-          name:        name || "Session #{Time.now.strftime('%H:%M')}",
-          working_dir: working_dir,
-          status:      :idle,         # :idle | :running | :error
-          created_at:  Time.now,
-          updated_at:  Time.now,
-          agent:       nil,
-          ui:          nil,
-          thread:      nil,
-          error:       nil
+          id:                   session_id,
+          status:               :idle,   # :idle | :running | :error
+          error:                nil,
+          updated_at:           Time.now,
+          agent:                nil,
+          ui:                   nil,
+          thread:               nil,
+          idle_timer:           nil,     # IdleCompressionTimer instance
+          pending_task:         nil,
+          pending_working_dir:  nil
         }
 
         @mutex.synchronize { @sessions[session_id] = session }
@@ -42,7 +47,8 @@ module Clacky
         @mutex.synchronize { @sessions[session_id]&.dup }
       end
 
-      # Update arbitrary fields of a session.
+      # Update arbitrary runtime fields of a session (status, error, pending_*, etc.).
+      # Always stamps updated_at.
       def update(session_id, **fields)
         @mutex.synchronize do
           session = @sessions[session_id]
@@ -55,9 +61,11 @@ module Clacky
       end
 
       # Return a lightweight summary list (no agent/ui/thread objects) for API responses.
+      # Sorted newest-first using agent.created_at (ISO8601 strings sort lexicographically).
       def list
         @mutex.synchronize do
-          @sessions.values.map { |s| session_summary(s) }
+          @sessions.values
+                   .map { |s| session_summary(s) }
                    .sort_by { |s| s[:created_at] }
                    .reverse
         end
@@ -69,7 +77,7 @@ module Clacky
           session = @sessions.delete(session_id)
           return false unless session
 
-          # Interrupt running thread if present
+          session[:idle_timer]&.cancel
           session[:thread]&.raise(Clacky::AgentInterrupted, "Session deleted")
           true
         end
@@ -81,7 +89,7 @@ module Clacky
       end
 
       # Execute a block with exclusive access to the raw session hash.
-      # Use this to set agent/ui/thread references that shouldn't be dup'd.
+      # Use this to set agent/ui/thread references that must not be dup'd.
       def with_session(session_id)
         @mutex.synchronize do
           session = @sessions[session_id]
@@ -103,18 +111,23 @@ module Clacky
 
       private
 
+      # Build a summary hash for API responses, reading authoritative fields from the
+      # agent and runtime-only fields from the registry entry.
       def session_summary(session)
-        agent = session[:agent]
+        agent      = session[:agent]
+        model_info = agent&.current_model_info
         {
-          id:          session[:id],
-          name:        session[:name],
-          working_dir: session[:working_dir],
-          status:      session[:status],
-          created_at:  session[:created_at].iso8601,
-          updated_at:  session[:updated_at].iso8601,
-          total_tasks: agent&.total_tasks || 0,
-          total_cost:  agent&.total_cost  || 0.0,
-          error:       session[:error]
+          id:              session[:id],
+          name:            agent&.name        || "",
+          working_dir:     agent&.working_dir || "",
+          status:          session[:status],
+          created_at:      agent&.created_at  || session[:updated_at].iso8601,
+          updated_at:      session[:updated_at].iso8601,
+          total_tasks:     agent&.total_tasks || 0,
+          total_cost:      agent&.total_cost  || 0.0,
+          error:           session[:error],
+          model:           model_info&.dig(:model) || "",
+          permission_mode: agent&.permission_mode || ""
         }
       end
     end

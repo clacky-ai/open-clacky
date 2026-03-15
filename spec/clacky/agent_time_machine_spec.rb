@@ -19,7 +19,7 @@ RSpec.describe "Clacky::Agent TimeMachine" do
   end
 
   let(:working_dir) { Dir.mktmpdir("clacky_time_machine_test") }
-  let(:agent) { Clacky::Agent.new(client, config, working_dir: working_dir, ui: nil, profile: "coding") }
+  let(:agent) { Clacky::Agent.new(client, config, working_dir: working_dir, ui: nil, profile: "coding", session_id: Clacky::SessionManager.generate_id) }
 
   # Helper to get snapshot directory for a task
   def snapshot_dir(task_id)
@@ -391,7 +391,7 @@ RSpec.describe "Clacky::Agent TimeMachine" do
       session_data = agent.to_session_data(status: :success)
       
       # Create new agent and restore
-      new_agent = Clacky::Agent.new(client, config, working_dir: working_dir, ui: nil, profile: "coding")
+      new_agent = Clacky::Agent.new(client, config, working_dir: working_dir, ui: nil, profile: "coding", session_id: Clacky::SessionManager.generate_id)
       new_agent.restore_session(session_data)
       
       expect(new_agent.instance_variable_get(:@current_task_id)).to eq(2)

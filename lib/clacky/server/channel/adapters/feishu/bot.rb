@@ -11,6 +11,7 @@ module Clacky
         # Handles authentication, message sending, and API calls.
         class Bot
           API_TIMEOUT = 10
+          DOWNLOAD_TIMEOUT = 60
 
           def initialize(app_id:, app_secret:, domain: DEFAULT_DOMAIN)
             @app_id = app_id
@@ -54,6 +55,34 @@ module Clacky
           rescue => e
             warn "Failed to update message: #{e.message}"
             false
+          end
+
+          # Download a message resource (image or file) from Feishu.
+          # For message attachments, must use messageResource API — not im/v1/images.
+          # @param message_id [String] Message ID containing the resource
+          # @param file_key [String] Resource key (image_key or file_key from message content)
+          # @param type [String] "image" or "file"
+          # @return [Hash] { body: String, content_type: String }
+          def download_message_resource(message_id, file_key, type: "image")
+            conn = Faraday.new(url: @domain) do |f|
+              f.options.timeout = DOWNLOAD_TIMEOUT
+              f.options.open_timeout = API_TIMEOUT
+              f.ssl.verify = false
+              f.adapter Faraday.default_adapter
+            end
+            response = conn.get("/open-apis/im/v1/messages/#{message_id}/resources/#{file_key}") do |req|
+              req.headers["Authorization"] = "Bearer #{tenant_access_token}"
+              req.params["type"] = type
+            end
+
+            unless response.success?
+              raise "Failed to download message resource: HTTP #{response.status}"
+            end
+
+            {
+              body: response.body,
+              content_type: response.headers["content-type"].to_s.split(";").first.strip
+            }
           end
 
           private

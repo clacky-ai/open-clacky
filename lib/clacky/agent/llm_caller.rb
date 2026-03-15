@@ -44,8 +44,11 @@ module Clacky
           @ui&.clear_progress
         end
 
-        # Track cost for all LLM calls
-        track_cost(response[:usage], raw_api_usage: response[:raw_api_usage])
+        # Track cost and collect token usage data.
+        # token_data is returned to the caller so it can be displayed
+        # after show_assistant_message (ensuring correct ordering in WebUI).
+        token_data = track_cost(response[:usage], raw_api_usage: response[:raw_api_usage])
+        response[:token_usage] = token_data
 
         response
       end

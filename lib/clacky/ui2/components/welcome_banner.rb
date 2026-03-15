@@ -2,6 +2,7 @@
 
 require "pastel"
 require_relative "../../version"
+require_relative "../block_font"
 
 module Clacky
   module UI2
@@ -32,9 +33,6 @@ module Clacky
 
         # Minimum terminal width required for full logo display
         MIN_WIDTH_FOR_LOGO = 90
-
-        # Artii font used for brand name generation
-        ARTII_FONT = "big"
 
         def initialize
           @pastel = Pastel.new
@@ -115,7 +113,7 @@ module Clacky
         private def logo_content(width)
           brand = brand_config
           if brand.branded?
-            generate_brand_logo(brand.brand_name, width)
+            generate_brand_logo(brand, width)
           else
             if width >= MIN_WIDTH_FOR_LOGO
               @pastel.bright_green(LOGO)
@@ -125,28 +123,31 @@ module Clacky
           end
         end
 
-        # Generate a brand-name ASCII art logo using artii.
-        # Falls back gracefully when artii is unavailable or terminal too narrow.
-        private def generate_brand_logo(brand_name, width)
-          art = artii_render(brand_name)
+        # Generate a brand logo using BlockFont (Unicode █ ╗ ╔ style).
+        # Renders brand_command as the big ASCII art logo.
+        # Shows brand_name as a subtitle when it differs from brand_command.
+        # Falls back to plain brand_name text when terminal is too narrow.
+        private def generate_brand_logo(brand, width)
+          # Use brand_command as the renderable ASCII-safe identifier for the logo.
+          # brand_name may contain CJK or special characters unsuitable for block art.
+          render_key = brand.brand_command.to_s.strip
+          render_key = brand.brand_name.to_s.strip if render_key.empty?
 
-          if art && art_fits?(art, width)
-            @pastel.bright_green(art)
-          elsif art
-            # Terminal too narrow for full art — centre-clip or use plain fallback
-            @pastel.bright_green(brand_name)
+          art = UI2::BlockFont.render(render_key)
+
+          lines = []
+          if !art.strip.empty? && art_fits?(art, width)
+            lines << @pastel.bright_green(art)
           else
-            @pastel.bright_green(brand_name)
+            lines << @pastel.bright_green(render_key)
           end
-        end
 
-        # Render text using artii. Returns nil on any failure.
-        private def artii_render(text)
-          require "artii"
-          a = Artii::Base.new(font: ARTII_FONT)
-          a.asciify(text)
-        rescue LoadError, StandardError
-          nil
+          # Show brand_name as subtitle when it differs from the render key
+          if brand.brand_name.to_s.strip != render_key
+            lines << @pastel.bright_cyan("    #{brand.brand_name}")
+          end
+
+          lines.join("\n")
         end
 
         # Check whether the ASCII art fits within the terminal width.

@@ -54,21 +54,30 @@ module Clacky
             sender = event["sender"]
             return nil unless message && sender
 
-            # Only handle text messages for now
             msg_type = message["message_type"]
-            return nil unless msg_type == "text"
+            return nil unless %w[text image file].include?(msg_type)
 
-            # Parse message content
             content_raw = message["content"]
             return nil unless content_raw
 
             content = JSON.parse(content_raw)
-            text = content["text"].to_s.strip
-            return nil if text.empty?
+            text = ""
+            image_keys = []
+            file_attachments = []
 
-            # Remove @bot mentions from text
-            text = strip_mentions(text)
-            return nil if text.strip.empty?
+            case msg_type
+            when "text"
+              text = strip_mentions(content["text"].to_s.strip)
+              return nil if text.empty?
+            when "image"
+              image_keys = [content["image_key"]].compact
+              return nil if image_keys.empty?
+            when "file"
+              file_key = content["file_key"]
+              file_name = content["file_name"]
+              return nil unless file_key
+              file_attachments = [{ key: file_key, name: file_name.to_s }]
+            end
 
             chat_id = message["chat_id"]
             message_id = message["message_id"]
@@ -83,6 +92,8 @@ module Clacky
               chat_id: chat_id,
               user_id: user_id,
               text: text,
+              image_keys: image_keys,
+              file_attachments: file_attachments,
               message_id: message_id,
               timestamp: timestamp,
               chat_type: chat_type,
