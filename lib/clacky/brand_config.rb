@@ -166,6 +166,13 @@ module Clacky
         # Server returns "owner_user_id" for system licenses; plan-based licenses return nil.
         owner_uid = data["owner_user_id"]
         @license_user_id = owner_uid.to_s.strip if owner_uid && !owner_uid.to_s.strip.empty?
+        # Pin the device_id used in this activation request so that future API calls
+        # (e.g. skill_keys, heartbeat) always send the exact same device_id that was
+        # recorded in activated_devices on the server side.
+        # If the server echoes back device_id in the response, prefer that value;
+        # otherwise keep the one we just sent (@device_id is already set above).
+        server_device_id = data["device_id"].to_s.strip
+        @device_id = server_device_id unless server_device_id.empty?
         apply_distribution(data["distribution"])
         save
         { success: true, message: "License activated successfully!", brand_name: @brand_name,
@@ -186,6 +193,8 @@ module Clacky
     # Returns the same { success:, message:, brand_name:, data: } shape as activate!
     def activate_mock!(license_key)
       @license_key = license_key.strip
+      # Pin a stable device_id for this activation. Once set (from a prior load or
+      # a previous call), never regenerate — the same rule as activate!.
       @device_id ||= generate_device_id
 
       # Always derive brand_name fresh from the key in mock mode,
@@ -862,6 +871,19 @@ module Clacky
         return cached[:key] if key_valid && within_grace
       end
 
+      # Guard: @device_id must match the value recorded in activated_devices on the
+      # server.  If it is nil (e.g. loaded from a brand.yml that predates the
+      # device_id field), reload from disk as a last-chance recovery — the file
+      # may have been written by a concurrent process or a newer gem version.
+      # If still nil after reload, raise an actionable error rather than sending
+      # an empty device_id that will always be rejected by the server.
+      if @device_id.nil? || @device_id.strip.empty?
+        reloaded = BrandConfig.load
+        @device_id = reloaded.device_id if reloaded.device_id && !reloaded.device_id.strip.empty?
+      end
+      raise "Device ID is missing. Please re-activate your license with `clacky license activate`." \
+        if @device_id.nil? || @device_id.strip.empty?
+
       # Build signed request payload
       user_id   = parse_user_id_from_key(@license_key)
       key_hash  = Digest::SHA256.hexdigest(@license_key)
@@ -920,7 +942,19 @@ module Clacky
       hex[0..7].to_i(16)
     end
 
-    # Generate a stable device ID based on system identifiers.
+    # Generate a one-time stable device ID based on system identifiers.
+    #
+    # IMPORTANT: This method MUST only be called once — during the very first
+    # activation — via `@device_id ||= generate_device_id`.  The result is
+    # immediately persisted to brand.yml by `save`.  All subsequent calls
+    # (heartbeat, skill_keys, etc.) must read @device_id from memory (which was
+    # populated by `initialize` from the stored brand.yml), never call this
+    # method again.
+    #
+    # The generated ID is deterministic for the same environment, but can change
+    # if the hostname, user, or platform changes (e.g. inside a Docker container
+    # with a random hostname).  That is why we pin it to disk immediately and
+    # never regenerate once saved.
     private def generate_device_id
       components = [
         Socket.gethostname,

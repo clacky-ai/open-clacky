@@ -64,6 +64,40 @@ command_exists() {
     command -v "$1" >/dev/null 2>&1
 }
 
+# Detect current shell type based on $SHELL environment variable
+# Sets CURRENT_SHELL (e.g. "zsh", "bash", "fish") and SHELL_RC (rc file path)
+detect_shell() {
+    local shell_name
+    shell_name=$(basename "$SHELL")
+
+    case "$shell_name" in
+        zsh)
+            CURRENT_SHELL="zsh"
+            SHELL_RC="$HOME/.zshrc"
+            ;;
+        bash)
+            CURRENT_SHELL="bash"
+            # macOS uses ~/.bash_profile; Linux uses ~/.bashrc
+            if [ "$OS" = "macOS" ]; then
+                SHELL_RC="$HOME/.bash_profile"
+            else
+                SHELL_RC="$HOME/.bashrc"
+            fi
+            ;;
+        fish)
+            CURRENT_SHELL="fish"
+            SHELL_RC="$HOME/.config/fish/config.fish"
+            ;;
+        *)
+            # Fallback: treat as bash
+            CURRENT_SHELL="bash"
+            SHELL_RC="$HOME/.bashrc"
+            ;;
+    esac
+
+    print_info "Detected shell: $CURRENT_SHELL (rc file: $SHELL_RC)"
+}
+
 # ---------------------------------------------------------------------------
 # Network pre-flight check
 #
@@ -256,23 +290,23 @@ install_macos_dependencies() {
     fi
 
     # Install mise for Ruby version management
+    # Detect current shell before configuring mise
+    detect_shell
+
     print_info "Installing mise..."
     if ! command_exists mise; then
         if curl https://mise.run | sh; then
-            # Add mise to shell (create file if not exists, append if exists)
-            if [ -f ~/.zshrc ]; then
-                echo 'eval "$(~/.local/bin/mise activate zsh)"' >> ~/.zshrc
+            # Add mise activation to the current shell's rc file
+            local mise_init_line='eval "$(~/.local/bin/mise activate '"$CURRENT_SHELL"')"'
+            if [ -f "$SHELL_RC" ]; then
+                echo "$mise_init_line" >> "$SHELL_RC"
             else
-                echo 'eval "$(~/.local/bin/mise activate zsh)"' > ~/.zshrc
+                echo "$mise_init_line" > "$SHELL_RC"
             fi
-            if [ -f ~/.bash_profile ]; then
-                echo 'eval "$(~/.local/bin/mise activate bash)"' >> ~/.bash_profile
-            else
-                echo 'eval "$(~/.local/bin/mise activate bash)"' > ~/.bash_profile
-            fi
+            print_info "Added mise activation to $SHELL_RC"
 
             export PATH="$HOME/.local/bin:$PATH"
-            eval "$(~/.local/bin/mise activate bash)"
+            eval "$(~/.local/bin/mise activate $CURRENT_SHELL)"
 
             print_success "mise installed successfully"
         else
@@ -286,8 +320,8 @@ install_macos_dependencies() {
     # Install Ruby 3 via mise
     print_info "Installing Ruby 3 via mise..."
     if ~/.local/bin/mise use -g ruby@3; then
-        # Reload mise
-        eval "$(~/.local/bin/mise activate bash)"
+        # Reload mise using the current shell
+        eval "$(~/.local/bin/mise activate $CURRENT_SHELL)"
         print_success "Ruby 3 installed successfully"
     else
         print_error "Failed to install Ruby 3"
@@ -326,17 +360,24 @@ install_ubuntu_dependencies() {
         return 1
     fi
 
+    # Detect current shell before configuring mise
+    detect_shell
+
     # Install mise for Ruby version management
     print_info "Installing mise..."
     if ! command_exists mise; then
         if curl https://mise.run | sh; then
-            # Add mise to shell
-            if [ -f ~/.bashrc ]; then
-                echo 'eval "$(~/.local/bin/mise activate bash)"' >> ~/.bashrc
+            # Add mise activation to the current shell's rc file
+            local mise_init_line='eval "$(~/.local/bin/mise activate '"$CURRENT_SHELL"')"'
+            if [ -f "$SHELL_RC" ]; then
+                echo "$mise_init_line" >> "$SHELL_RC"
+            else
+                echo "$mise_init_line" > "$SHELL_RC"
             fi
+            print_info "Added mise activation to $SHELL_RC"
 
             export PATH="$HOME/.local/bin:$PATH"
-            eval "$(~/.local/bin/mise activate bash)"
+            eval "$(~/.local/bin/mise activate $CURRENT_SHELL)"
 
             print_success "mise installed successfully"
         else
@@ -350,8 +391,8 @@ install_ubuntu_dependencies() {
     # Install Ruby 3 via mise
     print_info "Installing Ruby 3 via mise..."
     if ~/.local/bin/mise use -g ruby@3; then
-        # Reload mise
-        eval "$(~/.local/bin/mise activate bash)"
+        # Reload mise using the current shell
+        eval "$(~/.local/bin/mise activate $CURRENT_SHELL)"
         print_success "Ruby 3 installed successfully"
     else
         print_error "Failed to install Ruby 3"
