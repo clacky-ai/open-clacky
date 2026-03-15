@@ -191,7 +191,15 @@ module Clacky
                 name     = tc[:name] || tc.dig(:function, :name) || ""
                 args_raw = tc[:arguments] || tc.dig(:function, :arguments) || {}
                 args     = args_raw.is_a?(String) ? (JSON.parse(args_raw) rescue args_raw) : args_raw
-                ui.show_tool_call(name, args)
+
+                # Special handling: request_user_feedback question is shown as an
+                # assistant message (matching real-time behavior), not as a tool call.
+                if name == "request_user_feedback"
+                  question = args.is_a?(Hash) ? (args[:question] || args["question"]).to_s : ""
+                  ui.show_assistant_message(question) unless question.empty?
+                else
+                  ui.show_tool_call(name, args)
+                end
               end
 
               # Emit token usage stored on this message (for history replay display)
