@@ -126,92 +126,9 @@
   <!-- ── MAIN ─────────────────────────────────────────────────────────── -->
   <main id="main">
 
-    <!-- Onboard panel (shown on first run) -->
-    <div id="onboard-panel" style="display:none">
-      <div id="onboard-inner">
-        <div class="onboard-logo"></div>
-        <h1 class="onboard-title" id="onboard-title" data-i18n="onboard.title" data-i18n-vars="brand={{BRAND_NAME}}">Welcome to {{BRAND_NAME}}</h1>
-        <p class="onboard-subtitle" id="onboard-subtitle" data-i18n="onboard.subtitle">Let's get you set up in a minute.</p>
 
-        <!-- Phase 0: Language selection -->
-        <div id="onboard-phase-lang">
-          <p class="onboard-phase-title" data-i18n="onboard.lang.prompt">Choose your language</p>
-          <div class="onboard-lang-btns">
-            <button id="onboard-btn-lang-en" class="onboard-lang-btn active">English</button>
-            <button id="onboard-btn-lang-zh" class="onboard-lang-btn">中文</button>
-          </div>
-          <div class="onboard-actions">
-            <button id="onboard-btn-lang-next" class="onboard-btn-primary" data-i18n="onboard.key.btn.test" style="margin-top:8px">Continue →</button>
-          </div>
-        </div>
-
-        <!-- Step indicators -->
-        <div id="onboard-steps" style="display:none">
-          <div class="onboard-step active" id="step-dot-1">1</div>
-          <div class="onboard-step-line"></div>
-          <div class="onboard-step" id="step-dot-2">2</div>
-        </div>
-
-        <!-- Phase 1: Key setup -->
-        <div id="onboard-phase-key" style="display:none">
-          <p class="onboard-phase-title" data-i18n="onboard.key.title">Connect your AI model</p>
-
-          <!-- Provider quick-select -->
-          <div class="onboard-field">
-            <label class="onboard-label" data-i18n="onboard.key.provider">Provider</label>
-            <div class="custom-select-wrapper" id="onboard-provider-wrapper">
-              <div class="custom-select-trigger">
-                <span class="custom-select-value placeholder">— Choose provider —</span>
-                <svg class="custom-select-arrow" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
-                </svg>
-              </div>
-              <div class="custom-select-dropdown" id="onboard-provider-dropdown">
-                <div class="custom-select-option" data-value="">— Choose provider —</div>
-              </div>
-            </div>
-          </div>
-          <div class="onboard-field">
-            <label class="onboard-label" data-i18n="onboard.key.model">Model</label>
-            <input id="onboard-model" type="text" class="onboard-input" data-i18n-placeholder="settings.models.placeholder.model" placeholder="e.g. claude-sonnet-4-5">
-          </div>
-          <div class="onboard-field">
-            <label class="onboard-label" data-i18n="onboard.key.baseurl">Base URL</label>
-            <input id="onboard-base-url" type="text" class="onboard-input" data-i18n-placeholder="settings.models.placeholder.baseurl" placeholder="https://api.anthropic.com">
-          </div>
-          <div class="onboard-field">
-            <label class="onboard-label" data-i18n="onboard.key.apikey">API Key</label>
-            <div class="onboard-input-row">
-              <input id="onboard-api-key" type="password" class="onboard-input" data-i18n-placeholder="settings.models.placeholder.apikey" placeholder="sk-…">
-              <button id="onboard-toggle-key" class="btn-toggle-key" title="Show/hide">
-                <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path>
-                </svg>
-              </button>
-            </div>
-          </div>
-
-          <div id="onboard-test-result" class="onboard-test-result"></div>
-
-          <div class="onboard-actions">
-            <button id="onboard-btn-test" class="onboard-btn-primary" data-i18n="onboard.key.btn.test">Test & Continue →</button>
-          </div>
-        </div>
-
-        <!-- Phase 2: Soul setup -->
-        <div id="onboard-phase-soul" style="display:none">
-          <p class="onboard-phase-title" data-i18n="onboard.soul.title">Personalize your assistant</p>
-          <p class="onboard-phase-desc" data-i18n="onboard.soul.desc">
-            Takes about 30 seconds. You'll be asked two quick questions via interactive cards.
-          </p>
-          <div class="onboard-actions onboard-actions-split">
-            <button id="onboard-btn-start-soul" class="onboard-btn-primary" data-i18n="onboard.soul.btn.start">Let's go →</button>
-            <button id="onboard-btn-skip" class="onboard-btn-secondary" data-i18n="onboard.soul.btn.skip">Skip for now</button>
-          </div>
-        </div>
-      </div>
-    </div>
+    <!-- Onboard panel: kept as empty shell (soul_setup auto-launches /onboard session) -->
+    <div id="onboard-panel" style="display:none"></div>
 
     <!-- Welcome screen -->
     <div id="welcome" class="centered">
@@ -473,6 +390,90 @@
   </div><!-- end #content-row -->
 
 </div><!-- end #app -->
+
+<!-- Setup panel: first-run mandatory setup (language + API key).
+     Rendered as a fixed full-screen overlay so the sidebar is hidden. -->
+<div id="setup-panel" style="display:none">
+  <div id="setup-card">
+
+    <!-- Header: logo + brand + subtitle -->
+    <div id="setup-header">
+      <div id="setup-logo">✦</div>
+      <h1 id="setup-title" data-i18n="onboard.title" data-i18n-vars="brand={{BRAND_NAME}}">Welcome to {{BRAND_NAME}}</h1>
+      <p id="setup-subtitle" data-i18n="onboard.subtitle">Let's get you set up in a minute.</p>
+    </div>
+
+    <!-- Step indicators -->
+    <div id="setup-steps">
+      <div class="setup-step active" id="setup-dot-1"><span>1</span></div>
+      <div class="setup-step-line"></div>
+      <div class="setup-step" id="setup-dot-2"><span>2</span></div>
+    </div>
+
+    <!-- Step 1: Language selection -->
+    <div id="setup-phase-lang">
+      <p class="setup-phase-label" data-i18n="onboard.lang.prompt">Choose your language</p>
+      <div id="setup-lang-row">
+        <div id="setup-lang-btns">
+          <button id="setup-btn-lang-en" class="setup-lang-btn">English</button>
+          <button id="setup-btn-lang-zh" class="setup-lang-btn active">中文</button>
+        </div>
+        <button id="setup-btn-lang-next" class="setup-next-btn" data-i18n="onboard.lang.next">Continue →</button>
+      </div>
+    </div>
+
+    <!-- Step 2: API Key setup -->
+    <div id="setup-phase-key" style="display:none">
+      <p class="setup-phase-label" data-i18n="onboard.key.title">Connect your AI model</p>
+
+      <div class="setup-field">
+        <label class="setup-label" data-i18n="onboard.key.provider">Provider</label>
+        <div class="custom-select-wrapper" id="setup-provider-wrapper">
+          <div class="custom-select-trigger">
+            <span class="custom-select-value placeholder">— Choose provider —</span>
+            <svg class="custom-select-arrow" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+            </svg>
+          </div>
+          <div class="custom-select-dropdown" id="setup-provider-dropdown">
+            <div class="custom-select-option" data-value="">— Choose provider —</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="setup-field">
+        <label class="setup-label" data-i18n="onboard.key.model">Model</label>
+        <input id="setup-model" type="text" class="setup-input" data-i18n-placeholder="settings.models.placeholder.model" placeholder="e.g. claude-sonnet-4-5">
+      </div>
+
+      <div class="setup-field">
+        <label class="setup-label" data-i18n="onboard.key.baseurl">Base URL</label>
+        <input id="setup-base-url" type="text" class="setup-input" data-i18n-placeholder="settings.models.placeholder.baseurl" placeholder="https://api.anthropic.com">
+      </div>
+
+      <div class="setup-field">
+        <label class="setup-label" data-i18n="onboard.key.apikey">API Key</label>
+        <div class="setup-input-row">
+          <input id="setup-api-key" type="password" class="setup-input" data-i18n-placeholder="settings.models.placeholder.apikey" placeholder="sk-…">
+          <button id="setup-toggle-key" class="btn-toggle-key" title="Show/hide">
+            <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path>
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      <div id="setup-test-result" class="setup-test-result"></div>
+
+      <div class="setup-key-actions">
+        <button id="setup-btn-back" class="setup-back-btn" data-i18n="onboard.key.btn.back">← Back</button>
+        <button id="setup-btn-test" class="setup-submit-btn" data-i18n="onboard.key.btn.test">Test & Continue →</button>
+      </div>
+    </div>
+
+  </div>
+</div>
 
 <!-- ── CONFIRMATION MODAL ────────────────────────────────────────────────── -->
 <div id="modal-overlay" class="modal-overlay" style="display:none">

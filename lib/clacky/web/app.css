@@ -1708,6 +1708,7 @@ body {
   font-size: 13px;
   font-family: inherit;
   width: 100%;
+  box-sizing: border-box;
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -2481,6 +2482,292 @@ body {
 /* ── Skills sidebar section ──────────────────────────────────────────────── */
 #skill-list-items { padding: 0 8px 8px; display: flex; flex-direction: column; gap: 2px; }
 
+/* ── Setup panel (full-screen, covers sidebar — mandatory first-run) ─────── */
+/* Setup panel background — decorative gradient so transparency has something to show */
+body.setup-mode {
+  background: linear-gradient(135deg,
+    #dbeafe 0%,
+    #ede9fe 35%,
+    #fce7f3 65%,
+    #d1fae5 100%);
+}
+[data-theme="dark"] body.setup-mode,
+body.setup-mode[data-theme="dark"] {
+  background: linear-gradient(135deg,
+    #0f1f3d 0%,
+    #1a1040 35%,
+    #2d0a28 65%,
+    #042f1e 100%);
+}
+
+/* ── Setup panel overlay ─────────────────────────────────────────────────── */
+#setup-panel {
+  position: fixed;
+  inset: 0;
+  z-index: 500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow-y: auto;
+  /* Reserve scrollbar space always so card doesn't shift when scrollbar appears */
+  scrollbar-gutter: stable;
+  padding: 40px 20px;
+  background: rgba(255, 255, 255, 0.45);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+}
+[data-theme="dark"] #setup-panel {
+  background: rgba(11, 16, 32, 0.55);
+}
+
+/* Glass card */
+#setup-card {
+  width: 420px;
+  max-width: calc(100vw - 40px);
+  background: var(--color-bg-primary);
+  border: 1px solid var(--color-border-primary);
+  border-radius: 16px;
+  padding: 36px 40px 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  box-shadow: 0 4px 32px rgba(0,0,0,0.12), 0 1px 4px rgba(0,0,0,0.08);
+  /* Prevent height/width jitter when content changes */
+  min-height: 340px;
+  /* Dropdown must overflow the card boundary */
+  overflow: visible;
+}
+[data-theme="dark"] #setup-card {
+  box-shadow: 0 4px 40px rgba(0,0,0,0.5), 0 1px 4px rgba(0,0,0,0.3);
+}
+
+/* Header */
+#setup-header {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  text-align: center;
+}
+
+#setup-logo {
+  font-size: 32px;
+  line-height: 1;
+  margin-bottom: 2px;
+  background: linear-gradient(135deg, #6366f1, #3b82f6);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+#setup-title {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--color-text-primary);
+  margin: 0;
+  /* Reserve space so height doesn't change when text switches language */
+  min-height: 1.4em;
+}
+
+#setup-subtitle {
+  font-size: 13px;
+  color: var(--color-text-tertiary);
+  margin: 0;
+  min-height: 1.5em;
+}
+
+/* Step indicators */
+#setup-steps {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+}
+
+.setup-step {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--color-bg-secondary);
+  border: 1.5px solid var(--color-border-primary);
+  color: var(--color-text-tertiary);
+  font-size: 11px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background .2s, border-color .2s, color .2s;
+}
+.setup-step.active {
+  background: #3b82f6;
+  border-color: #3b82f6;
+  color: #fff;
+}
+.setup-step.done {
+  background: #22c55e;
+  border-color: #22c55e;
+  color: #fff;
+}
+.setup-step-line {
+  width: 48px;
+  height: 1.5px;
+  background: var(--color-border-primary);
+}
+
+/* Phase containers */
+#setup-phase-lang,
+#setup-phase-key {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* Phase label */
+.setup-phase-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  text-align: center;
+  margin: 0;
+}
+
+/* Language row: [En] [中文] on first line, [Continue →] on second */
+#setup-lang-row {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+#setup-lang-btns {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.setup-lang-btn {
+  flex: 1;
+  background: var(--color-bg-secondary);
+  border: 1.5px solid var(--color-border-primary);
+  border-radius: 8px;
+  color: var(--color-text-primary);
+  font-size: 13px;
+  font-weight: 600;
+  padding: 8px 0;
+  cursor: pointer;
+  transition: border-color .15s, background .15s, color .15s;
+}
+.setup-lang-btn:hover {
+  border-color: #3b82f6;
+}
+.setup-lang-btn.active {
+  background: #3b82f6;
+  border-color: #3b82f6;
+  color: #fff;
+}
+
+.setup-next-btn {
+  width: 100%;
+  background: #18181b;
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  padding: 9px 0;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background .15s, opacity .15s;
+}
+.setup-next-btn:hover { background: #3f3f46; }
+[data-theme="dark"] .setup-next-btn { background: #e4e4e7; color: #18181b; }
+[data-theme="dark"] .setup-next-btn:hover { background: #fff; }
+
+/* Fields */
+.setup-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.setup-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: .06em;
+}
+.setup-input {
+  width: 100%;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border-primary);
+  border-radius: 7px;
+  color: var(--color-text-primary);
+  font-size: 13px;
+  padding: 8px 10px;
+  outline: none;
+  transition: border-color .15s;
+  box-sizing: border-box;
+}
+.setup-input:focus {
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59,130,246,.15);
+}
+.setup-input-row {
+  display: flex;
+  gap: 6px;
+}
+.setup-input-row .setup-input { flex: 1; }
+
+/* Test result */
+.setup-test-result {
+  font-size: 12px;
+  min-height: 16px;
+  text-align: center;
+}
+.setup-test-result.result-ok   { color: var(--color-success); }
+.setup-test-result.result-fail { color: var(--color-error); }
+
+/* Bottom action row: [← Back]  [Test & Continue →] */
+.setup-key-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.setup-back-btn {
+  flex-shrink: 0;
+  background: transparent;
+  color: var(--color-text-secondary);
+  border: 1.5px solid var(--color-border-primary);
+  border-radius: 8px;
+  padding: 9px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: border-color .15s, color .15s;
+}
+.setup-back-btn:hover {
+  border-color: var(--color-text-secondary);
+  color: var(--color-text-primary);
+}
+
+/* Submit button */
+.setup-submit-btn {
+  flex: 1;
+  background: #3b82f6;
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  padding: 10px 0;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background .15s, opacity .15s;
+}
+.setup-submit-btn:hover    { background: #2563eb; }
+.setup-submit-btn:disabled { opacity: .5; cursor: default; }
+
 /* ── Onboard panel ───────────────────────────────────────────────────────── */
 #onboard-panel {
   flex: 1;
@@ -3024,20 +3311,21 @@ body {
   align-items: center;
   gap: 10px;
   padding: 9px 16px;
-  background: var(--color-accent-subtle, #eff6ff);
-  border-bottom: 1px solid var(--color-accent-border, #bfdbfe);
-  color: var(--color-accent-fg, #1d4ed8);
+  /* Dark theme default */
+  background: #0d2045;
+  border-bottom: 1px solid #1e3a6e;
+  color: #93c5fd;
   font-size: 13px;
   flex-shrink: 0;
 }
 
 .brand-activation-banner > span {
   flex: 1;
-  color: var(--color-accent-fg, #1d4ed8);
+  color: #93c5fd;
 }
 
 .brand-activation-banner-link {
-  background: var(--color-accent, #2563eb);
+  background: #2563eb;
   border: none;
   border-radius: 5px;
   color: #fff;
@@ -3054,7 +3342,7 @@ body {
 .brand-activation-banner-close {
   background: transparent;
   border: none;
-  color: var(--color-accent-fg, #1d4ed8);
+  color: #93c5fd;
   cursor: pointer;
   font-size: 14px;
   padding: 0 4px;
@@ -3063,6 +3351,21 @@ body {
 }
 
 .brand-activation-banner-close:hover { opacity: 1; }
+
+/* Light theme overrides */
+[data-theme="light"] .brand-activation-banner {
+  background: #eff6ff;
+  border-bottom-color: #bfdbfe;
+  color: #1d4ed8;
+}
+
+[data-theme="light"] .brand-activation-banner > span {
+  color: #1d4ed8;
+}
+
+[data-theme="light"] .brand-activation-banner-close {
+  color: #1d4ed8;
+}
 
 /* ── Scrollbar ───────────────────────────────────────────────────────────── */
 ::-webkit-scrollbar       { width: 6px; }
