@@ -22,7 +22,8 @@ module Clacky
       # Create a new session entry and return its id.
       # session_id must come from the caller (use SessionManager.generate_id).
       # agent/ui/thread are set later via with_session once they are constructed.
-      def create(session_id:)
+      # Pass hidden: true for system/channel sessions that should not appear in the UI list.
+      def create(session_id:, hidden: false)
         raise ArgumentError, "session_id is required" if session_id.nil? || session_id.empty?
 
         session = {
@@ -30,6 +31,7 @@ module Clacky
           status:               :idle,   # :idle | :running | :error
           error:                nil,
           updated_at:           Time.now,
+          hidden:               hidden,  # true = exclude from UI session list (e.g. channel sessions)
           agent:                nil,
           ui:                   nil,
           thread:               nil,
@@ -62,9 +64,11 @@ module Clacky
 
       # Return a lightweight summary list (no agent/ui/thread objects) for API responses.
       # Sorted newest-first using agent.created_at (ISO8601 strings sort lexicographically).
+      # Hidden sessions (e.g. channel/IM sessions) are excluded from the list.
       def list
         @mutex.synchronize do
           @sessions.values
+                   .reject { |s| s[:hidden] }
                    .map { |s| session_summary(s) }
                    .sort_by { |s| s[:created_at] }
                    .reverse

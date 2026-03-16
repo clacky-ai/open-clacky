@@ -200,14 +200,17 @@ module Clacky
           # Return existing session_id only if the session is still alive in registry
           return session_id if session_id && @registry.get(session_id)
 
-          # Create a new session (either first time or after server restart)
+          # Create a new session (either first time or after server restart).
+          # Channel sessions are hidden from the UI session list — they run in the
+          # background and are managed through the IM platform, not the web UI.
           platform = event[:platform]
           user_id  = event[:user_id]
           name     = "#{platform.to_s.capitalize} — #{user_id}"
           session_id = @session_builder.call(
             name: name,
             working_dir: Dir.pwd,
-            permission_mode: :auto_approve
+            permission_mode: :auto_approve,
+            hidden: true
           )
           @session_map[key] = session_id
           session_id

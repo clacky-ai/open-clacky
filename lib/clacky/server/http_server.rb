@@ -1596,6 +1596,11 @@ module Clacky
         case type
         when "subscribe"
           session_id = msg["session_id"]
+          # If not in memory, try to restore from disk (e.g. after server restart)
+          unless @registry.exist?(session_id)
+            session_data = @session_manager.load(session_id)
+            build_session_from_data(session_data) if session_data
+          end
           if @registry.exist?(session_id)
             conn.session_id = session_id
             subscribe(session_id, conn)
@@ -1803,9 +1808,11 @@ module Clacky
       # @param working_dir [String] working directory for the agent
       # @param permission_mode [Symbol] :confirm_all (default, human present) or
       #   :auto_approve (unattended — suppresses request_user_feedback waits)
-      def build_session(name:, working_dir:, permission_mode: :confirm_all, profile: "general")
+      # @param hidden [Boolean] when true, the session is excluded from the UI session list
+      #   (used for channel/IM sessions that run in the background)
+      def build_session(name:, working_dir:, permission_mode: :confirm_all, profile: "general", hidden: false)
         session_id = Clacky::SessionManager.generate_id
-        @registry.create(session_id: session_id)
+        @registry.create(session_id: session_id, hidden: hidden)
 
         client = @client_factory.call
         config = @agent_config.deep_copy
@@ -1829,14 +1836,14 @@ module Clacky
       # Restore a persisted session from saved session_data (from SessionManager).
       # The agent keeps its original session_id so the frontend URL hash stays valid
       # across server restarts.
-      def build_session_from_data(session_data, permission_mode: :confirm_all, profile: "general")
+      def build_session_from_data(session_data, permission_mode: :confirm_all, profile: "general", hidden: false)
         original_id = session_data[:session_id]
 
         # Skip if this session is already registered (e.g., restored by a previous call)
         return nil if @registry.exist?(original_id)
 
         # Register with the original session_id so frontend hashes stay valid
-        @registry.create(session_id: original_id)
+        @registry.create(session_id: original_id, hidden: hidden)
 
         client = @client_factory.call
         config = @agent_config.deep_copy
