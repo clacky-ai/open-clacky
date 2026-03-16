@@ -163,6 +163,15 @@ module Clacky
           rounds = rounds.select { |r| r[:user_msg][:created_at] && r[:user_msg][:created_at] < before }
         end
 
+        # Fallback: when the conversation was compressed and no user messages remain in the
+        # kept slice, render the surviving assistant/tool messages directly so the user can
+        # still see the last visible state of the chat (e.g. compressed summary + recent work).
+        if rounds.empty?
+          visible = @messages.reject { |m| m[:role].to_s == "system" || m[:system_injected] }
+          visible.each { |msg| _replay_single_message(msg, ui) }
+          return { has_more: false }
+        end
+
         has_more = rounds.size > limit
         # Take the most recent `limit` rounds
         page = rounds.last(limit)
@@ -180,45 +189,7 @@ module Clacky
             # — they are internal scaffolding and must not be shown to the user.
             next if ev[:system_injected]
 
-            case ev[:role].to_s
-            when "assistant"
-              # Text content
-              text = extract_text_from_content(ev[:content]).to_s.strip
-              ui.show_assistant_message(text) unless text.empty?
-
-              # Tool calls embedded in assistant message
-              Array(ev[:tool_calls]).each do |tc|
-                name     = tc[:name] || tc.dig(:function, :name) || ""
-                args_raw = tc[:arguments] || tc.dig(:function, :arguments) || {}
-                args     = args_raw.is_a?(String) ? (JSON.parse(args_raw) rescue args_raw) : args_raw
-
-                # Special handling: request_user_feedback question is shown as an
-                # assistant message (matching real-time behavior), not as a tool call.
-                if name == "request_user_feedback"
-                  question = args.is_a?(Hash) ? (args[:question] || args["question"]).to_s : ""
-                  ui.show_assistant_message(question) unless question.empty?
-                else
-                  ui.show_tool_call(name, args)
-                end
-              end
-
-              # Emit token usage stored on this message (for history replay display)
-              ui.show_token_usage(ev[:token_usage]) if ev[:token_usage]
-
-            when "user"
-              # Anthropic-format tool results (role: user, content: array of tool_result blocks)
-              next unless ev[:content].is_a?(Array)
-
-              ev[:content].each do |blk|
-                next unless blk.is_a?(Hash) && blk[:type] == "tool_result"
-
-                ui.show_tool_result(blk[:content].to_s)
-              end
-
-            when "tool"
-              # OpenAI-format tool result
-              ui.show_tool_result(ev[:content].to_s)
-            end
+            _replay_single_message(ev, ui)
           end
         end
 
@@ -226,6 +197,52 @@ module Clacky
       end
 
       private
+
+      # Render a single non-user message into the UI.
+      # Used by both the normal round-based replay and the compressed-session fallback.
+      def _replay_single_message(msg, ui)
+        return if msg[:system_injected]
+
+        case msg[:role].to_s
+        when "assistant"
+          # Text content
+          text = extract_text_from_content(msg[:content]).to_s.strip
+          ui.show_assistant_message(text) unless text.empty?
+
+          # Tool calls embedded in assistant message
+          Array(msg[:tool_calls]).each do |tc|
+            name     = tc[:name] || tc.dig(:function, :name) || ""
+            args_raw = tc[:arguments] || tc.dig(:function, :arguments) || {}
+            args     = args_raw.is_a?(String) ? (JSON.parse(args_raw) rescue args_raw) : args_raw
+
+            # Special handling: request_user_feedback question is shown as an
+            # assistant message (matching real-time behavior), not as a tool call.
+            if name == "request_user_feedback"
+              question = args.is_a?(Hash) ? (args[:question] || args["question"]).to_s : ""
+              ui.show_assistant_message(question) unless question.empty?
+            else
+              ui.show_tool_call(name, args)
+            end
+          end
+
+          # Emit token usage stored on this message (for history replay display)
+          ui.show_token_usage(msg[:token_usage]) if msg[:token_usage]
+
+        when "user"
+          # Anthropic-format tool results (role: user, content: array of tool_result blocks)
+          return unless msg[:content].is_a?(Array)
+
+          msg[:content].each do |blk|
+            next unless blk.is_a?(Hash) && blk[:type] == "tool_result"
+
+            ui.show_tool_result(blk[:content].to_s)
+          end
+
+        when "tool"
+          # OpenAI-format tool result
+          ui.show_tool_result(msg[:content].to_s)
+        end
+      end
 
       # Replace the system message in @messages with a freshly built system prompt.
       # Called after restore_session so newly installed skills and any other
