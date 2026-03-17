@@ -23,7 +23,16 @@ module Clacky
     # ─────────────────────────────────────────────
 
     # Append a single message hash to the history.
+    #
+    # When appending a user message, automatically drop any trailing assistant
+    # message that has unanswered tool_calls (no tool_result follows it).
+    # This prevents API error 2013 ("tool call result does not follow tool call")
+    # when a previous task ended before observe() could append tool results
+    # (e.g. subagent crash, interrupt, or error).
     def append(message)
+      if message[:role] == "user"
+        drop_dangling_tool_calls!
+      end
       @messages << message
       self
     end
@@ -76,6 +85,17 @@ module Clacky
     # Remove all messages from index onward (used by restore_session on error).
     def truncate_from(index)
       @messages = @messages[0...index]
+      self
+    end
+
+    # Roll back the history to just before the given message object.
+    # Removes the message and anything appended after it.
+    # Used to undo a failed speculative append (e.g. compression message that errored).
+    def rollback_before(message)
+      idx = @messages.index { |m| m.equal?(message) }
+      return self unless idx
+
+      @messages = @messages[0...idx]
       self
     end
 
@@ -148,22 +168,8 @@ module Clacky
 
     # Return a clean copy of messages suitable for sending to the LLM API:
     # - strips internal-only fields
-    # - removes trailing assistant+tool_calls with no subsequent tool_result
     def to_api
-      result = @messages.dup
-
-      # Strip trailing orphaned assistant+tool_calls (no tool_result follows)
-      while (last = result.last) &&
-            last[:role] == "assistant" &&
-            last[:tool_calls]&.any?
-        last_idx = result.rindex { |m| m == last }
-        has_tool_result = result[(last_idx + 1)..].any? { |m| m[:role] == "tool" || m[:tool_results] }
-        break if has_tool_result
-
-        result.pop
-      end
-
-      result.map { |m| strip_internal_fields(m) }
+      @messages.map { |m| strip_internal_fields(m) }
     end
 
     # Return a shallow copy of the message list, excluding transient messages.
@@ -172,6 +178,15 @@ module Clacky
     # For serialization, compression, and cloning.
     def to_a
       @messages.reject { |m| m[:transient] }.dup
+    end
+
+    # Drop the trailing assistant message if it has tool_calls with no subsequent
+    # tool_result — i.e. the tool call was never answered (dangling).
+    # Called automatically before appending any user message.
+    private def drop_dangling_tool_calls!
+      return unless pending_tool_calls?
+
+      @messages.pop
     end
 
     private def strip_internal_fields(message)

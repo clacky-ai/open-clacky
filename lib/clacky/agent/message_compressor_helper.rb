@@ -34,13 +34,11 @@ module Clacky
           true
         rescue Clacky::AgentInterrupted => e
           @ui&.log("Idle compression canceled: #{e.message}", level: :info)
-          @history.pop_while { |m| m[:system_injected] && !m.equal?(compression_message) }
-          @history.pop_last if @history.to_a.last&.equal?(compression_message)
+          @history.rollback_before(compression_message)
           false
         rescue => e
           @ui&.log("Idle compression failed: #{e.message}", level: :error)
-          @history.pop_while { |m| m[:system_injected] && !m.equal?(compression_message) }
-          @history.pop_last if @history.to_a.last&.equal?(compression_message)
+          @history.rollback_before(compression_message)
           false
         end
       end

@@ -350,12 +350,9 @@ module Clacky
           handle_compression_response(response, compression_context)
           compression_handled = true
         ensure
-          # If interrupted or failed, remove the dangling compression message so it
-          # doesn't pollute future conversation turns.
-          unless compression_handled
-            @history.pop_while { |m| m[:system_injected] && !m.equal?(compression_message) }
-            @history.pop_last if @history.to_a.last&.equal?(compression_message)
-          end
+          # If interrupted or failed, roll back the speculative compression message
+          # so it doesn't pollute future conversation turns.
+          @history.rollback_before(compression_message) unless compression_handled
         end
         return nil
       end
@@ -756,13 +753,9 @@ module Clacky
       subagent.instance_variable_set(:@previous_total_tokens, @previous_total_tokens)
 
       # Deep clone history to avoid cross-contamination.
-      # to_api already strips trailing orphaned tool_calls; we use to_a here so the
-      # subagent gets the full internal list and its own to_api handles the strip on send.
+      # Dangling tool_calls (no tool_result yet) are cleaned up automatically by
+      # MessageHistory#append when the subagent appends its first user message.
       cloned_messages = deep_clone(@history.to_a)
-      # Strip pending tool_calls (no tool_result yet) — fork happens inside act(),
-      # before observe() has appended tool results. Anthropic rejects orphaned tool_use.
-      cloned_messages.pop if cloned_messages.last&.dig(:role) == "assistant" &&
-                             cloned_messages.last[:tool_calls]&.any?
       subagent.instance_variable_set(:@history, MessageHistory.new(cloned_messages))
 
       # Append system prompt suffix as user message (for cache reuse)

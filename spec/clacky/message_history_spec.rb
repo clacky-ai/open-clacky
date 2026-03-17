@@ -40,6 +40,26 @@ RSpec.describe Clacky::MessageHistory do
       history.append(msg)
       expect(history.to_a.first).to include(system_injected: true, task_id: 42)
     end
+
+    context "when appending a user message after a dangling assistant+tool_calls" do
+      it "drops the dangling assistant message automatically" do
+        history.append(user_msg)
+        history.append(assistant_with_tool_calls)
+        # no tool_result — next user message should clean this up
+        history.append(user_msg("follow-up"))
+        expect(history.size).to eq(2)
+        expect(history.to_a.last[:content]).to eq("follow-up")
+        expect(history.to_api.none? { |m| m[:tool_calls] }).to be true
+      end
+
+      it "does not drop assistant+tool_calls when tool_result is present" do
+        history.append(user_msg)
+        history.append(assistant_with_tool_calls)
+        history.append(tool_result_msg)
+        history.append(user_msg("next"))
+        expect(history.size).to eq(4)
+      end
+    end
   end
 
   # ─────────────────────────────────────────────
@@ -268,6 +288,36 @@ RSpec.describe Clacky::MessageHistory do
     end
   end
 
+  describe "#rollback_before" do
+    it "removes the target message and everything after it" do
+      history.append(user_msg("a"))
+      pivot = { role: "user", content: "pivot", system_injected: true }
+      history.append(pivot)
+      history.append(assistant_msg)
+      history.rollback_before(pivot)
+      expect(history.size).to eq(1)
+      expect(history.to_a.last[:content]).to eq("a")
+    end
+
+    it "is a no-op when the message is not found" do
+      history.append(user_msg("a"))
+      other = { role: "user", content: "not in history" }
+      history.rollback_before(other)
+      expect(history.size).to eq(1)
+    end
+
+    it "uses object identity not value equality" do
+      msg = { role: "user", content: "same content", system_injected: true }
+      doppelganger = { role: "user", content: "same content", system_injected: true }
+      history.append(user_msg("before"))
+      history.append(doppelganger)
+      history.append(user_msg("after"))
+      # rollback_before(msg) should be a no-op because msg is not the same object
+      history.rollback_before(msg)
+      expect(history.size).to eq(3)
+    end
+  end
+
   # ─────────────────────────────────────────────
   # size / empty?
   # ─────────────────────────────────────────────
@@ -296,28 +346,12 @@ RSpec.describe Clacky::MessageHistory do
       expect(api_msgs.first.keys).to contain_exactly(:role, :content)
     end
 
-    it "removes trailing assistant+tool_calls with no following tool_result (pendent tool_calls)" do
-      history.append(user_msg)
-      history.append(assistant_with_tool_calls)
-      # no tool_result appended yet
-      api_msgs = history.to_api
-      expect(api_msgs.size).to eq(1)
-      expect(api_msgs.first[:role]).to eq("user")
-    end
-
     it "keeps assistant+tool_calls when tool_result follows" do
       history.append(user_msg)
       history.append(assistant_with_tool_calls)
       history.append(tool_result_msg)
       api_msgs = history.to_api
       expect(api_msgs.size).to eq(3)
-    end
-
-    it "does not modify the internal messages array" do
-      history.append(user_msg)
-      history.append(assistant_with_tool_calls)
-      history.to_api
-      expect(history.size).to eq(2)  # internal still has both
     end
 
     it "keeps system message at the start" do
