@@ -90,7 +90,8 @@ module Clacky
             active_task_id: @active_task_id || 0
           },
           config: {
-            models: @config.models,
+            # NOTE: api_key and other sensitive credentials are intentionally excluded
+            # to prevent leaking secrets into session files on disk.
             permission_mode: @config.permission_mode.to_s,
             enable_compression: @config.enable_compression,
             enable_prompt_caching: @config.enable_prompt_caching,
