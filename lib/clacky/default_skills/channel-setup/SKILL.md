@@ -42,7 +42,7 @@ Read `~/.clacky/channels.yml` and display:
 Channel Status
 ─────────────────────────────────────────────────────
 Platform   Enabled   Details
-feishu     ✅ yes    app_id: cli_xxx...  domain: feishu.cn
+feishu     ✅ yes    app_id: cli_xxx...  domain: https://open.feishu.cn
 wecom      ❌ no     (not configured)
 ─────────────────────────────────────────────────────
 ```
