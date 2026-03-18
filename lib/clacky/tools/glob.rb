@@ -101,8 +101,9 @@ module Clacky
               next false
             end
 
-            # Skip binary files
-            if Clacky::Utils::FileProcessor.binary_file_path?(file)
+            # Skip binary files (but allow known document types like PDF/Office)
+            if Clacky::Utils::FileProcessor.binary_file_path?(file) &&
+               !Clacky::Utils::FileProcessor.glob_allowed_binary?(file)
               skipped[:binary] += 1
               next false
             end

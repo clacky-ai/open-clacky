@@ -46,6 +46,11 @@ module Clacky
       .db .sqlite .bin .dat
     ].freeze
 
+    # Binary files that glob should still return (useful as file references even if unreadable)
+    GLOB_ALLOWED_BINARY_EXTENSIONS = %w[
+      .pdf .doc .docx .ppt .pptx .xls .xlsx .odt .odp .ods
+    ].freeze
+
     # Extensions that can be sent to LLM as base64 (images + PDF)
     LLM_BINARY_EXTENSIONS = %w[.png .jpg .jpeg .gif .webp .pdf].freeze
 
@@ -163,6 +168,13 @@ module Clacky
       sample.include?("\x00")
     rescue
       false
+    end
+
+    # Returns true if the file is binary but should still appear in glob results.
+    # (e.g. PDF, Office docs — useful as file references even if content is unreadable)
+    def self.glob_allowed_binary?(path)
+      ext = File.extname(path).downcase
+      GLOB_ALLOWED_BINARY_EXTENSIONS.include?(ext)
     end
 
     # Returns true if the binary file can be sent to LLM as base64.
