@@ -195,8 +195,21 @@ module Clacky
         return result if result[:error]
 
         action = result[:action].to_s
-        output = result[:output].to_s
 
+        # Screenshot with inline image data — return multipart content blocks so the
+        # LLM can actually see the image (both Anthropic and OpenAI vision formats).
+        if action == "screenshot" && result[:image_data]
+          mime_type  = result[:mime_type] || "image/jpeg"
+          image_data = result[:image_data]
+          data_url   = "data:#{mime_type};base64,#{image_data}"
+          # OpenAI vision format (also accepted by Anthropic via client conversion)
+          return [
+            { type: "text",      text:      "Screenshot captured." },
+            { type: "image_url", image_url: { url: data_url } }
+          ]
+        end
+
+        output = result[:output].to_s
         output = compress_snapshot(output) if action == "snapshot"
         max_chars = action == "snapshot" ? MAX_SNAPSHOT_CHARS : MAX_LLM_OUTPUT_CHARS
 
@@ -464,17 +477,35 @@ module Clacky
 
         format    = opts[:format]    || opts["format"]    || "jpeg"
         full_page = opts[:full_page] || opts["full_page"] || false
+        quality   = opts[:quality]   || opts["quality"]
 
-        tmp_file = File.join(Dir.tmpdir, "clacky_screenshot_#{Time.now.to_i}.#{format}")
-        mcp_call("take_screenshot", {
+        # Do NOT pass filePath — when omitted, MCP returns the image as base64
+        # in the response content (attachImage), which we can send directly to the LLM.
+        call_args = {
           pageId:   target_id.to_i,
-          filePath: tmp_file,
           format:   format,
           fullPage: full_page
-        })
+        }
+        call_args[:quality] = quality.to_i if quality
 
-        { action: "screenshot", success: true, profile: "user",
-          path: tmp_file, output: "Screenshot saved: #{tmp_file}" }
+        result = mcp_call("take_screenshot", call_args)
+
+        # Extract base64 image from MCP response content
+        # MCP returns: { "content": [{ "type": "image", "mimeType": "image/jpeg", "data": "<base64>" }] }
+        image_block = Array(result["content"]).find { |b| b.is_a?(Hash) && b["type"] == "image" }
+
+        if image_block
+          mime_type = image_block["mimeType"] || "image/#{format}"
+          image_data = image_block["data"]
+          { action: "screenshot", success: true, profile: "user",
+            image_data: image_data, mime_type: mime_type,
+            output: "Screenshot captured." }
+        else
+          # Fallback: MCP saved to a temp file (image >= 2MB), extract path from text
+          text = extract_text_content(result)
+          { action: "screenshot", success: true, profile: "user",
+            output: text.empty? ? "Screenshot captured (large image saved to temp file)." : text }
+        end
       end
 
       # -----------------------------------------------------------------------

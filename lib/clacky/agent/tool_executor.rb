@@ -171,10 +171,14 @@ module Clacky
         # Inject TODO reminder for non-todo_manager tools
         formatted_result = inject_todo_reminder(call[:name], formatted_result)
 
-        # If the tool already returned a plain string, use it directly.
-        # JSON.generate would double-escape newlines/quotes making the LLM
-        # see \" and \n as literal characters instead of real ones.
+        # If the tool returned a plain string, use it directly (avoids double-escaping).
+        # If it returned an Array (e.g. multipart vision blocks with image + text),
+        # pass it through as-is so format_tool_results can send it to the API.
+        # Otherwise JSON-encode Hash/other values.
         content = if formatted_result.is_a?(String)
+                    formatted_result
+                  elsif formatted_result.is_a?(Array)
+                    # Multipart content (e.g. screenshot image blocks) — keep as Array
                     formatted_result
                   else
                     JSON.generate(formatted_result)

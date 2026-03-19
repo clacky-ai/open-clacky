@@ -99,10 +99,16 @@ module Clacky
 
         response[:tool_calls].map do |tc|
           result = results_map[tc[:id]]
+          raw_content = result ? result[:content] : { error: "Tool result missing" }.to_json
+
+          # OpenAI tool message content must be a String.
+          # If a tool returned multipart Array blocks (e.g. screenshot image), convert to JSON.
+          content = raw_content.is_a?(Array) ? JSON.generate(raw_content) : raw_content
+
           {
             role:         "tool",
             tool_call_id: tc[:id],
-            content:      result ? result[:content] : { error: "Tool result missing" }.to_json
+            content:      content
           }
         end
       end
