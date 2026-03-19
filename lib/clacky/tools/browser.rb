@@ -46,12 +46,13 @@ module Clacky
         - action="snapshot", interactive=true          → interactive elements only (recommended)
         - action="snapshot", interactive=true, compact=true → compact interactive
 
-        ACT KINDS: click, type, fill, press, hover, drag, select, scroll, wait, evaluate
-        - click:   ref="e1"
-        - fill:    ref="e1", text="value"
-        - press:   key="Enter"
-        - scroll:  direction="down", amount=300
-        - wait:    ms=2000 OR selector=".spinner"
+        ACT KINDS: click, dblclick, type, fill, press, hover, drag, select, scroll, wait, evaluate, click_at
+        - click:    ref="e1"
+        - click_at: x=100, y=200  → coordinate click, use when ref-based click fails (React/virtual lists)
+        - fill:     ref="e1", text="value"
+        - press:    key="Enter"
+        - scroll:   direction="down", amount=300
+        - wait:     ms=2000 OR selector=".spinner"
         - evaluate: js="document.title"
 
         TARGETING TABS — pass target_id from snapshot/tabs to subsequent acts.
@@ -88,7 +89,7 @@ module Clacky
           },
           kind: {
             type: "string",
-            enum: %w[click dblclick type fill press hover drag select scroll wait evaluate],
+            enum: %w[click dblclick type fill press hover drag select scroll wait evaluate click_at],
             description: "act: interaction kind."
           },
           ref: {
@@ -117,6 +118,8 @@ module Clacky
             description: "act select: option values."
           },
           double_click: { type: "boolean", description: "act click: double-click." },
+          x: { type: "number", description: "act click_at: x coordinate in pixels." },
+          y: { type: "number", description: "act click_at: y coordinate in pixels." },
           url:       { type: "string",  description: "open/navigate: URL." },
           target_id: { type: "string",  description: "tab targetId from open/tabs." },
           format: {
@@ -138,6 +141,7 @@ module Clacky
         --autoConnect
         --experimentalStructuredContent
         --experimental-page-id-routing
+        --experimentalVision
       ].freeze
 
       # Minimum Chrome major version for Chrome MCP support
@@ -437,6 +441,16 @@ module Clacky
           value = extract_message(result)
           return { action: "act", success: true, profile: "user",
                    output: value.to_s }
+        when "click_at"
+          x = opts[:x] || opts["x"]
+          y = opts[:y] || opts["y"]
+          return { error: "click_at requires x and y coordinates" } unless x && y
+
+          click_args = { pageId: page_id, x: x.to_f, y: y.to_f }
+          click_args[:dblClick] = true if opts[:double_click] || opts["double_click"]
+          result = mcp_call("click_at", click_args)
+          return { action: "act", success: true, profile: "user",
+                   output: extract_message(result).to_s }
         else
           return { error: "Unknown act kind: #{kind}" }
         end
