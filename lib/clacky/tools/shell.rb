@@ -2,6 +2,7 @@
 
 require "tmpdir"
 require_relative "base"
+require_relative "../utils/encoding"
 
 module Clacky
   module Tools
@@ -18,8 +19,10 @@ module Clacky
       def write(data)
         return unless data && !data.empty?
 
-        safe = data.encode("UTF-8", invalid: :replace, undef: :replace, replace: "\u{FFFD}")
-        @io.write(safe)
+        # Shell output arrives as binary (ASCII-8BIT) bytes.  Use the shared
+        # helper which re-labels encoding as UTF-8 and scrubs only genuinely
+        # invalid sequences, preserving multibyte characters (e.g. CJK).
+        @io.write(Clacky::Utils::Encoding.to_utf8(data))
       end
 
       def string

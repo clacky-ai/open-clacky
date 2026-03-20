@@ -2,6 +2,7 @@
 
 require_relative "base"
 require_relative "../utils/limit_stack"
+require_relative "../utils/encoding"
 require "yaml"
 require "open3"
 
@@ -257,10 +258,8 @@ module Clacky
                 ready[0].each do |io|
                   begin
                     data = io.read_nonblock(4096)
-                    # Force UTF-8 encoding to avoid incompatible encoding errors
-                    data.force_encoding('UTF-8')
-                    # Replace invalid UTF-8 sequences with replacement character
-                    data = data.scrub('?') unless data.valid_encoding?
+                    # Convert binary shell output to valid UTF-8, preserving multibyte chars
+                    data = Clacky::Utils::Encoding.to_utf8(data)
                     
                     if io == stdout
                       stdout_buf.push_lines(data)

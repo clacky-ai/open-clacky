@@ -42,6 +42,17 @@ module Clacky
         "api" => "anthropic-messages",
         "default_model" => "claude-sonnet-4.6",
         "models" => ["claude-opus-4-6", "claude-sonnet-4.6", "claude-haiku-4.5"]
+      }.freeze,
+
+      "bedrock-jp" => {
+        "name" => "AWS Bedrock (JP)",
+        "base_url" => "https://bedrock-runtime.ap-northeast-1.amazonaws.com",
+        "api" => "bedrock",
+        "default_model" => "jp.anthropic.claude-sonnet-4-6",
+        "models" => [
+          "jp.anthropic.claude-sonnet-4-6",
+          "jp.anthropic.claude-haiku-4-6"
+        ]
       }.freeze
 
     }.freeze

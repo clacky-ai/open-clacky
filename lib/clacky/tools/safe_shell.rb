@@ -5,6 +5,7 @@ require "json"
 require "fileutils"
 require_relative "shell"
 require_relative "../utils/trash_directory"
+require_relative "../utils/encoding"
 
 module Clacky
   module Tools
@@ -83,7 +84,7 @@ module Clacky
 
         # Use a UTF-8–safe copy for regex matching only; the original command
         # bytes are preserved in `command` and returned unchanged.
-        safe_cmd = command.encode("UTF-8", invalid: :replace, undef: :replace, replace: "?")
+        safe_cmd = Clacky::Utils::Encoding.safe_check(command)
         
         # Try to match timeout at the beginning of command
         match = safe_cmd.match(/^timeout\s+(?:-s\s+\w+\s+)?(\d+)s?\s+(.+)$/i)
@@ -320,7 +321,7 @@ module Clacky
         # Ruby's regex / String#gsub tries to process them.
         # The original `command` (with original bytes) is returned unchanged
         # so the shell receives the exact bytes needed to locate the file.
-        @safe_check_command = command.encode("UTF-8", invalid: :replace, undef: :replace, replace: "?")
+        @safe_check_command = Clacky::Utils::Encoding.safe_check(command)
 
         case @safe_check_command
         when /^rm\s+/

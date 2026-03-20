@@ -4,6 +4,7 @@ require "net/http"
 require "json"
 require "uri"
 require "cgi"
+require_relative "../utils/encoding"
 
 module Clacky
   module Tools
@@ -81,8 +82,8 @@ module Clacky
       private def parse_duckduckgo_html(html, max_results)
         results = []
 
-        # Ensure HTML is UTF-8 encoded
-        html = html.force_encoding('UTF-8') unless html.encoding == Encoding::UTF_8
+        # Ensure HTML is valid UTF-8
+        html = Clacky::Utils::Encoding.to_utf8(html)
 
         # Extract all result links and snippets
         # Pattern: <a class="result__a" href="//duckduckgo.com/l/?uddg=ENCODED_URL...">TITLE</a>
@@ -95,7 +96,7 @@ module Clacky
         links.each_with_index do |link_data, index|
           break if results.length >= max_results
 
-          url = CGI.unescape(link_data[0]).force_encoding('UTF-8')
+          url = Clacky::Utils::Encoding.to_utf8(CGI.unescape(link_data[0]))
           title = link_data[1].gsub(/<[^>]+>/, "").strip
           title = CGI.unescapeHTML(title) if title.include?("&")
 

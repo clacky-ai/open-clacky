@@ -5,6 +5,7 @@ require "tempfile"
 require_relative "../theme_manager"
 require_relative "../line_editor"
 require_relative "command_suggestions"
+require_relative "../../utils/encoding"
 
 module Clacky
   module UI2
@@ -1011,8 +1012,7 @@ module Clacky
           end
 
           text = `pbpaste 2>/dev/null`.to_s
-          text.force_encoding('UTF-8')
-          text = text.encode('UTF-8', invalid: :replace, undef: :replace)
+          text = Clacky::Utils::Encoding.to_utf8(text)
           { type: :text, text: text }
         rescue => e
           { type: :text, text: "" }
@@ -1021,13 +1021,11 @@ module Clacky
         def paste_from_clipboard_linux
           if system("which xclip >/dev/null 2>&1")
             text = `xclip -selection clipboard -o 2>/dev/null`.to_s
-            text.force_encoding('UTF-8')
-            text = text.encode('UTF-8', invalid: :replace, undef: :replace)
+            text = Clacky::Utils::Encoding.to_utf8(text)
             { type: :text, text: text }
           elsif system("which xsel >/dev/null 2>&1")
             text = `xsel --clipboard --output 2>/dev/null`.to_s
-            text.force_encoding('UTF-8')
-            text = text.encode('UTF-8', invalid: :replace, undef: :replace)
+            text = Clacky::Utils::Encoding.to_utf8(text)
             { type: :text, text: text }
           else
             { type: :text, text: "" }

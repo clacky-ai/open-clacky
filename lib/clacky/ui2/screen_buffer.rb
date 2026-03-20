@@ -2,6 +2,7 @@
 
 require "tty-screen"
 require "io/console"
+require_relative "../utils/encoding"
 
 module Clacky
   module UI2
@@ -266,7 +267,7 @@ module Clacky
       private def safe_to_utf8(str)
         return str if str.valid_encoding?
 
-        str.encode('UTF-8', 'UTF-8', invalid: :replace, undef: :replace, replace: '')
+        Clacky::Utils::Encoding.sanitize_utf8(str)
       end
     end
   end

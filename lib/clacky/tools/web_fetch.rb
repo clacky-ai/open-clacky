@@ -4,6 +4,7 @@ require "net/http"
 require "uri"
 require "tmpdir"
 require "fileutils"
+require_relative "../utils/encoding"
 
 module Clacky
   module Tools
@@ -43,7 +44,7 @@ module Clacky
           response = fetch_url(uri)
 
           # Extract content and force UTF-8 encoding at the source
-          content = response.body.force_encoding('UTF-8').scrub('?')
+          content = Clacky::Utils::Encoding.to_utf8(response.body)
           content_type = response["content-type"] || ""
 
           # Parse HTML if it's an HTML page
