@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.7] - 2026-03-20
+
+### Added
+- **AWS Bedrock support**: the agent can now use Claude models hosted on AWS Bedrock (including the Japan region `bedrock-jp` provider with `jp.anthropic.claude-sonnet-4-6` and `jp.anthropic.claude-haiku-4-6`)
+- **Brand skill confidentiality protection**: when a brand skill is injected, the agent is now instructed to never reveal, quote, or paraphrase the skill's proprietary instructions — keeping white-label content secure
+- **Slash command guard in skill injection**: skills invoked via `/skill-name` commands now include a system notice that prevents the agent from calling `invoke_skill` a second time for the same request
+- **"Show system skills" toggle in Web UI**: the Skills settings page now has a checkbox to show or hide built-in system skills, making it easier to find your own custom skills in a long list
+
+### Fixed
+- **Shell commands with non-UTF-8 output no longer crash**: output from commands that produce GBK, Latin-1, or binary bytes (e.g. some `cat` or legacy tool output) is now safely transcoded to UTF-8 instead of raising an encoding error
+- **Task interruption no longer duplicates or garbles output**: a non-blocking progress-clear path ensures the user's message appears immediately on screen when a task is interrupted, without leaving stale progress lines behind
+- **Terminal inline content resize no longer overflows into the fixed toolbar area**: when an inline block grows past the available output rows, the terminal now scrolls correctly instead of writing into the status bar region
+- **Brand skills always show the latest version**: the skills list in the Web UI now correctly reflects the most recent version of a brand skill after an update
+
+### More
+- Rename brand skill `slug` field to `name` for consistency across the codebase
+- Rename `brandname` → `productname` in brand config internals
+- Unify skill injection into a shared `inject_skill_as_assistant_message` method
+- Update built-in skill definitions
+
 ## [0.9.6] - 2026-03-18
 
 ### Added
