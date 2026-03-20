@@ -487,17 +487,62 @@ module Clacky
         end
       end
 
+      # Returns true if a progress indicator is currently active.
+      # Used to guard calls to clear_progress so we don't accidentally
+      # remove a non-progress line from the output buffer.
+      def progress_active?
+        @progress_start_time != nil
+      end
+
       # Clear progress indicator
       def clear_progress
+        # Guard: if no progress is active, do nothing.
+        # This makes clear_progress idempotent — safe to call multiple times
+        # (e.g. once from handle_submit and again from handle_agent_exception).
+        return unless progress_active?
+
         # Calculate elapsed time before stopping
         elapsed_time = @progress_start_time ? (Time.now - @progress_start_time).to_i : 0
 
-        # Stop the progress thread
+        # Stop the progress thread (blocks until thread exits or timeout)
         stop_progress_thread
 
         # Update the final progress line to gray (stopped state)
         if @progress_message && elapsed_time > 0
           final_output = @renderer.render_progress("#{@progress_message}… (#{elapsed_time}s)")
+          update_progress_line(final_output)
+        else
+          clear_progress_line
+        end
+      end
+
+      # Non-blocking variant of clear_progress, used by handle_submit so the
+      # user message appears on screen immediately without waiting for the
+      # progress thread to fully exit.
+      #
+      # Strategy:
+      #   1. Snapshot elapsed time and message before touching any state.
+      #   2. Signal the progress thread to stop (sets flag + nulls start time)
+      #      so it will exit on its own next wake-up — no join here.
+      #   3. Immediately render the final (gray) progress line or remove it.
+      #   4. The thread finishes in the background; clear_progress called later
+      #      via the interrupt path is idempotent and will be a no-op.
+      def clear_progress_nonblocking
+        return unless progress_active?
+
+        elapsed_time = @progress_start_time ? (Time.now - @progress_start_time).to_i : 0
+        saved_message = @progress_message
+
+        # Signal thread to stop without joining — it will exit on next loop tick
+        @progress_start_time = nil
+        @progress_output_buffer = nil
+        @progress_thread_stop = true
+        # Detach: let the thread die on its own; we do NOT join here
+        @progress_thread = nil
+
+        # Immediately update the visual progress line (no waiting)
+        if saved_message && elapsed_time > 0
+          final_output = @renderer.render_progress("#{saved_message}… (#{elapsed_time}s)")
           update_progress_line(final_output)
         else
           clear_progress_line
@@ -1019,6 +1064,18 @@ module Clacky
 
       # Handle submit action
       private def handle_submit(data)
+        # If progress is currently active, clear the progress line BEFORE appending
+        # the user message. This avoids a race condition where clear_progress (called
+        # later via the interrupt path) would call update_last_line/remove_last_line
+        # on the user message instead of the progress line.
+        #
+        # We use a non-blocking variant here so that the progress thread's join()
+        # does NOT block the main thread — the user message appears on screen
+        # immediately with no perceptible delay.
+        if progress_active?
+          clear_progress_nonblocking
+        end
+
         # Render user message immediately before running agent
         unless data[:text].empty? && data[:files].empty?
           output = @renderer.render_user_message(data[:text], files: data[:files])
