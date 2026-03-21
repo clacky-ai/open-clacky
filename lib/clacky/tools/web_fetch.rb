@@ -119,7 +119,9 @@ module Clacky
             raise "Too many redirects" if redirects > max_redirects
 
             location = response["location"]
-            uri = URI.parse(location)
+            new_uri = URI.parse(location)
+            # Handle relative redirects by merging with the current URI
+            uri = new_uri.relative? ? uri.merge(new_uri) : new_uri
           else
             raise "HTTP error: #{response.code} #{response.message}"
           end
