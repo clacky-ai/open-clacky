@@ -1,12 +1,35 @@
 # frozen_string_literal: true
 
 require "faraday"
+require "faraday/multipart"
 require "json"
 
 module Clacky
   module Channel
     module Adapters
       module Feishu
+        # Raised when the app lacks read permission for a specific Feishu document (error code 91403).
+        # The user needs to add the app as a collaborator on the document.
+        class FeishuDocPermissionError < StandardError
+          attr_reader :doc_token
+
+          def initialize(doc_token)
+            @doc_token = doc_token
+            super("App has no permission to access document: #{doc_token}")
+          end
+        end
+
+        # Raised when the app hasn't been granted the API scope for documents (error code 99991672).
+        # The admin needs to approve the scope via the returned auth_url.
+        class FeishuDocScopeError < StandardError
+          attr_reader :auth_url
+
+          def initialize(auth_url)
+            @auth_url = auth_url
+            super("App is missing docx API scope")
+          end
+        end
+
         # Feishu Bot API client.
         # Handles authentication, message sending, and API calls.
         class Bot
@@ -53,8 +76,40 @@ module Clacky
             response = patch("/open-apis/im/v1/messages/#{message_id}", payload)
             response["code"] == 0
           rescue => e
-            warn "Failed to update message: #{e.message}"
+            Clacky::Logger.warn("[feishu] Failed to update message: #{e.message}")
             false
+          end
+
+          # Upload a local file to Feishu and send it to a chat.
+          # Images use /im/v1/images + msg_type "image".
+          # All other files use /im/v1/files + msg_type "file".
+          # @param chat_id [String] Chat ID
+          # @param path [String] Local file path
+          # @param name [String, nil] Display filename
+          # @param reply_to [String, nil] Message ID to reply to
+          # @return [Hash] Response with :message_id
+          def send_file(chat_id, path, name: nil, reply_to: nil)
+            raise ArgumentError, "File not found: #{path}" unless File.exist?(path)
+
+            filename  = name || File.basename(path)
+            file_data = File.binread(path)
+            ext       = File.extname(filename).downcase
+
+            if %w[.jpg .jpeg .png .gif .webp].include?(ext)
+              image_key = upload_image(file_data, filename)
+              content   = JSON.generate({ image_key: image_key })
+              msg_type  = "image"
+            else
+              file_key = upload_file(file_data, filename)
+              content  = JSON.generate({ file_key: file_key })
+              msg_type = "file"
+            end
+
+            payload = { receive_id: chat_id, msg_type: msg_type, content: content }
+            payload[:reply_to_message_id] = reply_to if reply_to
+
+            response = post("/open-apis/im/v1/messages", payload, params: { receive_id_type: "chat_id" })
+            { message_id: response.dig("data", "message_id") }
           end
 
           # Download a message resource (image or file) from Feishu.
@@ -83,6 +138,26 @@ module Clacky
               body: response.body,
               content_type: response.headers["content-type"].to_s.split(";").first.strip
             }
+          end
+
+          # Fetch the plain-text content of a Feishu document (docx / docs / wiki).
+          # Raises FeishuDocPermissionError (code 91403) when the app has no access.
+          # @param url [String] Feishu document URL
+          # @return [String] Document plain text
+          def fetch_doc_content(url)
+            doc_token, doc_type = parse_doc_url(url)
+            raise ArgumentError, "Unsupported Feishu doc URL: #{url}" unless doc_token
+
+            if doc_type == :wiki
+              # Wiki: first resolve the real docToken via get_node
+              node = fetch_wiki_node(doc_token)
+              actual_token = node["obj_token"]
+              actual_type  = node["obj_type"]   # "docx" / "doc" / etc.
+              raise "Unsupported wiki node type: #{actual_type}" unless %w[docx doc].include?(actual_type)
+              fetch_docx_raw_content(actual_token)
+            else
+              fetch_docx_raw_content(doc_token)
+            end
           end
 
           private
@@ -190,6 +265,140 @@ module Clacky
             parse_response(response)
           end
 
+          # Upload an image to Feishu and return image_key.
+          # @param data [String] Binary file content
+          # @param filename [String] Display filename
+          # @return [String] image_key
+          def upload_image(data, filename)
+            conn = Faraday.new(url: @domain) do |f|
+              f.options.timeout = DOWNLOAD_TIMEOUT
+              f.options.open_timeout = API_TIMEOUT
+              f.ssl.verify = false
+              f.request :multipart
+              f.adapter Faraday.default_adapter
+            end
+
+            response = conn.post("/open-apis/im/v1/images") do |req|
+              req.headers["Authorization"] = "Bearer #{tenant_access_token}"
+              req.body = {
+                image_type: "message",
+                image: Faraday::Multipart::FilePart.new(
+                  StringIO.new(data), detect_mime(filename), filename
+                )
+              }
+            end
+
+            result = JSON.parse(response.body)
+            raise "Failed to upload image: code=#{result["code"]} msg=#{result["msg"]}" if result["code"] != 0
+
+            result.dig("data", "image_key") or raise "No image_key returned"
+          end
+
+          # Upload a file to Feishu and return file_key.
+          # @param data [String] Binary file content
+          # @param filename [String] Display filename
+          # @return [String] file_key
+          def upload_file(data, filename)
+            conn = Faraday.new(url: @domain) do |f|
+              f.options.timeout = DOWNLOAD_TIMEOUT
+              f.options.open_timeout = API_TIMEOUT
+              f.ssl.verify = false
+              f.request :multipart
+              f.adapter Faraday.default_adapter
+            end
+
+            response = conn.post("/open-apis/im/v1/files") do |req|
+              req.headers["Authorization"] = "Bearer #{tenant_access_token}"
+              req.body = {
+                file_type: feishu_file_type(filename),
+                file_name: filename,
+                file: Faraday::Multipart::FilePart.new(
+                  StringIO.new(data), detect_mime(filename), filename
+                )
+              }
+            end
+
+            result = JSON.parse(response.body)
+            raise "Failed to upload file: code=#{result["code"]} msg=#{result["msg"]}" if result["code"] != 0
+
+            result.dig("data", "file_key") or raise "No file_key returned"
+          end
+
+          # Map file extension to Feishu file_type enum.
+          # Feishu accepts: opus, mp4, pdf, doc, xls, ppt, stream (others)
+          def feishu_file_type(filename)
+            case File.extname(filename).downcase
+            when ".pdf"             then "pdf"
+            when ".doc", ".docx"   then "doc"
+            when ".xls", ".xlsx"   then "xls"
+            when ".ppt", ".pptx"   then "ppt"
+            when ".mp4"            then "mp4"
+            when ".opus"           then "opus"
+            else                        "stream"
+            end
+          end
+
+          # Detect MIME type from filename extension.
+          def detect_mime(filename)
+            case File.extname(filename).downcase
+            when ".jpg", ".jpeg" then "image/jpeg"
+            when ".png"          then "image/png"
+            when ".gif"          then "image/gif"
+            when ".webp"         then "image/webp"
+            when ".pdf"          then "application/pdf"
+            when ".mp4"          then "video/mp4"
+            else                      "application/octet-stream"
+            end
+          end
+
+          # Parse Feishu doc URL and return [doc_token, type]
+          # type is :docx, :docs, or :wiki
+          # @param url [String]
+          # @return [Array<String, Symbol>, nil]
+          def parse_doc_url(url)
+            if (m = url.match(%r{/(?:docx|docs)/([A-Za-z0-9_-]+)}))
+              [m[1], :docx]
+            elsif (m = url.match(%r{/wiki/([A-Za-z0-9_-]+)}))
+              [m[1], :wiki]
+            end
+          end
+
+          # Fetch raw text content of a docx document.
+          # Raises FeishuDocPermissionError on 91403.
+          # @param doc_token [String]
+          # @return [String]
+          def fetch_docx_raw_content(doc_token)
+            response = get("/open-apis/docx/v1/documents/#{doc_token}/raw_content")
+            check_doc_error!(response, doc_token)
+            response.dig("data", "content").to_s.strip
+          end
+
+          # Resolve wiki node to get real obj_token and obj_type.
+          # @param wiki_token [String]
+          # @return [Hash] node data with "obj_token" and "obj_type"
+          def fetch_wiki_node(wiki_token)
+            response = get("/open-apis/wiki/v2/spaces/get_node", params: { token: wiki_token, obj_type: "wiki" })
+            check_doc_error!(response, wiki_token)
+            response.dig("data", "node") or raise "No node in wiki response"
+          end
+
+          # Check doc API response for known permission errors and raise accordingly.
+          def check_doc_error!(response, token)
+            code = response["code"].to_i
+            return if code == 0
+
+            if code == 91403
+              raise FeishuDocPermissionError, token
+            elsif code == 99991672
+              # Extract auth URL from the error message if present
+              auth_url = response.dig("error", "permission_violations", 0, "attach_url") ||
+                         response["msg"].to_s[/https:\/\/open\.feishu\.cn\/app\/[^\s"]+/]
+              raise FeishuDocScopeError.new(auth_url)
+            else
+              raise "Failed to fetch doc: code=#{code} msg=#{response["msg"]}"
+            end
+          end
+
           # Build Faraday connection
           # @return [Faraday::Connection]
           def build_connection
@@ -205,13 +414,13 @@ module Clacky
           # @param response [Faraday::Response]
           # @return [Hash] Parsed JSON
           def parse_response(response)
-            unless response.success?
-              raise "API request failed: HTTP #{response.status}"
-            end
+            # Feishu returns JSON even on 4xx — parse it so callers can inspect error codes
+            parsed = JSON.parse(response.body)
+            return parsed if response.success? || parsed.key?("code")
 
-            JSON.parse(response.body)
-          rescue JSON::ParserError => e
-            raise "Failed to parse API response: #{e.message}"
+            raise "API request failed: HTTP #{response.status} body=#{response.body.to_s[0..300]}"
+          rescue JSON::ParserError
+            raise "API request failed: HTTP #{response.status} body=#{response.body.to_s[0..300]}"
           end
         end
       end

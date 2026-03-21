@@ -73,6 +73,7 @@ module Clacky
             )
             @ws_client = nil
             @running = false
+            @doc_retry_cache = {} # { chat_id => { doc_urls: [...], attempts: N } }
           end
 
           # Start listening for messages via WebSocket
@@ -107,6 +108,15 @@ module Clacky
           # @return [Hash] Result with :message_id
           def send_text(chat_id, text, reply_to: nil)
             @bot.send_text(chat_id, text, reply_to: reply_to)
+          end
+
+          # Send a file (or image) to a chat.
+          # @param chat_id [String] Chat ID
+          # @param path [String] Local file path
+          # @param name [String, nil] Display filename
+          # @param reply_to [String, nil] Message ID to reply to
+          def send_file(chat_id, path, name: nil, reply_to: nil)
+            @bot.send_file(chat_id, path, name: name, reply_to: reply_to)
           end
 
           # Update existing message
@@ -149,8 +159,8 @@ module Clacky
               # Challenge is handled by MessageParser
             end
           rescue => e
-            warn "Error handling event: #{e.message}"
-            warn e.backtrace.join("\n")
+            Clacky::Logger.warn("[feishu] Error handling event: #{e.message}")
+            Clacky::Logger.warn(e.backtrace.first(5).join("\n"))
           end
 
           # Handle message event
@@ -181,7 +191,68 @@ module Clacky
             all_files = image_files + disk_files
             event = event.merge(files: all_files) unless all_files.empty?
 
+            # Merge cached doc_urls (from previous failed attempts) into current event
+            cached = @doc_retry_cache[event[:chat_id]]
+            if cached
+              merged_urls = ((event[:doc_urls] || []) + cached[:doc_urls]).uniq
+              event = event.merge(doc_urls: merged_urls)
+            end
+
+            # Fetch Feishu document content for any doc URLs in the message
+            if event[:doc_urls] && !event[:doc_urls].empty?
+              event = enrich_with_doc_content(event)
+              return if event.nil?
+            end
+
             @on_message&.call(event)
+          end
+
+          # Fetch Feishu document content and append to event[:text].
+          # If the app lacks permission (91403), sends a guidance message and returns nil
+          # so the caller can skip forwarding the event to the agent.
+          # @param event [Hash]
+          # @return [Hash, nil] enriched event or nil if permission error
+          DOC_RETRY_MAX = 3
+
+          def enrich_with_doc_content(event)
+            doc_sections = []
+            failed_urls = []
+
+            event[:doc_urls].each do |url|
+              content = @bot.fetch_doc_content(url)
+              doc_sections << "📄 [Doc content from #{url}]\n#{content}" unless content.empty?
+            rescue Feishu::FeishuDocPermissionError
+              failed_urls << url
+              doc_sections << "#{url}\n[System Notice] Cannot read the above Feishu doc: the app has no access (error 91403). Tell user to: open the doc → top-right \"...\" → \"Add Document App\" → add this bot → just send any message to retry."
+            rescue Feishu::FeishuDocScopeError => e
+              failed_urls << url
+              scope_hint = e.auth_url ? "Admin can approve with one click: [点击授权](#{e.auth_url})" : "Admin needs to enable 'docx:document:readonly' scope in Feishu Open Platform."
+              doc_sections << "#{url}\n[System Notice] Cannot read the above Feishu doc: app is missing docx API scope (error 99991672). #{scope_hint} Tell user to just send any message to retry after approval."
+            rescue => e
+              failed_urls << url
+              Clacky::Logger.warn("[feishu] Failed to fetch doc #{url}: #{e.message}")
+              doc_sections << "#{url}\n[System Notice] Cannot read the above Feishu doc: #{e.message}. Tell user to just send any message to retry."
+            end
+
+            # Update retry cache
+            chat_id = event[:chat_id]
+            if failed_urls.any?
+              existing = @doc_retry_cache[chat_id]
+              attempts = (existing&.dig(:attempts) || 0) + 1
+              if attempts >= DOC_RETRY_MAX
+                @doc_retry_cache.delete(chat_id)
+              else
+                @doc_retry_cache[chat_id] = { doc_urls: failed_urls, attempts: attempts }
+              end
+            else
+              # All docs fetched successfully, clear cache
+              @doc_retry_cache.delete(chat_id)
+            end
+
+            return event if doc_sections.empty?
+
+            enriched_text = [event[:text], *doc_sections].reject(&:empty?).join("\n\n")
+            event.merge(text: enriched_text)
           end
 
           MAX_IMAGE_BYTES = Clacky::Utils::FileProcessor::MAX_IMAGE_BYTES
@@ -207,7 +278,7 @@ module Clacky
               data_url = "data:#{mime};base64,#{Base64.strict_encode64(result[:body])}"
               file_hashes << { name: "image.jpg", mime_type: mime, data_url: data_url }
             rescue => e
-              warn "[Feishu] Failed to download image #{image_key}: #{e.message}"
+              Clacky::Logger.warn("[feishu] Failed to download image #{image_key}: #{e.message}")
               errors << "Image download failed: #{e.message}"
             end
             [file_hashes, errors]
@@ -229,7 +300,7 @@ module Clacky
                 mime_type:    "application/octet-stream"
               }
             rescue => e
-              warn "[Feishu] Failed to download file #{attachment[:name]}: #{e.message}"
+              Clacky::Logger.warn("[feishu] Failed to download file #{attachment[:name]}: #{e.message}")
               nil
             end.compact
           end

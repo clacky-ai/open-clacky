@@ -55,6 +55,7 @@ module Clacky
             return nil unless message && sender
 
             msg_type = message["message_type"]
+            Clacky::Logger.info("[feishu] msg_type=#{msg_type} content=#{message["content"].to_s[0..300]}")
             return nil unless %w[text image file].include?(msg_type)
 
             content_raw = message["content"]
@@ -94,6 +95,7 @@ module Clacky
               text: text,
               image_keys: image_keys,
               file_attachments: file_attachments,
+              doc_urls: extract_doc_urls(text),
               message_id: message_id,
               timestamp: timestamp,
               chat_type: chat_type,
@@ -101,6 +103,16 @@ module Clacky
             }
           rescue JSON::ParserError
             nil
+          end
+
+          # Extract Feishu document URLs from text.
+          # Matches: /docx/TOKEN, /docs/TOKEN, /wiki/TOKEN
+          # @param text [String]
+          # @return [Array<String>] matched URLs
+          def extract_doc_urls(text)
+            return [] if text.nil? || text.empty?
+
+            text.scan(%r{https?://[a-zA-Z0-9._-]+\.(?:feishu\.cn|larksuite\.com)/(?:docx|docs|wiki)/[A-Za-z0-9_-]+(?:\?[^\s]*)?})
           end
 
           # Strip bot @mentions from message text

@@ -57,6 +57,7 @@ Gem::Specification.new do |spec|
 
   # Runtime dependencies
   spec.add_dependency "faraday", "~> 2.0"
+  spec.add_dependency "faraday-multipart", "~> 1.0"
   spec.add_dependency "thor", "~> 1.3"
   spec.add_dependency "tty-prompt", "~> 0.23"
   spec.add_dependency "tty-spinner", "~> 0.9"
