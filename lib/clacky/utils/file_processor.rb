@@ -5,7 +5,9 @@ require "fileutils"
 require "securerandom"
 require "stringio"
 
+require_relative "file_parser/doc_parser"
 require_relative "file_parser/docx_parser"
+require_relative "file_parser/pdf_parser"
 require_relative "file_parser/xlsx_parser"
 require_relative "file_parser/pptx_parser"
 require_relative "file_parser/zip_parser"
@@ -51,7 +53,7 @@ module Clacky
       .pdf .doc .docx .ppt .pptx .xls .xlsx .odt .odp .ods
     ].freeze
 
-    # Extensions that can be sent to LLM as base64 (images + PDF)
+    # Extensions that can be sent to LLM as base64 (images + PDF for native-support models)
     LLM_BINARY_EXTENSIONS = %w[.png .jpg .jpeg .gif .webp .pdf].freeze
 
     MIME_TYPES = {
@@ -87,8 +89,11 @@ module Clacky
       file_id   = SecureRandom.hex(8)
 
       case ext
-      when ".docx", ".doc"
+      when ".docx"
         process_office(body, file_id, safe_name, :document) { FileParser::DocxParser.parse(body) }
+
+      when ".doc"
+        process_office(body, file_id, safe_name, :document) { FileParser::DocParser.parse(body) }
 
       when ".xlsx", ".xls"
         process_office(body, file_id, safe_name, :spreadsheet) { FileParser::XlsxParser.parse(body) }
@@ -100,7 +105,7 @@ module Clacky
         process_zip(body, file_id, safe_name)
 
       when ".pdf"
-        process_binary(body, file_id, safe_name, :pdf)
+        process_office(body, file_id, safe_name, :pdf) { FileParser::PdfParser.parse(body) }
 
       when ".png", ".jpg", ".jpeg", ".gif", ".webp"
         process_binary(body, file_id, safe_name, :image)

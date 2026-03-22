@@ -13,7 +13,7 @@ module Clacky
       # @return [String] Markdown representation
       def self.parse(body)
         xml = read_document_xml(body)
-        return xml if xml.start_with?("(") # error string
+        raise "Failed to open file: #{xml[1..-2]}" if xml.start_with?("(") # error string from read_document_xml
 
         doc = REXML::Document.new(xml)
         numbering = read_numbering(body)
@@ -32,8 +32,6 @@ module Clacky
 
         result = lines.join("\n").strip
         result.empty? ? "(Document appears to be empty)" : result
-      rescue => e
-        "(Failed to parse document: #{e.message})"
       end
 
       # --- private ---
@@ -41,11 +39,9 @@ module Clacky
       def self.read_document_xml(body)
         Zip::File.open_buffer(StringIO.new(body)) do |zip|
           entry = zip.find_entry("word/document.xml")
-          return "(Could not extract content — possibly encrypted or invalid)" unless entry
+          raise "Could not extract content — possibly encrypted or invalid format" unless entry
           entry.get_input_stream.read
         end
-      rescue => e
-        "(Failed to open file: #{e.message})"
       end
 
       # Returns a hash: { abstract_num_id => { ilvl => { numFmt, start } } }

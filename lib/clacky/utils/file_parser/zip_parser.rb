@@ -42,8 +42,6 @@ module Clacky
 
         lines << "\n*(listing truncated at #{MAX_ENTRIES} entries)*" if truncated
         lines.join("\n")
-      rescue => e
-        "(Failed to read ZIP: #{e.message})"
       end
 
       # --- private ---

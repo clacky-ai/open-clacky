@@ -64,8 +64,6 @@ module Clacky
         end
 
         sections.empty? ? "(Spreadsheet appears to be empty)" : sections.join("\n\n")
-      rescue => e
-        "(Failed to parse spreadsheet: #{e.message})"
       end
 
       # --- private ---

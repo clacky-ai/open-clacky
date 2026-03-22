@@ -31,8 +31,6 @@ module Clacky
         end.compact
 
         sections.empty? ? "(Presentation appears to be empty)" : sections.join("\n\n---\n\n")
-      rescue => e
-        "(Failed to parse presentation: #{e.message})"
       end
 
       # --- private ---
