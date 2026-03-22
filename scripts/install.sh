@@ -305,7 +305,8 @@ install_macos_dependencies() {
             print_info "Added mise activation to $SHELL_RC"
 
             export PATH="$HOME/.local/bin:$PATH"
-            eval "$(~/.local/bin/mise activate $CURRENT_SHELL)"
+            # Always activate using bash syntax here (this script runs under bash)
+            eval "$(~/.local/bin/mise activate bash)"
 
             print_success "mise installed successfully"
         else
@@ -319,8 +320,8 @@ install_macos_dependencies() {
     # Install Ruby 3 via mise
     print_info "Installing Ruby 3 via mise..."
     if ~/.local/bin/mise use -g ruby@3; then
-        # Reload mise using the current shell
-        eval "$(~/.local/bin/mise activate $CURRENT_SHELL)"
+        # Reload mise using bash syntax (this script runs under bash)
+        eval "$(~/.local/bin/mise activate bash)"
         print_success "Ruby 3 installed successfully"
     else
         print_error "Failed to install Ruby 3"
@@ -376,7 +377,8 @@ install_ubuntu_dependencies() {
             print_info "Added mise activation to $SHELL_RC"
 
             export PATH="$HOME/.local/bin:$PATH"
-            eval "$(~/.local/bin/mise activate $CURRENT_SHELL)"
+            # Always activate using bash syntax here (this script runs under bash)
+            eval "$(~/.local/bin/mise activate bash)"
 
             print_success "mise installed successfully"
         else
@@ -390,8 +392,8 @@ install_ubuntu_dependencies() {
     # Install Ruby 3 via mise
     print_info "Installing Ruby 3 via mise..."
     if ~/.local/bin/mise use -g ruby@3; then
-        # Reload mise using the current shell
-        eval "$(~/.local/bin/mise activate $CURRENT_SHELL)"
+        # Reload mise using bash syntax (this script runs under bash)
+        eval "$(~/.local/bin/mise activate bash)"
         print_success "Ruby 3 installed successfully"
     else
         print_error "Failed to install Ruby 3"
