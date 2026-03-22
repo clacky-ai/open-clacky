@@ -694,7 +694,7 @@ module Clacky
             # Clear output area
             ui_controller.layout.clear_output
             # Clear session by creating a new agent
-            agent = Clacky::Agent.new(client, agent_config, working_dir: working_dir, ui: ui_controller, profile: agent.agent_profile.name, session_id: Clacky::SessionManager.generate_id)
+            agent = Clacky::Agent.new(client, agent_config, working_dir: working_dir, ui: ui_controller, profile: agent.agent_profile.name, session_id: Clacky::SessionManager.generate_id, source: :manual)
             ui_controller.show_info("Session cleared. Starting fresh.")
             # Update session bar with reset values
             ui_controller.update_sessionbar(tasks: agent.total_tasks, cost: agent.total_cost)
