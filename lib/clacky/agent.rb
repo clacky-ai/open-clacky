@@ -96,6 +96,12 @@ module Clacky
 
       # Ensure user-space parsers are in place (~/.clacky/parsers/)
       Utils::ParserManager.setup!
+
+      # Connect to MCP servers declared in ~/.clacky/mcp.yml and .clacky/mcp.yml,
+      # then register their tools into the registry. Runs in a background thread so
+      # Agent startup is not blocked by slow MCP server connections.
+      @mcp_clients = []
+      connect_mcp_servers_async!
     end
 
     # Restore from a saved session
@@ -1132,6 +1138,34 @@ module Clacky
         full_path = File.expand_path(file_path, @working_dir)
         @modified_files_in_task << full_path unless @modified_files_in_task.include?(full_path)
       end
+    end
+
+    # Connect to all configured MCP servers in a background daemon thread.
+    # Each server is connected independently; failures are logged and skipped.
+    # Registered tools become available to the Agent once the thread completes.
+    private def connect_mcp_servers_async!
+      mcp_cfg = McpConfig.load(working_dir: @working_dir)
+      return unless mcp_cfg.any?
+
+      Thread.new do
+        mcp_cfg.all_servers.each do |server|
+          name   = server["name"]
+          config = server.reject { |k, _| k == "name" || k.to_s.start_with?("_") }
+
+          begin
+            client = McpClient.for_server(name, config)
+            client.connect!
+
+            adapters = McpToolAdapter.from_client(client)
+            adapters.each { |adapter| @tool_registry.register(adapter) }
+
+            @mcp_clients << client
+            Clacky::Utils::Logger.debug("[MCP] Connected to '#{name}' — #{adapters.size} tool(s) registered")
+          rescue => e
+            Clacky::Utils::Logger.debug("[MCP] Failed to connect to '#{name}': #{e.message}")
+          end
+        end
+      end.tap { |t| t.abort_on_exception = false }
     end
   end
 end
