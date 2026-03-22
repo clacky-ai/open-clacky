@@ -413,65 +413,6 @@ module Clacky
             parse_response(response)
           end
 
-          # Upload an image to Feishu and return image_key.
-          # @param data [String] Binary file content
-          # @param filename [String] Display filename
-          # @return [String] image_key
-          def upload_image(data, filename)
-            conn = Faraday.new(url: @domain) do |f|
-              f.options.timeout = DOWNLOAD_TIMEOUT
-              f.options.open_timeout = API_TIMEOUT
-              f.ssl.verify = false
-              f.request :multipart
-              f.adapter Faraday.default_adapter
-            end
-
-            response = conn.post("/open-apis/im/v1/images") do |req|
-              req.headers["Authorization"] = "Bearer #{tenant_access_token}"
-              req.body = {
-                image_type: "message",
-                image: Faraday::Multipart::FilePart.new(
-                  StringIO.new(data), detect_mime(filename), filename
-                )
-              }
-            end
-
-            result = JSON.parse(response.body)
-            raise "Failed to upload image: code=#{result["code"]} msg=#{result["msg"]}" if result["code"] != 0
-
-            result.dig("data", "image_key") or raise "No image_key returned"
-          end
-
-          # Upload a file to Feishu and return file_key.
-          # @param data [String] Binary file content
-          # @param filename [String] Display filename
-          # @return [String] file_key
-          def upload_file(data, filename)
-            conn = Faraday.new(url: @domain) do |f|
-              f.options.timeout = DOWNLOAD_TIMEOUT
-              f.options.open_timeout = API_TIMEOUT
-              f.ssl.verify = false
-              f.request :multipart
-              f.adapter Faraday.default_adapter
-            end
-
-            response = conn.post("/open-apis/im/v1/files") do |req|
-              req.headers["Authorization"] = "Bearer #{tenant_access_token}"
-              req.body = {
-                file_type: feishu_file_type(filename),
-                file_name: filename,
-                file: Faraday::Multipart::FilePart.new(
-                  StringIO.new(data), detect_mime(filename), filename
-                )
-              }
-            end
-
-            result = JSON.parse(response.body)
-            raise "Failed to upload file: code=#{result["code"]} msg=#{result["msg"]}" if result["code"] != 0
-
-            result.dig("data", "file_key") or raise "No file_key returned"
-          end
-
           # Map file extension to Feishu file_type enum.
           # Feishu accepts: opus, mp4, pdf, doc, xls, ppt, stream (others)
           def feishu_file_type(filename)
