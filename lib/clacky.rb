@@ -62,6 +62,9 @@ require_relative "clacky/server/web_ui_controller"
 require_relative "clacky/server/browser_manager"
 require_relative "clacky/cli"
 
+# Skill UI extension system — loaded last to avoid upstream conflict surface area
+require_relative "clacky/ui_extension_loader"
+
 module Clacky
   class AgentInterrupted < Exception; end  # Inherit from Exception to bypass rescue StandardError
   class AgentError < StandardError; end

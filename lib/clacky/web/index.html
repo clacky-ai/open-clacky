@@ -86,7 +86,10 @@
         </div>
         <!-- Load more buttons are rendered dynamically inside each section by Sessions.renderList() -->
       </div>
-      
+
+      <!-- Skill UI sidebar entries injected here dynamically by skill_ui.js -->
+      <div id="ui-section"></div>
+
       <!-- Config Group -->
       <div id="config-section">
         <div class="sidebar-divider"><span data-i18n="sidebar.config">Config</span></div>
@@ -598,5 +601,14 @@
 <script src="/brand.js"></script>
 <script src="/version.js"></script>
 <script src="/app.js"></script>
+<!-- skill_ui.js loaded dynamically after app.js to avoid touching the static script list -->
+<script>
+  (function () {
+    var s = document.createElement('script');
+    s.src = '/skill_ui.js';
+    s.async = false;
+    document.head.appendChild(s);
+  })();
+</script>
 </body>
 </html>

@@ -13,6 +13,7 @@ require_relative "session_registry"
 require_relative "web_ui_controller"
 require_relative "scheduler"
 require_relative "../brand_config"
+require_relative "skill_ui_routes"
 require_relative "channel"
 require_relative "../banner"
 require_relative "../utils/file_processor"
@@ -85,6 +86,8 @@ module Clacky
     #   *    /api/*                  → JSON REST API (sessions, tasks, schedules)
     #   GET  /**                     → static files served from lib/clacky/web/ directory
     class HttpServer
+      include Clacky::SkillUiRoutes
+
       WEB_ROOT = File.expand_path("../web", __dir__)
 
       # Default SOUL.md written when the user skips the onboard conversation.
@@ -165,6 +168,8 @@ module Clacky
         )
         @browser_manager = Clacky::BrowserManager.instance
         @skill_loader    = Clacky::SkillLoader.new(working_dir: nil, brand_config: Clacky::BrandConfig.load)
+        # Load skill UI route handlers from each skill's ui/routes.rb (if present).
+        load_skill_ui_routes
       end
 
       def start
@@ -308,8 +313,16 @@ module Clacky
         when ["GET",    "/api/version"]           then api_get_version(res)
         when ["POST",   "/api/version/upgrade"]   then api_upgrade_version(req, res)
         when ["POST",   "/api/restart"]           then api_restart(req, res)
+        when ["GET",    "/api/ui-extensions"]     then api_list_skill_uis(res)
         else
-          if method == "POST" && path.match?(%r{^/api/channels/[^/]+/test$})
+          if method == "GET" && path.match?(%r{^/api/ui-extensions/[^/]+/assets/[^/]+$})
+            parts    = path.split("/")
+            skill_id = URI.decode_www_form_component(parts[3])
+            filename = URI.decode_www_form_component(parts[5])
+            api_skill_ui_asset(skill_id, filename, res)
+          elsif (handler = match_skill_ui_route(method, path))
+            handler.call(req, res)
+          elsif method == "POST" && path.match?(%r{^/api/channels/[^/]+/test$})
             platform = path.sub("/api/channels/", "").sub("/test", "")
             api_test_channel(platform, req, res)
           elsif method == "POST" && path.start_with?("/api/channels/")
