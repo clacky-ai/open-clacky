@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.9] - 2026-03-23
+
+### Added
+- **Real-time skill loading in Web UI**: the `/skill` autocomplete now fetches the live skill list on every trigger, so newly installed or updated skills appear immediately without a page reload
+- **Skill source type in autocomplete**: each skill in the autocomplete now carries its source type (default / user / project / brand), making it easy to see where a skill comes from
+- **Browser configure API**: a new `POST /api/browser/configure` endpoint writes `browser.yml` and hot-reloads the browser daemon — the browser-setup skill now configures the browser in one step without manual file editing
+- **Brand skill path confidentiality**: temporary script paths used by encrypted brand skills are now hidden from the agent's output and never disclosed to the user
+
+### Improved
+- **Stale brand skills cleared on license switch**: activating a new license now automatically removes encrypted skill files from the previous brand, preventing decryption errors and stale skill behaviour
+- **Brand skill confidentiality enforcement**: the system prompt and per-skill injection both include an explicit notice that internal script paths are runtime details and must never be shown to the user
+- **Rebind license confirmation**: re-binding a license in Settings now shows a confirmation dialog before proceeding, preventing accidental license changes
+
+### Fixed
+- **HTTP server spec stability**: fixed flaky test assertions in `http_server_spec.rb` that caused intermittent CI failures
+
+### More
+- Updated `gem-release` skill with improved CHANGELOG writing guidelines
+
 ## [0.9.8] - 2026-03-23
 
 ### Added
