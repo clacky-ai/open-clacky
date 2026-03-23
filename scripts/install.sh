@@ -98,108 +98,130 @@ detect_shell() {
     print_info "Detected shell: $CURRENT_SHELL (rc file: $SHELL_RC)"
 }
 
-# ---------------------------------------------------------------------------
-# Network pre-flight check
-#
-# Probes a set of URLs that the installer must reach.  For each one we record
-# whether the host is reachable and how long it took.  If any critical host
-# is slow (> SLOW_THRESHOLD_MS ms) or unreachable we assume the user is
-# behind the Great Firewall and print mirror / proxy suggestions.
-# ---------------------------------------------------------------------------
-SLOW_THRESHOLD_SEC=3     # seconds — anything slower is flagged as "slow"
-NETWORK_OK=true          # set to false if any critical host fails
+# Network-aware installer source selection
+SLOW_THRESHOLD_MS=2500
+NETWORK_REGION="global"
+USE_CN_MIRRORS=false
+DEFAULT_RUBYGEMS_URL="https://rubygems.org"
+GITHUB_RAW_BASE_URL="https://raw.githubusercontent.com"
+HOMEBREW_INSTALL_SCRIPT_URL="${GITHUB_RAW_BASE_URL}/Homebrew/install/HEAD/install.sh"
+OPENCLACKY_INSTALL_SCRIPT_URL="${GITHUB_RAW_BASE_URL}/clacky-ai/open-clacky/main/scripts/install.sh"
+TUNA_MIRROR_BASE_URL="https://mirrors.tuna.tsinghua.edu.cn"
+CN_CDN_BASE_URL="https://clackyai-1258723534.cos.ap-guangzhou.myqcloud.com"
+DEFAULT_MISE_INSTALL_URL="https://mise.run"
+CN_MISE_INSTALL_URL="${CN_CDN_BASE_URL}/mise.sh"
+CN_RUBY_PRECOMPILED_URL="${CN_CDN_BASE_URL}/ruby/ruby-{version}.{platform}.tar.gz"
+MISE_INSTALL_URL="$DEFAULT_MISE_INSTALL_URL"
+RUBY_VERSION_SPEC="ruby@3"
 
-# Probe a single URL; echoes the round-trip time in seconds, or "timeout".
+# Probe a single URL; echoes the round-trip time in milliseconds, or "timeout".
 _probe_url() {
     local url="$1"
     local timeout_sec=5
-    local start end elapsed http_code
+    local curl_output http_code total_time elapsed_ms
 
-    start=$(date +%s)
-    http_code=$(curl -s -o /dev/null -w "%{http_code}" \
+    curl_output=$(curl -s -o /dev/null -w "%{http_code} %{time_total}" \
         --connect-timeout "$timeout_sec" \
         --max-time "$timeout_sec" \
         "$url" 2>/dev/null) || true
-    end=$(date +%s)
-    elapsed=$(( end - start ))
+    http_code="${curl_output%% *}"
+    total_time="${curl_output#* }"
 
-    if [ -z "$http_code" ] || [ "$http_code" = "000" ]; then
+    if [ -z "$http_code" ] || [ "$http_code" = "000" ] || [ "$http_code" = "$curl_output" ]; then
         echo "timeout"
     else
-        echo "$elapsed"
+        elapsed_ms=$(awk -v seconds="$total_time" 'BEGIN { printf "%d", seconds * 1000 }')
+        echo "$elapsed_ms"
     fi
 }
 
-# Run the full pre-flight check and print a human-readable report.
-check_network() {
+_is_timed_result() {
+    local result="$1"
+
+    [ -n "$result" ] && [ "$result" != "timeout" ] && [ "$result" -ge 0 ] 2>/dev/null
+}
+
+_is_slow_or_unreachable() {
+    local result="$1"
+
+    if [ "$result" = "timeout" ]; then
+        return 0
+    fi
+
+    [ "$result" -ge "$SLOW_THRESHOLD_MS" ] 2>/dev/null
+}
+
+_format_probe_time() {
+    local result="$1"
+
+    if [ "$result" = "timeout" ]; then
+        echo "timeout"
+    else
+        awk -v ms="$result" 'BEGIN { printf "%.1fs", ms / 1000 }'
+    fi
+}
+
+_print_probe_result() {
+    local label="$1"
+    local result="$2"
+
+    if [ "$result" = "timeout" ]; then
+        print_warning "UNREACHABLE (${result})  ${label}"
+    elif _is_slow_or_unreachable "$result"; then
+        print_warning "SLOW ($(_format_probe_time "$result"))  ${label}"
+    else
+        print_success "OK ($(_format_probe_time "$result"))  ${label}"
+    fi
+}
+
+detect_network_region() {
     print_step "Network pre-flight check..."
 
-    # critical = must be reachable for install to succeed
-    local CRITICAL_HOSTS=(
-        "https://rubygems.org"
-        "https://mise.jdx.dev"
-        "https://raw.githubusercontent.com"
-    )
+    local tuna_result cdn_result mise_result rubygems_result github_result
+    local tuna_good=false
+    local cdn_good=false
 
-    local any_slow=false
-    local any_fail=false
+    tuna_result=$(_probe_url "$TUNA_MIRROR_BASE_URL")
+    cdn_result=$(_probe_url "$CN_CDN_BASE_URL")
+    mise_result=$(_probe_url "$DEFAULT_MISE_INSTALL_URL")
+    rubygems_result=$(_probe_url "$DEFAULT_RUBYGEMS_URL")
+    github_result=$(_probe_url "$GITHUB_RAW_BASE_URL")
 
-    for url in "${CRITICAL_HOSTS[@]}"; do
-        # Map URL to a human-readable label (no associative arrays for bash 3 compat)
-        local label
-        case "$url" in
-            *rubygems.org*)           label="RubyGems (gem install)" ;;
-            *mise.jdx.dev*)           label="mise installer" ;;
-            *raw.githubusercontent.com*) label="GitHub raw content" ;;
-            *)                        label="$url" ;;
-        esac
-        local result
-        result=$(_probe_url "$url")
+    _print_probe_result "Tsinghua mirror" "$tuna_result"
+    _print_probe_result "Clacky CDN" "$cdn_result"
+    _print_probe_result "mise installer" "$mise_result"
+    _print_probe_result "RubyGems" "$rubygems_result"
+    _print_probe_result "GitHub raw content" "$github_result"
 
-        if [ "$result" = "timeout" ]; then
-            print_warning "✗ UNREACHABLE  ${label} (${url})"
-            any_fail=true
-            NETWORK_OK=false
-        elif [ "$result" -gt "$SLOW_THRESHOLD_SEC" ] 2>/dev/null; then
-            print_warning "⚡ SLOW (${result}s)  ${label} (${url})"
-            any_slow=true
-            NETWORK_OK=false
-        else
-            print_success "✓ OK (${result}s)  ${label}"
-        fi
-    done
-
-    if [ "$any_fail" = true ] || [ "$any_slow" = true ]; then
-        echo ""
-        print_warning "Network issues detected — you may be in mainland China or behind a firewall."
-        echo ""
-        echo "  ┌─ How to fix ──────────────────────────────────────────────────────────┐"
-        echo "  │                                                                       │"
-        echo "  │  Option 1 — Enable a VPN, then re-run this script.                  │"
-        echo "  │                                                                       │"
-        echo "  │  Option 2 — Set a proxy and re-run:                                  │"
-        echo "  │     export https_proxy=http://127.0.0.1:7890                         │"
-        echo "  │     export http_proxy=http://127.0.0.1:7890                          │"
-        echo "  │                                                                       │"
-        echo "  └───────────────────────────────────────────────────────────────────────┘"
-        echo ""
-
-        if [ "$any_fail" = true ]; then
-            read -p "  Network problems found. Continue anyway? [y/N] " CONTINUE_REPLY
-            CONTINUE_REPLY="${CONTINUE_REPLY:-N}"
-            if [[ ! $CONTINUE_REPLY =~ ^[Yy]$ ]]; then
-                echo ""
-                print_info "Installation cancelled. Fix the network issues above and try again."
-                exit 1
-            fi
-        else
-            print_info "Proceeding despite slow network — installation may take longer than usual."
-        fi
-    else
-        print_success "All network checks passed!"
+    if ! _is_slow_or_unreachable "$tuna_result"; then
+        tuna_good=true
     fi
+
+    if ! _is_slow_or_unreachable "$cdn_result"; then
+        cdn_good=true
+    fi
+
+    if [ "$tuna_good" = true ] && [ "$cdn_good" = true ]; then
+        NETWORK_REGION="china"
+        USE_CN_MIRRORS=true
+        MISE_INSTALL_URL="$CN_MISE_INSTALL_URL"
+        RUBY_VERSION_SPEC="ruby@3.4.8"
+        print_info "Using optimized installation sources for this network environment."
+    else
+        NETWORK_REGION="global"
+        USE_CN_MIRRORS=false
+        MISE_INSTALL_URL="$DEFAULT_MISE_INSTALL_URL"
+        RUBY_VERSION_SPEC="ruby@3"
+        print_info "Detected global network. Using default upstream sources."
+    fi
+
+    if [ "$tuna_good" = false ] || [ "$cdn_good" = false ]; then
+        print_warning "Domestic mirrors are unavailable or too slow. Falling back to default upstream sources."
+    fi
+
     echo ""
 }
+
 
 # Compare version strings
 version_ge() {
@@ -259,42 +281,11 @@ install_via_gem() {
     fi
 }
 
-# Install dependencies and Ruby on macOS
-install_macos_dependencies() {
-    print_step "Installing macOS dependencies and Ruby..."
-    echo ""
-
-    # Install Homebrew (it will automatically install Xcode Command Line Tools if needed)
-    print_info "Checking Homebrew installation..."
-    if ! command_exists brew; then
-        print_info "Installing Homebrew..."
-        /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-
-        # Add Homebrew to PATH
-        echo 'export PATH="/opt/homebrew/bin:$PATH"' >> ~/.zshrc
-        export PATH="/opt/homebrew/bin:$PATH"
-
-        print_success "Homebrew installed successfully"
-    else
-        print_success "Homebrew already installed"
-    fi
-
-    # Install build dependencies
-    print_info "Installing build dependencies..."
-    if brew install openssl@3 libyaml gmp rust; then
-        print_success "Build dependencies installed"
-    else
-        print_error "Failed to install build dependencies"
-        return 1
-    fi
-
-    # Install mise for Ruby version management
-    # Detect current shell before configuring mise
-    detect_shell
-
+# Install mise for Ruby version management
+install_mise_runtime() {
     print_info "Installing mise..."
     if ! command_exists mise; then
-        if curl https://mise.run | sh; then
+        if curl -fsSL "$MISE_INSTALL_URL" | sh; then
             # Add mise activation to the current shell's rc file
             local mise_init_line='eval "$(~/.local/bin/mise activate '"$CURRENT_SHELL"')"'
             if [ -f "$SHELL_RC" ]; then
@@ -316,15 +307,72 @@ install_macos_dependencies() {
     else
         print_success "mise already installed"
     fi
+}
 
-    # Install Ruby 3 via mise
+install_ruby_via_mise() {
     print_info "Installing Ruby 3 via mise..."
-    if ~/.local/bin/mise use -g ruby@3; then
-        # Reload mise using bash syntax (this script runs under bash)
+
+    if [ "$USE_CN_MIRRORS" = true ]; then
+        ~/.local/bin/mise settings ruby.compile=false
+        ~/.local/bin/mise settings ruby.precompiled_url="$CN_RUBY_PRECOMPILED_URL"
+    else
+        ~/.local/bin/mise settings unset ruby.compile >/dev/null 2>&1 || true
+        ~/.local/bin/mise settings unset ruby.precompiled_url >/dev/null 2>&1 || true
+    fi
+
+    if ~/.local/bin/mise use -g "$RUBY_VERSION_SPEC"; then
+        # Reload mise in the current bash process
         eval "$(~/.local/bin/mise activate bash)"
         print_success "Ruby 3 installed successfully"
     else
         print_error "Failed to install Ruby 3"
+        return 1
+    fi
+}
+
+# Install dependencies and Ruby on macOS
+install_macos_dependencies() {
+    print_step "Installing macOS dependencies and Ruby..."
+    echo ""
+
+    if [ "$USE_CN_MIRRORS" = true ]; then
+        print_info "Detected mainland/restricted network on macOS"
+        print_info "Skipping Homebrew and build dependencies because Ruby will be installed from precompiled binaries"
+    else
+        # Install Homebrew (it will automatically install Xcode Command Line Tools if needed)
+        print_info "Checking Homebrew installation..."
+        if ! command_exists brew; then
+            print_info "Installing Homebrew..."
+            /bin/bash -c "$(curl -fsSL "$HOMEBREW_INSTALL_SCRIPT_URL")"
+
+            # Add Homebrew to PATH
+            echo 'export PATH="/opt/homebrew/bin:$PATH"' >> ~/.zshrc
+            export PATH="/opt/homebrew/bin:$PATH"
+
+            print_success "Homebrew installed successfully"
+        else
+            print_success "Homebrew already installed"
+        fi
+
+        # Install build dependencies for the default upstream Ruby toolchain path
+        print_info "Installing build dependencies..."
+        if brew install openssl@3 libyaml gmp rust; then
+            print_success "Build dependencies installed"
+        else
+            print_error "Failed to install build dependencies"
+            return 1
+        fi
+    fi
+
+    # Install mise for Ruby version management
+    # Detect current shell before configuring mise
+    detect_shell
+
+    if ! install_mise_runtime; then
+        return 1
+    fi
+
+    if ! install_ruby_via_mise; then
         return 1
     fi
 
@@ -341,6 +389,20 @@ install_macos_dependencies() {
 install_ubuntu_dependencies() {
     print_step "Installing Ubuntu dependencies and Ruby..."
     echo ""
+
+    if [ "$USE_CN_MIRRORS" = true ]; then
+        print_info "Configuring apt mirror (Tsinghua)..."
+        local codename="${VERSION_CODENAME:-jammy}"
+        sudo tee /etc/apt/sources.list > /dev/null <<EOF
+deb https://mirrors.tuna.tsinghua.edu.cn/ubuntu/ ${codename} main restricted universe multiverse
+deb https://mirrors.tuna.tsinghua.edu.cn/ubuntu/ ${codename}-updates main restricted universe multiverse
+deb https://mirrors.tuna.tsinghua.edu.cn/ubuntu/ ${codename}-backports main restricted universe multiverse
+deb https://mirrors.tuna.tsinghua.edu.cn/ubuntu/ ${codename}-security main restricted universe multiverse
+EOF
+        print_success "Mirror configured"
+    else
+        print_info "Using default apt sources"
+    fi
 
     # Update package list
     print_info "Updating package list..."
@@ -363,40 +425,17 @@ install_ubuntu_dependencies() {
     # Detect current shell before configuring mise
     detect_shell
 
+    # In WSL, Windows paths (e.g. /mnt/c/Windows/system32) are appended to PATH.
+    # mise scans PATH directories for mise.toml and errors on untrusted files found there.
+    # Auto-trust the Windows system32 directory to suppress those errors.
+    export MISE_TRUSTED_CONFIG_PATHS="/mnt/c/Windows/system32"
+
     # Install mise for Ruby version management
-    print_info "Installing mise..."
-    if ! command_exists mise; then
-        if curl https://mise.run | sh; then
-            # Add mise activation to the current shell's rc file
-            local mise_init_line='eval "$(~/.local/bin/mise activate '"$CURRENT_SHELL"')"'
-            if [ -f "$SHELL_RC" ]; then
-                echo "$mise_init_line" >> "$SHELL_RC"
-            else
-                echo "$mise_init_line" > "$SHELL_RC"
-            fi
-            print_info "Added mise activation to $SHELL_RC"
-
-            export PATH="$HOME/.local/bin:$PATH"
-            # Always activate using bash syntax here (this script runs under bash)
-            eval "$(~/.local/bin/mise activate bash)"
-
-            print_success "mise installed successfully"
-        else
-            print_error "Failed to install mise"
-            return 1
-        fi
-    else
-        print_success "mise already installed"
+    if ! install_mise_runtime; then
+        return 1
     fi
 
-    # Install Ruby 3 via mise
-    print_info "Installing Ruby 3 via mise..."
-    if ~/.local/bin/mise use -g ruby@3; then
-        # Reload mise using bash syntax (this script runs under bash)
-        eval "$(~/.local/bin/mise activate bash)"
-        print_success "Ruby 3 installed successfully"
-    else
-        print_error "Failed to install Ruby 3"
+    if ! install_ruby_via_mise; then
         return 1
     fi
 
@@ -429,14 +468,14 @@ suggest_ruby_installation() {
         echo ""
         print_info "Manual Installation with mise:"
         echo "  # Install Homebrew (it will install Xcode Command Line Tools automatically)"
-        echo "  /bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""
+        echo "  /bin/bash -c \"\$(curl -fsSL ${HOMEBREW_INSTALL_SCRIPT_URL})\""
         echo ""
         echo "  # Install dependencies"
         echo "  brew install openssl@3 libyaml gmp rust"
         echo ""
         echo "  # Install mise"
         echo "  curl https://mise.run | sh"
-        echo "  echo 'eval \"\$(~/.local/bin/mise activate bash)\"' >> ~/.zshrc"
+        echo "  echo 'eval \"\$(~/.local/bin/mise activate zsh)\"' >> ~/.zshrc"
         echo ""
         echo "  # Install Ruby 3"
         echo "  mise use -g ruby@3"
@@ -493,7 +532,7 @@ suggest_ruby_installation() {
         echo "  4. Launch Ubuntu from the Start menu"
         echo "  5. Run this installation script again inside Ubuntu:"
         echo ""
-        echo "     curl -fsSL https://raw.githubusercontent.com/clacky-ai/open-clacky/main/scripts/install.sh | bash"
+        echo "     curl -fsSL ${OPENCLACKY_INSTALL_SCRIPT_URL} | bash"
         echo ""
         print_info "Learn more about WSL: https://learn.microsoft.com/en-us/windows/wsl/install"
     fi
@@ -592,7 +631,7 @@ main() {
 
     detect_os
     detect_shell
-    check_network
+    detect_network_region
 
     # Strategy 1: Check Ruby and install via gem
     if check_ruby; then
