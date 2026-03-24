@@ -406,11 +406,13 @@ install_ubuntu_dependencies() {
     if [ "$USE_CN_MIRRORS" = true ]; then
         print_info "Configuring apt mirror (Tsinghua)..."
         local codename="${VERSION_CODENAME:-jammy}"
+        local mirror_base="${TUNA_MIRROR_BASE_URL}/ubuntu/"
+        local common_components="main restricted universe multiverse"
         sudo tee /etc/apt/sources.list > /dev/null <<EOF
-deb https://mirrors.tuna.tsinghua.edu.cn/ubuntu/ ${codename} main restricted universe multiverse
-deb https://mirrors.tuna.tsinghua.edu.cn/ubuntu/ ${codename}-updates main restricted universe multiverse
-deb https://mirrors.tuna.tsinghua.edu.cn/ubuntu/ ${codename}-backports main restricted universe multiverse
-deb https://mirrors.tuna.tsinghua.edu.cn/ubuntu/ ${codename}-security main restricted universe multiverse
+deb ${mirror_base} ${codename} ${common_components}
+deb ${mirror_base} ${codename}-updates ${common_components}
+deb ${mirror_base} ${codename}-backports ${common_components}
+deb ${mirror_base} ${codename}-security ${common_components}
 EOF
         print_success "Mirror configured"
     else
