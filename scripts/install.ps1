@@ -8,9 +8,11 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$INSTALL_SCRIPT_URL = "https://oss.1024code.com/install.sh"
-$UBUNTU_WSL_URL     = "https://oss.1024code.com/ubuntu-jammy-wsl-amd64-ubuntu22.04lts.rootfs.tar.gz"
-$WSL_UPDATE_URL     = "https://oss.1024code.com/wsl_update_x64.msi"
+$CLACKY_CDN_BASE_URL = "https://oss.1024code.com"
+$INSTALL_PS1_COMMAND = "powershell -c `"irm $CLACKY_CDN_BASE_URL/install.ps1 | iex`""
+$INSTALL_SCRIPT_URL  = "$CLACKY_CDN_BASE_URL/install.sh"
+$UBUNTU_WSL_URL      = "$CLACKY_CDN_BASE_URL/ubuntu-jammy-wsl-amd64-ubuntu22.04lts.rootfs.tar.gz"
+$WSL_UPDATE_URL      = "$CLACKY_CDN_BASE_URL/wsl_update_x64.msi"
 $UBUNTU_WSL_DIR     = "C:\WSL\Ubuntu"
 
 # ---------------------------------------------------------------------------
@@ -59,7 +61,7 @@ function Prompt-Reboot {
     Write-Host ""
     Write-Warn "Please restart your computer."
     Write-Warn "After restarting, run the same command again:"
-    Write-Host "  powershell -c `"irm https://oss.1024code.com/install.ps1 | iex`"" -ForegroundColor Yellow
+    Write-Host "  $INSTALL_PS1_COMMAND" -ForegroundColor Yellow
     Write-Host ""
     exit 0
 }
@@ -114,7 +116,7 @@ function Install-Wsl {
         Write-Fail "Please re-run this script as Administrator:"
         Write-Host ""
         Write-Host "  Right-click PowerShell -> 'Run as administrator', then:" -ForegroundColor Yellow
-        Write-Host "  powershell -c `"irm https://oss.1024code.com/install.ps1 | iex`"" -ForegroundColor Yellow
+        Write-Host "  $INSTALL_PS1_COMMAND" -ForegroundColor Yellow
         exit 1
     }
 
