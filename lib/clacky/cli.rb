@@ -580,8 +580,10 @@ module Clacky
         session_manager&.save(agent.to_session_data(status: :success))
         json_ui.update_sessionbar(tasks: agent.total_tasks, cost: agent.total_cost)
       rescue Clacky::AgentInterrupted
+        session_manager&.save(agent.to_session_data(status: :interrupted))
         json_ui.emit("interrupted")
       rescue => e
+        session_manager&.save(agent.to_session_data(status: :error, error_message: e.message))
         json_ui.emit("error", message: e.message)
       ensure
         json_ui.set_idle_status
