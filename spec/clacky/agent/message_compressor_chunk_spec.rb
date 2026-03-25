@@ -32,10 +32,6 @@ RSpec.describe "Compression chunk MD archiving" do
       def config
         double("config", enable_compression: true)
       end
-
-      def total_message_tokens
-        { total: 0 }
-      end
     end
   end
 

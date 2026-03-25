@@ -13,47 +13,41 @@ module Clacky
     # Browser tool — controls the user's real Chromium-based browser (Chrome 146+)
     # via the Chrome DevTools MCP server (chrome-devtools-mcp).
     #
-    # Architecture: profile="user" uses the existing-session driver (Chrome MCP).
+    # Architecture: uses the existing-session driver (Chrome MCP).
     #   chrome-devtools-mcp --autoConnect --experimentalStructuredContent
-    #       --experimental-page-id-routing [--userDataDir <path>]
+    #       --experimental-page-id-routing
     #
     # Communication: MCP stdio JSON-RPC 2.0 over a *persistent* (daemon) process.
     # The MCP server process is started once, kept alive across all tool calls,
-    # and only restarted when the process dies unexpectedly.  This means Chrome
-    # shows the "Allow remote debugging" dialog exactly once per daemon lifetime.
+    # and only restarted when the process dies unexpectedly.
     #
-    # No agent-browser, no DevToolsActivePort, no CDP port management.
+    # pageId is intentionally NOT passed to most MCP calls — the MCP server
+    # maintains its own selected page state. Only focus/close actions need pageId.
+    # When the selected page has been closed, mcp_call automatically retries once.
     class Browser < Base
       self.tool_name = "browser"
       self.tool_description = <<~DESC
         Control the browser for automation tasks (login, form submission, UI interaction, scraping).
         For simple page fetch or search, prefer web_fetch or web_search instead.
 
-        Uses your real Chrome browser (profile="user") with existing logins & cookies. Requires Chrome 146+.
+        Uses your real Chrome browser with existing logins & cookies. Requires Chrome 146+.
 
-        ACTIONS OVERVIEW:
+        ACTIONS:
         - snapshot   → get accessibility tree with element refs. ALWAYS run before interacting.
-        - act        → interact with page: click, type, fill, press, hover, scroll, drag, select, wait, evaluate
+        - act        → interact with page: click, dblclick, type, fill, press, hover, scroll, drag, select, wait, evaluate, click_at
         - open       → open URL in a new tab
         - navigate   → navigate current tab to URL
         - tabs       → list open tabs
-        - focus      → switch to a tab by targetId
-        - close      → close current tab
-        - screenshot → EXPENSIVE. Only use when user explicitly asks to "see" or "show" the page. NEVER call without ref= unless user asks for a visual. Use ref= to screenshot a single element (much cheaper).
+        - focus      → switch to a tab by target_id
+        - close      → close a tab by target_id
+        - screenshot → EXPENSIVE. Only use when user explicitly asks to "see" the page. Use ref= to capture a single element instead.
         - status     → check if browser is running
 
         SNAPSHOT WORKFLOW — always snapshot first:
-        - action="snapshot"                            → full accessibility tree
         - action="snapshot", interactive=true          → interactive elements only (recommended)
         - action="snapshot", interactive=true, compact=true → compact interactive
 
-        SCREENSHOT RULES — read before calling screenshot:
-        1. DEFAULT: use snapshot to understand the page. snapshot is FREE; screenshot costs ~30K tokens.
-        2. WITH ref=: screenshot a single element (e.g. ref="e5") — costs ~1-2K tokens. OK to use.
-        3. WITHOUT ref= (full page): ONLY if user explicitly says "show me", "screenshot", "what does it look like". NEVER call proactively.
-        4. If you want to check state / find elements / verify result → use snapshot, NOT screenshot.
-
-        ACT KINDS: click, dblclick, type, fill, press, hover, drag, select, scroll, wait, evaluate, click_at
+        ACT EXAMPLES:
         - click:    ref="e1"
         - click_at: x=100, y=200  → coordinate click, use when ref-based click fails (React/virtual lists)
         - fill:     ref="e1", text="value"
@@ -61,8 +55,6 @@ module Clacky
         - scroll:   direction="down", amount=300
         - wait:     ms=2000 OR selector=".spinner"
         - evaluate: js="document.title"
-
-        TARGETING TABS — pass target_id from snapshot/tabs to subsequent acts.
       DESC
       self.tool_category = "web"
       self.tool_parameters = {
@@ -72,11 +64,6 @@ module Clacky
             type: "string",
             enum: %w[snapshot act open navigate tabs focus close screenshot status],
             description: "Action to perform."
-          },
-          profile: {
-            type: "string",
-            enum: %w[user],
-            description: "Browser profile. Only 'user' is supported — uses your real Chrome browser with existing logins & cookies."
           },
           interactive: {
             type: "boolean",
@@ -92,7 +79,7 @@ module Clacky
           },
           selector: {
             type: "string",
-            description: "snapshot scope / act CSS selector."
+            description: "act wait: CSS selector to wait for."
           },
           kind: {
             type: "string",
@@ -101,10 +88,10 @@ module Clacky
           },
           ref: {
             type: "string",
-            description: "act: element ref from snapshot (e.g. 'e1'). screenshot: capture only this element (much cheaper than full-page)."
+            description: "act: element ref from snapshot (e.g. 'e1'). screenshot: capture only this element (much cheaper)."
           },
-          text: { type: "string", description: "act type/fill: text to enter." },
-          key:  { type: "string", description: "act press: key (e.g. 'Enter')." },
+          text:      { type: "string",  description: "act type/fill: text to enter." },
+          key:       { type: "string",  description: "act press: key (e.g. 'Enter')." },
           direction: {
             type: "string",
             enum: %w[up down left right],
@@ -112,35 +99,23 @@ module Clacky
           },
           amount:     { type: "integer", description: "act scroll: pixels." },
           ms:         { type: "integer", description: "act wait: milliseconds." },
-          load_state: {
-            type: "string",
-            enum: %w[load domcontentloaded networkidle],
-            description: "act wait: page load state."
-          },
-          js:         { type: "string", description: "act evaluate: JS expression." },
-          target_ref: { type: "string", description: "act drag: destination ref." },
+          js:         { type: "string",  description: "act evaluate: JS expression." },
+          target_ref: { type: "string",  description: "act drag: destination ref." },
           values: {
             type: "array",
             items: { type: "string" },
             description: "act select: option values."
           },
-          double_click: { type: "boolean", description: "act click: double-click." },
-          x: { type: "number", description: "act click_at: x coordinate in pixels." },
-          y: { type: "number", description: "act click_at: y coordinate in pixels." },
+          x:         { type: "number",  description: "act click_at: x coordinate in pixels." },
+          y:         { type: "number",  description: "act click_at: y coordinate in pixels." },
           url:       { type: "string",  description: "open/navigate: URL." },
-          target_id: { type: "string",  description: "tab targetId from open/tabs." },
-          format: {
-            type: "string",
-            enum: %w[png jpeg],
-            description: "screenshot: format (default jpeg)."
-          },
-          quality:   { type: "integer", description: "screenshot: JPEG quality 0-100." },
-          full_page: { type: "boolean", description: "screenshot: full scrollable page." }
+          target_id: { type: "string",  description: "focus/close: tab id from tabs action." },
+          full_page: { type: "boolean", description: "screenshot: capture full scrollable page." }
         },
         required: ["action"]
       }
 
-      # Chrome MCP binary args (chrome-devtools-mcp is installed globally via npm install -g)
+      # Chrome MCP binary args
       CHROME_MCP_BASE_ARGS = %w[
         --autoConnect
         --experimentalStructuredContent
@@ -148,39 +123,28 @@ module Clacky
         --experimentalVision
       ].freeze
 
-      # Minimum Chrome major version for Chrome MCP support
-      MIN_CHROME_MAJOR = 146
-
-      # MCP handshake/call timeout (seconds)
+      MIN_CHROME_MAJOR      = 146
       MCP_HANDSHAKE_TIMEOUT = 10
       MCP_CALL_TIMEOUT      = 60
-
-      # Minimum Node.js major version required by chrome-devtools-mcp
-      MIN_NODE_MAJOR = 20
-
-      MAX_SNAPSHOT_CHARS   = 4000
-      MAX_LLM_OUTPUT_CHARS = 6000
-
-      # MCP daemon is managed by Clacky::BrowserManager (see lib/clacky/server/browser_manager.rb).
-      # Browser tool delegates all mcp_call / lifecycle operations to it via Clacky.browser_manager.
+      MIN_NODE_MAJOR        = 20
+      MAX_SNAPSHOT_CHARS    = 4000
+      MAX_LLM_OUTPUT_CHARS  = 6000
 
       def execute(action:, profile: nil, working_dir: nil, **opts)
         bypass = action.to_s == "status" ||
                  (action.to_s == "act" && (opts[:kind] || opts["kind"]).to_s == "evaluate")
         unless bypass
-          return browser_not_setup_error    unless File.exist?(BROWSER_CONFIG_PATH)
-          return browser_disabled_error     unless browser_enabled?
+          return browser_not_setup_error unless File.exist?(BROWSER_CONFIG_PATH)
+          return browser_disabled_error  unless browser_enabled?
         end
         execute_user_browser(action, opts)
       rescue StandardError => e
-        { error: "Browser error: #{e.message}\n\n#{BROWSER_RECONNECT_HINT}" }
+        { error: classify_browser_error(e) }
       end
 
       def format_call(args)
-        action  = args[:action]  || args["action"]  || "browser"
-        profile = args[:profile] || args["profile"]
-        suffix  = profile ? "(#{action}, profile=#{profile})" : "(#{action})"
-        "browser#{suffix}"
+        action = args[:action] || args["action"] || "browser"
+        "browser(#{action})"
       end
 
       def format_result(result)
@@ -194,13 +158,10 @@ module Clacky
 
         action = result[:action].to_s
 
-        # Screenshot with inline image data — return multipart content blocks so the
-        # LLM can actually see the image (both Anthropic and OpenAI vision formats).
         if action == "screenshot" && result[:image_data]
           mime_type  = result[:mime_type] || "image/jpeg"
           image_data = result[:image_data]
           data_url   = "data:#{mime_type};base64,#{image_data}"
-          # OpenAI vision format (also accepted by Anthropic via client conversion)
           return [
             { type: "text",      text:      "Screenshot captured." },
             { type: "image_url", image_url: { url: data_url } }
@@ -211,48 +172,72 @@ module Clacky
         output = compress_snapshot(output) if action == "snapshot"
         max_chars = action == "snapshot" ? MAX_SNAPSHOT_CHARS : MAX_LLM_OUTPUT_CHARS
 
-        truncated = truncate_output(output, max_chars)
-
         {
           action:  action,
           success: result[:success],
-          stdout:  truncated,
+          stdout:  truncate_output(output, max_chars),
           profile: result[:profile]
         }.compact
       end
 
       private
 
-      # -----------------------------------------------------------------------
-      # User browser (Chrome MCP / existing-session driver)
-      # -----------------------------------------------------------------------
-
-      # Friendly setup guide returned when Chrome is not installed or not running.
-      # Shown to the user (and Agent) when Chrome remote debugging is not enabled.
-      # The strong wording ("STOP", "DO NOT") is intentional — it prevents the
-      # Agent from silently falling back to web_search or other workarounds.
       BROWSER_CONFIG_PATH = File.expand_path("~/.clacky/browser.yml").freeze
 
-      # Shown when any browser action fails at runtime (Chrome closed, lost connection, etc.)
-      BROWSER_RECONNECT_HINT = <<~HINT.strip.freeze
-        Common causes for browser connection failure:
-        1. Chrome is not running — ask the user to open Chrome.
-        2. Remote Debugging is disabled — Chrome must be launched with --remote-debugging-port=9222.
-        3. The browser MCP daemon crashed or lost the connection — it may recover on the next action.
-        4. Chrome has been running for a long time and the CDP connection became unstable — restart Chrome to fix.
-
-        Inform the user of these possible causes and ask if they'd like to run a diagnosis.
-        If yes, invoke the browser-setup skill with subcommand "doctor" to diagnose and fix.
+      BROWSER_DIAGNOSIS_HINT = <<~HINT.strip.freeze
+        Inform the user and ask if they'd like to run a diagnosis.
+        If yes, invoke the browser-setup skill with subcommand "doctor".
       HINT
 
-      # Returns true if ~/.clacky/browser.yml exists and enabled: true.
-      # Returns true if browser.yml exists and enabled: true.
+      # Cause 1+2: Chrome not running, or Remote Debugging disabled (MCP can't distinguish them)
+      BROWSER_NOT_CONNECTED_HINT = <<~HINT.strip.freeze
+        Chrome is not reachable. Possible causes:
+        1. Chrome is not running — ask the user to open Chrome.
+        2. Remote Debugging is disabled — enable via chrome://inspect/#remote-debugging.
+      HINT
+
+      # Cause 3: MCP daemon crashed or failed to start
+      BROWSER_DAEMON_HINT = <<~HINT.strip.freeze
+        The browser MCP daemon crashed or failed to start. It may recover automatically on the next action.
+        If it keeps failing, ask the user to restart Clacky.
+      HINT
+
+      # Cause 4: Chrome long-session unresponsiveness
+      BROWSER_RESTART_HINT = <<~HINT.strip.freeze
+        Chrome has become unresponsive. This often happens after Chrome has been running for a long time.
+        Ask the user to restart Chrome, then retry the action.
+      HINT
+
+      # Classify a browser error and return an appropriate message for the AI.
+      # Only Chrome connectivity errors (causes 1-4) get a specific hint + diagnosis offer.
+      # MCP business errors (wrong params, stale element, page closed, etc.) pass through as-is.
+      private def classify_browser_error(e)
+        msg = e.message.to_s
+
+        # Cause 4: Chrome unresponsive after long session (timed out waiting for MCP response)
+        if msg.include?("timed out after")
+          return "Browser error: #{msg}\n\n#{BROWSER_RESTART_HINT}\n\n#{BROWSER_DIAGNOSIS_HINT}"
+        end
+
+        # Cause 1+2: Chrome not running or Remote Debugging disabled
+        if msg.include?("Could not connect to Chrome")
+          return "Browser error: #{msg}\n\n#{BROWSER_NOT_CONNECTED_HINT}\n\n#{BROWSER_DIAGNOSIS_HINT}"
+        end
+
+        # Cause 3: MCP daemon crashed or handshake failed
+        if msg.include?("handshake timed out") || msg.include?("Chrome MCP tool") || msg.include?("Chrome MCP initialize")
+          return "Browser error: #{msg}\n\n#{BROWSER_DAEMON_HINT}\n\n#{BROWSER_DIAGNOSIS_HINT}"
+        end
+
+        # All other errors: MCP business errors, element/page errors — AI can self-correct.
+        "Browser error: #{msg}"
+      end
+
       private def browser_enabled?
         config = YAML.safe_load(File.read(BROWSER_CONFIG_PATH), permitted_classes: [Date, Time, Symbol])
         config.is_a?(Hash) && config["enabled"] == true
       end
 
-      # Error when browser.yml doesn't exist — never been set up.
       private def browser_not_setup_error
         {
           error: <<~MSG
@@ -263,7 +248,6 @@ module Clacky
         }
       end
 
-      # Error when browser.yml exists but enabled: false — user explicitly disabled it.
       private def browser_disabled_error
         {
           error: <<~MSG
@@ -274,160 +258,133 @@ module Clacky
         }
       end
 
+      # -----------------------------------------------------------------------
+      # Action dispatch
+      # -----------------------------------------------------------------------
+
       private def execute_user_browser(action, opts)
-        if (err = node_error)
-          return err
-        end
+        return node_error if (err = node_error)
 
         case action.to_s
         when "tabs"
-          result = mcp_call("list_pages")
-          pages  = extract_pages(result)
+          pages = extract_pages(mcp_call("list_pages"))
           { action: "tabs", success: true, profile: "user", output: format_tabs(pages), tabs: pages }
+
         when "snapshot"
-          do_user_snapshot(opts)
+          raw  = mcp_call("take_snapshot")
+          text = build_ai_snapshot(extract_snapshot(raw),
+                                   interactive: opts[:interactive] || opts["interactive"],
+                                   compact:     opts[:compact]     || opts["compact"],
+                                   max_depth:   opts[:depth]       || opts["depth"])
+          { action: "snapshot", success: true, profile: "user", output: text }
+
         when "open"
           url = require_url(opts)
           return url if url.is_a?(Hash)
-          result = mcp_call("new_page", { url: url })
-          pages  = extract_pages(result)
-          page   = pages.last || {}
-          { action: "open", success: true, profile: "user",
-            targetId: page[:id]&.to_s, url: url, output: "Opened: #{url}" }
+          mcp_call("new_page", { url: url })
+          { action: "open", success: true, profile: "user", url: url, output: "Opened: #{url}" }
+
         when "navigate"
-          url       = require_url(opts)
+          url = require_url(opts)
           return url if url.is_a?(Hash)
-          target_id = resolve_target_id(opts)
-          return target_id if target_id.is_a?(Hash)
-          mcp_call("navigate_page", { pageId: target_id.to_i, type: "url", url: url })
-          { action: "navigate", success: true, profile: "user",
-            targetId: target_id.to_s, url: url, output: "Navigated to: #{url}" }
+          mcp_call("navigate_page", { type: "url", url: url })
+          { action: "navigate", success: true, profile: "user", url: url, output: "Navigated to: #{url}" }
+
         when "focus"
-          target_id = resolve_target_id(opts)
-          return target_id if target_id.is_a?(Hash)
+          target_id = opts[:target_id] || opts["target_id"]
+          return { error: "target_id is required for focus. Use action=tabs to list open tabs." } if target_id.nil? || target_id.to_s.empty?
           mcp_call("select_page", { pageId: target_id.to_i, bringToFront: true })
           { action: "focus", success: true, profile: "user", output: "Focused tab #{target_id}" }
+
         when "close"
-          target_id = resolve_target_id(opts)
-          return target_id if target_id.is_a?(Hash)
+          target_id = opts[:target_id] || opts["target_id"]
+          return { error: "target_id is required for close. Use action=tabs to list open tabs." } if target_id.nil? || target_id.to_s.empty?
           mcp_call("close_page", { pageId: target_id.to_i })
           { action: "close", success: true, profile: "user", output: "Closed tab #{target_id}" }
+
         when "act"
           do_user_act(opts)
+
         when "screenshot"
           do_user_screenshot(opts)
+
         when "status"
-          result = mcp_call("list_pages")
-          pages  = extract_pages(result)
+          pages = extract_pages(mcp_call("list_pages"))
           { action: "status", success: true, profile: "user",
             output: "Browser running. #{pages.size} tab(s) open.", tabs: pages }
+
         else
-          { error: "Action '#{action}' is not supported for profile=user." }
+          { error: "Action '#{action}' is not supported." }
         end
       end
 
-      private def do_user_snapshot(opts)
-        target_id = resolve_target_id(opts)
-        return target_id if target_id.is_a?(Hash)
-
-        raw = mcp_call("take_snapshot", { pageId: target_id.to_i })
-        snapshot_node = extract_snapshot(raw)
-
-        interactive = opts[:interactive] || opts["interactive"]
-        compact_opt = opts[:compact]     || opts["compact"]
-        max_depth   = opts[:depth]       || opts["depth"]
-
-        text = build_ai_snapshot(snapshot_node,
-                                 interactive: interactive,
-                                 compact: compact_opt,
-                                 max_depth: max_depth)
-
-        { action: "snapshot", success: true, profile: "user",
-          targetId: target_id.to_s, output: text }
-      end
-
       private def do_user_act(opts)
-        kind      = (opts[:kind] || opts["kind"] || "click").to_s
-        target_id = resolve_target_id(opts)
-        return target_id if target_id.is_a?(Hash)
-
-        page_id = target_id.to_i
-        ref     = opts[:ref] || opts["ref"]
+        kind = (opts[:kind] || opts["kind"] || "click").to_s
+        ref  = opts[:ref]   || opts["ref"]
 
         case kind
         when "click", "dblclick"
           uid = require_ref(ref)
           return uid if uid.is_a?(Hash)
-          args = { pageId: page_id, uid: uid }
-          args[:dblClick] = true if kind == "dblclick" || opts[:double_click] || opts["double_click"]
+          args = { uid: uid }
+          args[:dblClick] = true if kind == "dblclick"
           mcp_call("click", args)
-        when "fill"
-          uid   = require_ref(ref)
+
+        when "fill", "type"
+          uid = require_ref(ref)
           return uid if uid.is_a?(Hash)
-          value = opts[:text] || opts["text"] || ""
-          mcp_call("fill", { pageId: page_id, uid: uid, value: value })
-        when "type"
-          uid   = require_ref(ref)
-          return uid if uid.is_a?(Hash)
-          value = opts[:text] || opts["text"] || ""
-          mcp_call("fill", { pageId: page_id, uid: uid, value: value })
+          mcp_call("fill", { uid: uid, value: opts[:text] || opts["text"] || "" })
+
         when "press"
-          key = opts[:key] || opts["key"] || "Enter"
-          mcp_call("press_key", { pageId: page_id, key: key })
+          mcp_call("press_key", { key: opts[:key] || opts["key"] || "Enter" })
+
         when "hover"
           uid = require_ref(ref)
           return uid if uid.is_a?(Hash)
-          mcp_call("hover", { pageId: page_id, uid: uid })
+          mcp_call("hover", { uid: uid })
+
         when "drag"
-          uid        = require_ref(ref)
+          uid = require_ref(ref)
           return uid if uid.is_a?(Hash)
-          target_uid = opts[:target_ref] || opts["target_ref"] || ""
-          mcp_call("drag", { pageId: page_id, from_uid: uid, to_uid: target_uid })
+          mcp_call("drag", { from_uid: uid, to_uid: opts[:target_ref] || opts["target_ref"] || "" })
+
         when "select"
-          uid    = require_ref(ref)
+          uid = require_ref(ref)
           return uid if uid.is_a?(Hash)
           values = Array(opts[:values] || opts["values"] || [])
-          mcp_call("fill", { pageId: page_id, uid: uid, value: values.first.to_s })
+          mcp_call("fill", { uid: uid, value: values.first.to_s })
+
         when "scroll"
           direction = opts[:direction] || opts["direction"] || "down"
-          amount    = opts[:amount]    || opts["amount"]    || 300
-          js = "window.scrollBy(#{direction == 'right' || direction == 'left' ?
-                                   (direction == 'left' ? -amount.to_i : amount.to_i) : 0
-                                 }, #{direction == 'up' ? -amount.to_i :
-                                      direction == 'down' ? amount.to_i : 0})"
-          mcp_call("evaluate_script", { pageId: page_id, function: "() => { #{js} }" })
+          amount    = (opts[:amount]   || opts["amount"]   || 300).to_i
+          dx = case direction; when "right" then amount; when "left" then -amount; else 0; end
+          dy = case direction; when "down"  then amount; when "up"   then -amount; else 0; end
+          mcp_call("evaluate_script", { function: "() => { window.scrollBy(#{dx}, #{dy}) }" })
+
         when "wait"
-          ms         = opts[:ms]         || opts["ms"]
-          load_state = opts[:load_state] || opts["load_state"]
-          sel        = opts[:selector]   || opts["selector"]
+          ms  = opts[:ms]       || opts["ms"]
+          sel = opts[:selector] || opts["selector"]
           if ms
             sleep(ms.to_i / 1000.0)
-            { action: "act", success: true, profile: "user", output: "Waited #{ms}ms" }
             return { action: "act", success: true, profile: "user", output: "Waited #{ms}ms" }
           elsif sel
-            mcp_call("wait_for", { pageId: page_id, text: [sel] })
+            mcp_call("wait_for", { text: [sel] })
           else
             sleep(1)
           end
+
         when "evaluate"
           js     = opts[:js] || opts["js"] || ""
-          result = mcp_call("evaluate_script", {
-            pageId: page_id,
-            function: "() => { return (#{js}) }"
-          })
-          value = extract_message(result)
-          return { action: "act", success: true, profile: "user",
-                   output: value.to_s }
+          result = mcp_call("evaluate_script", { function: "() => { return (#{js}) }" })
+          return { action: "act", success: true, profile: "user", output: extract_message(result).to_s }
+
         when "click_at"
           x = opts[:x] || opts["x"]
           y = opts[:y] || opts["y"]
           return { error: "click_at requires x and y coordinates" } unless x && y
+          result = mcp_call("click_at", { x: x.to_f, y: y.to_f })
+          return { action: "act", success: true, profile: "user", output: extract_message(result).to_s }
 
-          click_args = { pageId: page_id, x: x.to_f, y: y.to_f }
-          click_args[:dblClick] = true if opts[:double_click] || opts["double_click"]
-          result = mcp_call("click_at", click_args)
-          return { action: "act", success: true, profile: "user",
-                   output: extract_message(result).to_s }
         else
           return { error: "Unknown act kind: #{kind}" }
         end
@@ -435,107 +392,68 @@ module Clacky
         { action: "act", success: true, profile: "user", output: "#{kind} completed." }
       end
 
-      # Max width (px) for screenshots sent to the LLM.
-      # Retina/4K screens produce 2x–4x oversized images — we always downscale to this width.
-      SCREENSHOT_MAX_WIDTH = 800
-      # Hard limit on base64 size after downscaling. If still too large, reject.
-      SCREENSHOT_MAX_BASE64_BYTES = 100_000
+      SCREENSHOT_MAX_WIDTH        = 800
+      SCREENSHOT_MAX_BASE64_BYTES = 150_000
 
       private def do_user_screenshot(opts)
-        target_id = resolve_target_id(opts)
-        return target_id if target_id.is_a?(Hash)
-
-        # Always request PNG — chunky_png resizer works on PNG without native deps.
-        # full_page defaults to false to avoid tall images that are expensive in tokens.
-        # uid: if provided, screenshots only that element (much cheaper in tokens).
         full_page = opts[:full_page] || opts["full_page"] || false
         uid       = opts[:ref]       || opts["ref"]
 
-        call_args = { pageId: target_id.to_i, format: "png", fullPage: full_page }
+        call_args = { format: "png", fullPage: full_page }
         call_args[:uid] = uid if uid
         result = mcp_call("take_screenshot", call_args)
 
-        # MCP returns: { "content": [{ "type": "image", "mimeType": "image/png", "data": "<base64>" }] }
         image_block = Array(result["content"]).find { |b| b.is_a?(Hash) && b["type"] == "image" }
 
         unless image_block
           text = extract_text_content(result)
           return { action: "screenshot", success: true, profile: "user",
-                   output: text.empty? ? "Screenshot captured (large image saved to temp file)." : text }
+                   output: text.empty? ? "Screenshot captured." : text }
         end
 
-        image_data = image_block["data"]
-
-        # Downscale to SCREENSHOT_MAX_WIDTH using pure Ruby PNG resizer (no gems needed).
-        image_data = png_downscale_base64(image_data, SCREENSHOT_MAX_WIDTH)
+        image_data = png_downscale_base64(image_block["data"], SCREENSHOT_MAX_WIDTH)
 
         if image_data.bytesize > SCREENSHOT_MAX_BASE64_BYTES
           size_kb = image_data.bytesize / 1024
           return { action: "screenshot", success: false, profile: "user",
-                   output: "Screenshot too large after resize (#{size_kb}KB). " \
-                           "Use action=snapshot instead — it provides the full accessibility tree without token overhead." }
+                   output: "Screenshot too large after resize (#{size_kb}KB). Use action=snapshot instead." }
         end
 
         { action: "screenshot", success: true, profile: "user",
-          image_data: image_data, mime_type: "image/png",
-          output: "Screenshot captured." }
+          image_data: image_data, mime_type: "image/png", output: "Screenshot captured." }
       end
 
-      # ---------------------------------------------------------------------------
-      # PNG downscaler using chunky_png — minimal, reliable, zero native deps
-      #
-      # Accepts base64-encoded PNG, decodes it, and if wider than max_width
-      # downscales proportionally and re-encodes as PNG.
-      # ---------------------------------------------------------------------------
       private def png_downscale_base64(b64, max_width)
         require "chunky_png"
-
         image = ChunkyPNG::Image.from_blob(Base64.strict_decode64(b64))
-        # return b64 if image.width <= max_width
-
-        src_w, src_h  = image.width, image.height
-        before_kb     = b64.bytesize / 1024
-        dst_h         = (src_h * max_width.to_f / src_w).round
+        src_w, src_h = image.width, image.height
+        before_kb    = b64.bytesize / 1024
+        dst_h        = (src_h * max_width.to_f / src_w).round
         image.resample_nearest_neighbor!(max_width, dst_h)
-        result        = Base64.strict_encode64(image.to_blob)
-        after_kb      = result.bytesize / 1024
-
+        result    = Base64.strict_encode64(image.to_blob)
+        after_kb  = result.bytesize / 1024
         Clacky::Logger.error("screenshot resized",
           from: "#{src_w}x#{src_h} (#{before_kb}KB)",
           to:   "#{max_width}x#{dst_h} (#{after_kb}KB)")
-
         result
       end
 
       # -----------------------------------------------------------------------
-      # Sandbox browser (agent-browser fallback — not Chrome MCP)
+      # Chrome MCP
       # -----------------------------------------------------------------------
 
-      # -----------------------------------------------------------------------
-      # Chrome MCP — process management & JSON-RPC over stdio
-      # -----------------------------------------------------------------------
-
-      # Returns the path to the system `node` binary, or nil if not found.
-      # Does NOT search nvm or other version managers — the user is responsible
-      # for ensuring the correct Node.js version is active in their PATH.
       private def find_node_binary
         path = `which node 2>/dev/null`.strip
         return nil if path.empty? || !File.executable?(path)
-
         path
       end
 
-      # Returns the installed Node.js major version, or nil if not installed.
       private def node_major_version
         node = find_node_binary
         return nil unless node
-
-        out = `#{node} --version 2>/dev/null`.strip # e.g. "v22.1.0"
-        out.gsub(/^v/, "").split(".").first.to_i
+        `#{node} --version 2>/dev/null`.strip.gsub(/^v/, "").split(".").first.to_i
       end
 
-      # Checks Node.js availability and version.
-      # Returns nil if everything is fine, or an error Hash with a user-facing message.
       private def node_error
         major = node_major_version
 
@@ -580,22 +498,21 @@ module Clacky
         nil
       end
 
-      # Build the command array for chrome-devtools-mcp.
-      # Public class method — called by BrowserManager so it doesn't need to
-      # duplicate the arg list.
-      # If user_data_dir is provided, appends --userDataDir.
       def self.build_mcp_command(user_data_dir: nil)
         args = CHROME_MCP_BASE_ARGS.dup
         args += ["--userDataDir", user_data_dir.to_s] if user_data_dir && !user_data_dir.to_s.empty?
-
         ["chrome-devtools-mcp", *args]
       end
 
-      # Delegate MCP tool call to BrowserManager singleton.
-      # BrowserManager owns the daemon process — ensures it's alive, handles
-      # the JSON-RPC protocol, and restarts on crash. Thread-safe.
-      private def mcp_call(tool_name, arguments = {}, user_data_dir: nil)
+      # Delegate to BrowserManager. Auto-retries once on "selected page has been closed".
+      private def mcp_call(tool_name, arguments = {})
         Clacky::BrowserManager.instance.mcp_call(tool_name, arguments)
+      rescue RuntimeError => e
+        if e.message.include?("selected page has been closed")
+          raise RuntimeError, "The browser tab was closed. Use action=open to open a new tab, then retry."
+        else
+          raise
+        end
       end
 
       # -----------------------------------------------------------------------
@@ -605,7 +522,6 @@ module Clacky
       private def extract_pages(result)
         return [] unless result.is_a?(Hash)
 
-        # Try structuredContent.pages first
         structured = result["structuredContent"]
         if structured.is_a?(Hash) && structured["pages"].is_a?(Array)
           return structured["pages"].map do |p|
@@ -613,23 +529,17 @@ module Clacky
           end
         end
 
-        # Fall back to text content parsing
-        text = extract_text_content(result)
-        parse_pages_from_text(text)
+        parse_pages_from_text(extract_text_content(result))
       end
 
       private def extract_snapshot(result)
         return {} unless result.is_a?(Hash)
 
         structured = result["structuredContent"]
-        if structured.is_a?(Hash) && structured["snapshot"].is_a?(Hash)
-          return structured["snapshot"]
-        end
+        return structured["snapshot"] if structured.is_a?(Hash) && structured["snapshot"].is_a?(Hash)
 
-        # Try content array
-        text = extract_text_content(result)
         begin
-          JSON.parse(text)
+          JSON.parse(extract_text_content(result))
         rescue StandardError
           {}
         end
@@ -639,20 +549,14 @@ module Clacky
         return "" unless result.is_a?(Hash)
 
         structured = result["structuredContent"]
-        if structured.is_a?(Hash)
-          return structured["message"].to_s if structured["message"]
-        end
+        return structured["message"].to_s if structured.is_a?(Hash) && structured["message"]
 
         extract_text_content(result)
       end
 
       private def extract_text_content(result)
         return "" unless result.is_a?(Hash)
-
-        content = result["content"]
-        return "" unless content.is_a?(Array)
-
-        content.filter_map do |entry|
+        Array(result["content"]).filter_map do |entry|
           entry["text"] if entry.is_a?(Hash) && entry["text"].is_a?(String)
         end.join("\n")
       end
@@ -671,7 +575,7 @@ module Clacky
       end
 
       # -----------------------------------------------------------------------
-      # Snapshot rendering (ChromeMcpSnapshotNode → AI text format)
+      # Snapshot rendering
       # -----------------------------------------------------------------------
 
       INTERACTIVE_ROLES = %w[
@@ -694,10 +598,7 @@ module Clacky
 
         lines = []
         refs  = {}
-        visit_node(node, 0, lines, refs,
-                   interactive: interactive,
-                   compact: compact,
-                   max_depth: max_depth)
+        visit_node(node, 0, lines, refs, interactive: interactive, compact: compact, max_depth: max_depth)
         lines.join("\n")
       end
 
@@ -711,7 +612,6 @@ module Clacky
         val  = node["value"]
         desc = node["description"].to_s.strip
 
-        # Decide whether to render this node (but always recurse into children)
         render = true
         render = false if interactive && !INTERACTIVE_ROLES.include?(role)
         render = false if compact && STRUCTURAL_ROLES.include?(role) && name.empty?
@@ -720,26 +620,20 @@ module Clacky
           line = "#{" " * (depth * 2)}- #{role}"
           line += " \"#{escape_quoted(name)}\"" unless name.empty?
 
-          # Assign ref if interactive or named content role
           if uid && !uid.empty? && (INTERACTIVE_ROLES.include?(role) ||
-                                     (CONTENT_ROLES.include?(role) && !name.empty?))
+                                    (CONTENT_ROLES.include?(role) && !name.empty?))
             refs[uid] = { role: role, name: name }
             line += " [ref=#{uid}]"
           end
 
           line += " value=\"#{escape_quoted(val.to_s)}\"" unless val.nil? || val.to_s.empty?
           line += " description=\"#{escape_quoted(desc)}\"" unless desc.empty?
-
           lines << line
         end
 
-        # Always recurse into children regardless of whether this node was rendered
         child_depth = render ? depth + 1 : depth
         Array(node["children"]).each do |child|
-          visit_node(child, child_depth, lines, refs,
-                     interactive: interactive,
-                     compact: compact,
-                     max_depth: max_depth)
+          visit_node(child, child_depth, lines, refs, interactive: interactive, compact: compact, max_depth: max_depth)
         end
       end
 
@@ -762,19 +656,6 @@ module Clacky
         ref.to_s
       end
 
-      private def resolve_target_id(opts)
-        tid = opts[:target_id] || opts["target_id"]
-        if tid && !tid.to_s.empty?
-          return tid.to_s
-        end
-        # Auto-select the first available page
-        result = mcp_call("list_pages")
-        pages  = extract_pages(result)
-        page   = pages.find { |p| p[:selected] } || pages.first
-        return { error: "No open tabs found. Use action=open first." } unless page
-        page[:id].to_s
-      end
-
       # -----------------------------------------------------------------------
       # Output helpers
       # -----------------------------------------------------------------------
@@ -791,26 +672,23 @@ module Clacky
         end
 
         removed = orig - filtered.size
-        if removed > 0
-          filtered << "\n[snapshot compressed: #{removed} lines removed]\n"
-        end
+        filtered << "\n[snapshot compressed: #{removed} lines removed]\n" if removed > 0
         filtered.join
       end
 
       private def truncate_output(output, max_chars)
         return output if output.length <= max_chars
 
-        lines     = output.lines
-        available = max_chars - 150
+        lines      = output.lines
+        available  = max_chars - 150
         first_part = []
-        acc = 0
+        acc        = 0
         lines.each do |line|
           break if acc + line.length > available
           first_part << line
           acc += line.length
         end
-        notice = "\n... [truncated: #{first_part.size}/#{lines.size} lines shown] ..."
-        first_part.join + notice
+        first_part.join + "\n... [truncated: #{first_part.size}/#{lines.size} lines shown] ..."
       end
     end
   end

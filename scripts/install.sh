@@ -183,7 +183,7 @@ detect_network_region() {
     local upstream_good=false
 
     tuna_result=$(_probe_url "$TUNA_MIRROR_BASE_URL")
-    cdn_result=$(_probe_url "$CN_CDN_BASE_URL")
+    cdn_result=$(_probe_url "$CN_MISE_INSTALL_URL")
     mise_result=$(_probe_url "$DEFAULT_MISE_INSTALL_URL")
     rubygems_result=$(_probe_url "$DEFAULT_RUBYGEMS_URL")
     github_result=$(_probe_url "$GITHUB_RAW_BASE_URL")

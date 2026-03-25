@@ -50,8 +50,8 @@ module Clacky
         # Check if compression is enabled
         return nil unless @config.enable_compression
 
-        # Calculate total tokens and message count
-        total_tokens = total_message_tokens[:total]
+        # Use actual API-reported tokens from last request
+        total_tokens = @previous_total_tokens
         message_count = @history.size
 
         # Force compression (for idle compression) - use lower threshold
@@ -144,11 +144,9 @@ module Clacky
           chunk_path: chunk_path
         }
 
-        final_tokens = total_message_tokens[:total]
-
-        # Show compression info
+        # Show compression info (@previous_total_tokens updated by call_llm with actual API token count)
         @ui&.show_info(
-          "History compressed (~#{compression_context[:original_token_count]} -> ~#{final_tokens} tokens, " \
+          "History compressed (~#{compression_context[:original_token_count]} -> ~#{@previous_total_tokens} tokens, " \
           "level #{compression_context[:compression_level]})"
         )
       end

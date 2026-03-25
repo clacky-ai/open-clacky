@@ -82,71 +82,7 @@ module Clacky
 
       # Estimate token count for a message content
       # Simple approximation: characters / 4 (English text)
-      # For Chinese/other languages, characters / 2 is more accurate
-      # This is a rough estimate for compression triggering purposes
-      # @param content [String, Array, Object] Message content
-      # @return [Integer] Estimated token count
-      def estimate_tokens(content)
-        return 0 if content.nil?
 
-        text = if content.is_a?(String)
-                 content
-               elsif content.is_a?(Array)
-                 # Handle content arrays (e.g., with images)
-                 # Add safety check to prevent nil.compact error
-                 mapped = content.map { |c| c[:text] if c.is_a?(Hash) }
-                 (mapped || []).compact.join
-               else
-                 content.to_s
-               end
-
-        return 0 if text.empty?
-
-        # Detect language mix - count non-ASCII characters
-        ascii_count = text.bytes.count { |b| b < 128 }
-        total_bytes = text.bytes.length
-
-        # Mix ratio (1.0 = all English, 0.5 = all Chinese)
-        mix_ratio = total_bytes > 0 ? ascii_count.to_f / total_bytes : 1.0
-
-        # English: ~4 chars/token, Chinese: ~2 chars/token
-        base_chars_per_token = mix_ratio * 4 + (1 - mix_ratio) * 2
-
-        (text.length / base_chars_per_token).to_i + 50 # Add overhead for message structure
-      end
-
-      # Calculate total token count for all messages
-      # Returns estimated tokens and breakdown by category
-      # @return [Hash] Token counts by role and total
-      def total_message_tokens
-        system_tokens = 0
-        user_tokens = 0
-        assistant_tokens = 0
-        tool_tokens = 0
-        summary_tokens = 0
-
-        @history.to_a.each do |msg|
-          tokens = estimate_tokens(msg[:content])
-          case msg[:role]
-          when "system"
-            system_tokens += tokens
-          when "user"
-            user_tokens += tokens
-          when "assistant"
-            assistant_tokens += tokens
-          when "tool"
-            tool_tokens += tokens
-          end
-        end
-
-        {
-          total: system_tokens + user_tokens + assistant_tokens + tool_tokens,
-          system: system_tokens,
-          user: user_tokens,
-          assistant: assistant_tokens,
-          tool: tool_tokens
-        }
-      end
 
       private
 

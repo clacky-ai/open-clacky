@@ -409,10 +409,9 @@ RSpec.describe Clacky::Agent do
       end
 
       initial_count = compression_agent.history.size
-      initial_tokens = compression_agent.send(:total_message_tokens)[:total]
 
-      # Verify we have enough tokens to trigger compression
-      expect(initial_tokens).to be >= 80_000
+      # Verify we have enough messages to trigger compression (MESSAGE_COUNT_THRESHOLD = 200)
+      expect(initial_count).to be >= 200
 
       # Mock LLM response: first call is compression, returns compressed summary
       allow(client).to receive(:send_messages_with_tools)
@@ -422,12 +421,8 @@ RSpec.describe Clacky::Agent do
       compression_agent.send(:think)
 
       final_count = compression_agent.history.size
-      final_tokens = compression_agent.send(:total_message_tokens)[:total]
 
       expect(final_count).to be < initial_count
-      expect(final_tokens).to be < initial_tokens
-      # Should target around 70K tokens
-      expect(final_tokens).to be <= 75_000
     end
 
     it "preserves system message during compression" do
@@ -535,10 +530,8 @@ RSpec.describe Clacky::Agent do
       end
 
       initial_count = compression_agent.history.size
-      initial_tokens = compression_agent.send(:total_message_tokens)[:total]
 
-      # Verify token count is below token threshold but message count exceeds 100
-      expect(initial_tokens).to be < 80_000
+      # Verify message count exceeds threshold
       expect(initial_count).to be >= 201
 
       # Mock LLM response: first call is compression, returns compressed summary
@@ -549,11 +542,9 @@ RSpec.describe Clacky::Agent do
       compression_agent.send(:think)
 
       final_count = compression_agent.history.size
-      final_tokens = compression_agent.send(:total_message_tokens)[:total]
 
       # Compression should have been triggered by message count threshold
       expect(final_count).to be < initial_count
-      expect(final_tokens).to be < initial_tokens
     end
 
     # Regression tests for: "user types new input during compression → LLM echoes
@@ -709,26 +700,37 @@ RSpec.describe Clacky::Agent do
       it "rolls back the last user message" do
         restored_agent = described_class.from_session(client, config, error_session_data, profile: "coding")
 
-        # Should have rolled back the error-causing message
-        expect(restored_agent.history.size).to eq(3) # system + user + assistant, not the error-causing user message
-        expect(restored_agent.history.to_a.last[:content]).to eq("First response")
+        # Rollback is deferred — history still contains all 4 messages at restore time
+        # (trimming immediately causes the history replay to return empty results in the UI).
+        # The pending flag signals that truncation will happen on the next run().
+        expect(restored_agent.history.size).to eq(4)
+        expect(restored_agent.instance_variable_get(:@pending_error_rollback)).to be true
       end
 
       it "triggers session_rollback hook" do
         hook_data = nil
-        
-        # Create a new agent to add the hook
+
+        # Create a new agent and add hook before restoring session
         agent_with_hook = described_class.new(client, config, working_dir: Dir.pwd, ui: nil, profile: "coding", session_id: Clacky::SessionManager.generate_id, source: :manual)
         agent_with_hook.add_hook(:session_rollback) do |data|
           hook_data = data
         end
 
-        # Manually restore session to trigger the hook
         agent_with_hook.restore_session(error_session_data)
 
+        # Hook is deferred — fires when the user sends the next message via run(),
+        # not at restore time. At this point only the pending flag is set.
+        expect(hook_data).to be_nil
+        expect(agent_with_hook.instance_variable_get(:@pending_error_rollback)).to be true
+
+        # Simulate user sending next message — rollback and hook fire here.
+        allow(client).to receive(:send_messages_with_tools).and_return(
+          mock_api_response(content: "OK")
+        )
+        agent_with_hook.run("New message")
+
         expect(hook_data).not_to be_nil
-        expect(hook_data[:reason]).to eq("Previous session ended with error")
-        expect(hook_data[:error_message]).to eq("Something went wrong")
+        expect(hook_data[:reason]).to eq("Previous session ended with error — rolling back before new message")
         expect(hook_data[:rolled_back_message_index]).to eq(3)
       end
     end
