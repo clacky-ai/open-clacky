@@ -110,15 +110,6 @@ module Clacky
             @bot.send_text(chat_id, text, reply_to: reply_to)
           end
 
-          # Send a file (or image) to a chat.
-          # @param chat_id [String] Chat ID
-          # @param path [String] Local file path
-          # @param name [String, nil] Display filename
-          # @param reply_to [String, nil] Message ID to reply to
-          def send_file(chat_id, path, name: nil, reply_to: nil)
-            @bot.send_file(chat_id, path, name: name, reply_to: reply_to)
-          end
-
           # Update existing message
           # @param chat_id [String] Chat ID (unused for Feishu)
           # @param message_id [String] Message ID to update
@@ -133,6 +124,39 @@ module Clacky
             true
           end
 
+          # Send a local file to the Feishu chat.
+          # Automatically detects the file type and uses the appropriate
+          # Feishu upload + send API (image / audio / video / file).
+          #
+          # @param chat_id [String] Chat ID
+          # @param path [String] Local file path
+          # @param name [String, nil] Override display filename
+          # @param reply_to [String, nil] Message ID to reply to
+          # @return [Hash, nil] { message_id: String } or nil on failure
+          def send_file(chat_id, path, name: nil, reply_to: nil)
+            filename  = name || File.basename(path)
+            file_data = File.binread(path)
+
+            if image_file?(filename)
+              image_key = @bot.upload_image(file_data, filename)
+              @bot.send_image(chat_id, image_key, reply_to: reply_to)
+            else
+              file_type = feishu_file_type(filename)
+              duration  = nil
+              if file_type == "opus"
+                duration = parse_ogg_duration(file_data)
+              elsif file_type == "mp4"
+                duration = parse_mp4_duration(file_data)
+              end
+              file_key = @bot.upload_file(file_data, filename, file_type, duration: duration)
+              case file_type
+              when "opus" then @bot.send_audio(chat_id, file_key, reply_to: reply_to)
+              when "mp4"  then @bot.send_video(chat_id, file_key, reply_to: reply_to)
+              else             @bot.send_file_message(chat_id, file_key, reply_to: reply_to)
+              end
+            end
+          end
+
           # Validate configuration
           # @param config [Hash] Configuration to validate
           # @return [Array<String>] Error messages
@@ -144,6 +168,140 @@ module Clacky
           end
 
           private
+
+          # Known image file extensions for Feishu image upload path.
+          IMAGE_EXTENSIONS = %w[.jpg .jpeg .png .gif .bmp .webp .ico .tiff .tif .heic].freeze
+
+          # Extension-to-Feishu-file-type mapping.
+          # Feishu accepts: "opus" | "mp4" | "pdf" | "doc" | "xls" | "ppt" | "stream"
+          FEISHU_FILE_TYPE_MAP = {
+            ".opus" => "opus", ".ogg" => "opus",
+            ".mp4"  => "mp4",  ".mov" => "mp4",  ".avi" => "mp4", ".mkv" => "mp4", ".webm" => "mp4",
+            ".pdf"  => "pdf",
+            ".doc"  => "doc",  ".docx" => "doc",
+            ".xls"  => "xls",  ".xlsx" => "xls", ".csv" => "xls",
+            ".ppt"  => "ppt",  ".pptx" => "ppt"
+          }.freeze
+
+          # Return true when the filename has an image extension.
+          # @param filename [String]
+          # @return [Boolean]
+          def image_file?(filename)
+            ext = File.extname(filename).downcase
+            IMAGE_EXTENSIONS.include?(ext)
+          end
+
+          # Map a filename extension to the Feishu file type string.
+          # Falls back to "stream" for unknown extensions.
+          # @param filename [String]
+          # @return [String] Feishu file type
+          def feishu_file_type(filename)
+            ext = File.extname(filename).downcase
+            FEISHU_FILE_TYPE_MAP[ext] || "stream"
+          end
+
+          # Parse the duration (ms) from an OGG/Opus binary buffer.
+          # Scans backwards for the last OggS page and reads the granule position.
+          # Returns nil when the buffer cannot be parsed.
+          # @param data [String] Raw binary content
+          # @return [Integer, nil] Duration in milliseconds
+          def parse_ogg_duration(data)
+            # OggS magic: "OggS"
+            oggs = "OggS"
+            offset = -1
+            i = data.bytesize - 4
+            while i >= 0
+              if data.getbyte(i) == 0x4f && data[i, 4] == oggs
+                offset = i
+                break
+              end
+              i -= 1
+            end
+            return nil if offset < 0
+
+            # Granule position: 8 bytes at offset+6 (little-endian)
+            granule_off = offset + 6
+            return nil if granule_off + 8 > data.bytesize
+
+            lo = data[granule_off,     4].unpack1("V")
+            hi = data[granule_off + 4, 4].unpack1("V")
+            granule = hi * 0x1_0000_0000 + lo
+            return nil if granule <= 0
+
+            ((granule.to_f / 48_000) * 1000).ceil
+          rescue
+            nil
+          end
+
+          # Parse the duration (ms) from an MP4 binary buffer.
+          # Finds the moov/mvhd box and reads timescale + duration.
+          # Returns nil when the buffer cannot be parsed.
+          # @param data [String] Raw binary content
+          # @return [Integer, nil] Duration in milliseconds
+          def parse_mp4_duration(data)
+            moov = find_mp4_box(data, 0, data.bytesize, "moov")
+            return nil unless moov
+
+            mvhd = find_mp4_box(data, moov[:data_start], moov[:data_end], "mvhd")
+            return nil unless mvhd
+
+            off     = mvhd[:data_start]
+            version = data.getbyte(off)
+
+            if version == 0
+              return nil if off + 20 > data.bytesize
+              timescale = data[off + 12, 4].unpack1("N")
+              duration  = data[off + 16, 4].unpack1("N")
+            else
+              return nil if off + 32 > data.bytesize
+              timescale = data[off + 20, 4].unpack1("N")
+              hi        = data[off + 24, 4].unpack1("N")
+              lo        = data[off + 28, 4].unpack1("N")
+              duration  = hi * 0x1_0000_0000 + lo
+            end
+
+            return nil if timescale <= 0 || duration <= 0
+
+            (duration.to_f / timescale * 1000).round
+          rescue
+            nil
+          end
+
+          # Find a 4-char-typed MP4 box within the given byte range.
+          # @param data [String] Raw binary content
+          # @param start [Integer] Start offset
+          # @param stop [Integer] End offset
+          # @param type [String] 4-character box type
+          # @return [Hash, nil] { data_start:, data_end: } or nil
+          def find_mp4_box(data, start, stop, type)
+            offset = start
+            while offset + 8 <= stop
+              size     = data[offset, 4].unpack1("N")
+              box_type = data[offset + 4, 4]
+
+              if size == 0
+                box_end    = stop
+                data_start = offset + 8
+              elsif size == 1
+                break if offset + 16 > stop
+                hi         = data[offset + 8,  4].unpack1("N")
+                lo         = data[offset + 12, 4].unpack1("N")
+                box_end    = offset + hi * 0x1_0000_0000 + lo
+                data_start = offset + 16
+              else
+                break if size < 8
+                box_end    = offset + size
+                data_start = offset + 8
+              end
+
+              return { data_start: data_start, data_end: [box_end, stop].min } if box_type == type
+
+              offset = box_end
+            end
+            nil
+          rescue
+            nil
+          end
 
           # Handle incoming WebSocket event
           # @param raw_event [Hash] Raw event data

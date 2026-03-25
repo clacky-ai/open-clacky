@@ -1546,7 +1546,7 @@ module Clacky
         agent = nil
         @registry.with_session(session_id) { |s| agent = s[:agent] }
         agent.rename(new_name)
-        @session_manager.save(agent.to_session_data)
+        save_session(session_id, agent)
         broadcast(session_id, { type: "session_renamed", session_id: session_id, name: new_name })
         json_response(res, 200, { ok: true, name: new_name })
       rescue => e
@@ -1781,22 +1781,19 @@ module Clacky
           task.call
           @registry.update(session_id, status: :idle, error: nil)
           broadcast_session_update(session_id)
-          @session_manager.save(agent.to_session_data(status: :success))
+          save_session(session_id, agent, status: :success)
           # Start idle compression timer now that the agent is idle
           idle_timer&.start
         rescue Clacky::AgentInterrupted
           @registry.update(session_id, status: :idle)
           broadcast_session_update(session_id)
           broadcast(session_id, { type: "interrupted", session_id: session_id })
-          @session_manager.save(agent.to_session_data(status: :interrupted))
+          save_session(session_id, agent, status: :interrupted)
         rescue => e
           @registry.update(session_id, status: :error, error: e.message)
           broadcast_session_update(session_id)
-          # Route error through web_ui so channel subscribers (飞书/企微) receive it too.
-          web_ui = nil
-          @registry.with_session(session_id) { |s| web_ui = s[:ui] }
-          web_ui&.show_error(e.message)
-          @session_manager.save(agent.to_session_data(status: :error, error_message: e.message))
+          broadcast(session_id, { type: "error", session_id: session_id, message: e.message })
+          save_session(session_id, agent, status: :error, error_message: e.message)
         end
         @registry.with_session(session_id) { |s| s[:thread] = thread }
       end
@@ -1908,13 +1905,36 @@ module Clacky
         agent = Clacky::Agent.from_session(client, config, session_data, ui: ui, profile: profile)
         idle_timer = build_idle_timer(original_id, agent)
 
+        # Restore channel_keys (IM platform bindings) persisted in session JSON.
+        # Converts the serialized Array back into a Set so ChannelManager can locate
+        # this session by IM identity after a server restart.
+        persisted_channel_keys = session_data[:channel_keys] || session_data["channel_keys"]
+        channel_keys_set = persisted_channel_keys&.any? ? Set.new(persisted_channel_keys) : nil
+
         @registry.with_session(original_id) do |s|
-          s[:agent]      = agent
-          s[:ui]         = ui
-          s[:idle_timer] = idle_timer
+          s[:agent]        = agent
+          s[:ui]           = ui
+          s[:idle_timer]   = idle_timer
+          s[:channel_keys] = channel_keys_set if channel_keys_set
         end
 
         original_id
+      end
+
+      # Persist a session to disk, including IM channel key bindings so they survive restarts.
+      # Reads channel_keys from the registry and merges them as an Array into session_data
+      # before saving — on restore, build_session_from_data converts them back to a Set.
+      # @param session_id [String]
+      # @param agent      [Clacky::Agent]
+      # @param status     [Symbol]  :success | :interrupted | :error
+      # @param error_message [String, nil]
+      private def save_session(session_id, agent, status: :success, error_message: nil)
+        data = agent.to_session_data(status: status, error_message: error_message)
+        # Attach channel_keys (Set → Array for JSON serialisation)
+        channel_keys = nil
+        @registry.with_session(session_id) { |s| channel_keys = s[:channel_keys]&.to_a }
+        data[:channel_keys] = channel_keys if channel_keys&.any?
+        @session_manager.save(data)
       end
 
       # Build an IdleCompressionTimer for a session.

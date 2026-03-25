@@ -233,6 +233,16 @@ module Clacky
           Clacky::Logger.info("[ChannelManager] Bound #{key} -> session #{session_id[0, 8]}")
           adapter.send_text(chat_id, "Bound to session `#{session_id[0, 8]}`.")
 
+        when "/new"
+          # Unbind from current session (do NOT interrupt it — it keeps running in background)
+          old_id = resolve_session(event)
+          if old_id
+            @registry.with_session(old_id) { |s| s[:channel_keys]&.delete(key) }
+          end
+          # Create and bind a fresh session
+          new_id = auto_create_session(adapter, event)
+          adapter.send_text(chat_id, "New session started (`#{new_id[0, 8]}`). Previous session still runs in the background — use `/list` and `/bind` to switch back.")
+
         when "/stop"
           session_id = resolve_session(event)
           unless session_id
@@ -266,6 +276,7 @@ module Clacky
         else
           adapter.send_text(chat_id,
             "Commands:\n" \
+            "  /new - start a new session\n" \
             "  /bind <n|session_id> - switch to a session (use /list to see numbers)\n" \
             "  /unbind - remove binding\n" \
             "  /stop - interrupt current task\n" \
