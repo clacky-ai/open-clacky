@@ -185,20 +185,31 @@ module Clacky
 
     # ── Prompt caching helpers ────────────────────────────────────────────────
 
-    # Add cache_control marker to the appropriate message in the array.
-    # Strategy: mark the last message, unless that message is a compression
-    # instruction (system_injected: true) — in that case mark the one before it.
+    # Add cache_control markers to the last 2 messages in the array.
+    #
+    # Why 2 markers:
+    #   Turn N   — marks messages[-2] and messages[-1]; server caches prefix up to [-1]
+    #   Turn N+1 — messages[-2] is Turn N's last message (still marked) → cache READ hit;
+    #              messages[-1] is the new message (marked) → cache WRITE for Turn N+2
+    #
+    # With only 1 marker (old behavior): Turn N marks messages[-1]; in Turn N+1 that same
+    # message is now [-2] and carries no marker → server sees a different prefix → cache MISS.
+    #
+    # Compression instructions (system_injected: true) are skipped — we never want to cache
+    # those ephemeral injection messages.
     def apply_message_caching(messages)
       return messages if messages.empty?
 
-      cache_index = if is_compression_instruction?(messages.last)
-                      [messages.length - 2, 0].max
-                    else
-                      messages.length - 1
-                    end
+      # Collect up to 2 candidate indices from the tail, skipping compression instructions.
+      candidate_indices = []
+      (messages.length - 1).downto(0) do |i|
+        break if candidate_indices.length >= 2
+
+        candidate_indices << i unless is_compression_instruction?(messages[i])
+      end
 
       messages.map.with_index do |msg, idx|
-        idx == cache_index ? add_cache_control_to_message(msg) : msg
+        candidate_indices.include?(idx) ? add_cache_control_to_message(msg) : msg
       end
     end
 

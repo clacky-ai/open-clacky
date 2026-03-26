@@ -169,18 +169,25 @@ RSpec.describe "Prompt Caching Feature" do
         expect(last_msg[:content].first[:cache_control]).to eq({ type: "ephemeral" })
       end
 
-      it "does not modify non-last messages" do
+      it "marks the last 2 messages, leaves earlier messages unchanged" do
         messages = [
           { role: "system", content: "System prompt" },
-          { role: "user", content: "User message" }
+          { role: "user", content: "Earlier user message" },
+          { role: "assistant", content: "Assistant reply" },
+          { role: "user", content: "Latest user message" }
         ]
 
         result = client.send(:apply_message_caching, messages)
 
-        # System message (not last) should remain unchanged
-        system_msg = result.find { |m| m[:role] == "system" }
-        expect(system_msg[:content]).to eq("System prompt")
-        expect(system_msg[:cache_control]).to be_nil
+        # First 2 messages (indices 0,1) should remain unchanged
+        expect(result[0][:content]).to eq("System prompt")
+        expect(result[1][:content]).to eq("Earlier user message")
+
+        # Last 2 messages (indices 2,3) should both be marked
+        expect(result[2][:content]).to be_an(Array)
+        expect(result[2][:content].last[:cache_control]).to eq({ type: "ephemeral" })
+        expect(result[3][:content]).to be_an(Array)
+        expect(result[3][:content].last[:cache_control]).to eq({ type: "ephemeral" })
       end
 
       it "handles array content format" do
