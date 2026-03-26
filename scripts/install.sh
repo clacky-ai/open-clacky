@@ -111,19 +111,29 @@ DEFAULT_RUBYGEMS_URL="https://rubygems.org"
 DEFAULT_NPM_REGISTRY="https://registry.npmjs.org"
 DEFAULT_MISE_INSTALL_URL="https://mise.run"
 
-# --- CN mirror roots ---
-TUNA_MIRROR_BASE_URL="https://mirrors.tuna.tsinghua.edu.cn"
+# --- CN mirror provider ---
+# Switch this one line to change gem/npm/Node mirrors all at once.
+# Aliyun:   https://mirrors.aliyun.com
+# Tsinghua: https://mirrors.tuna.tsinghua.edu.cn
+CN_MIRROR_BASE="https://mirrors.aliyun.com"
+
 CN_CDN_BASE_URL="https://oss.1024code.com"
 
-# --- CN source URLs (derived) ---
+# --- CN source URLs (derived from CN_CDN_BASE_URL / CN_MIRROR_BASE) ---
+CN_HOMEBREW_INSTALL_SCRIPT_URL="${CN_CDN_BASE_URL}/Homebrew/install/HEAD/install.sh"
 CN_MISE_INSTALL_URL="${CN_CDN_BASE_URL}/mise.sh"
 CN_RUBY_PRECOMPILED_URL="${CN_CDN_BASE_URL}/ruby/ruby-{version}.{platform}.tar.gz"
-CN_RUBYGEMS_URL="${TUNA_MIRROR_BASE_URL}/rubygems/"
+CN_RUBYGEMS_URL="${CN_MIRROR_BASE}/rubygems/"
 CN_NPM_REGISTRY="https://registry.npmmirror.com"
-CN_NODE_MIRROR_URL="${TUNA_MIRROR_BASE_URL}/nodejs-release/"
-CN_HOMEBREW_BREW_GIT_REMOTE="${TUNA_MIRROR_BASE_URL}/git/homebrew/brew.git"
-CN_HOMEBREW_CORE_GIT_REMOTE="${TUNA_MIRROR_BASE_URL}/git/homebrew/homebrew-core.git"
-CN_HOMEBREW_BOTTLE_DOMAIN="${TUNA_MIRROR_BASE_URL}/homebrew-bottles"
+CN_NODE_MIRROR_URL="${CN_MIRROR_BASE}/nodejs-release/"
+
+# --- Homebrew CN mirrors (path layout differs per provider, update together) ---
+# Aliyun:   base=mirrors.aliyun.com, paths below
+# Tsinghua: base=mirrors.tuna.tsinghua.edu.cn, paths: /git/homebrew/brew.git, /homebrew-bottles, (no API domain)
+CN_HOMEBREW_BREW_GIT_REMOTE="${CN_MIRROR_BASE}/homebrew/brew.git"
+CN_HOMEBREW_CORE_GIT_REMOTE="${CN_MIRROR_BASE}/homebrew/homebrew-core.git"
+CN_HOMEBREW_BOTTLE_DOMAIN="${CN_MIRROR_BASE}/homebrew/homebrew-bottles"
+CN_HOMEBREW_API_DOMAIN="${CN_MIRROR_BASE}/homebrew-bottles/api"
 
 # --- Active values (overridden by detect_network_region) ---
 MISE_INSTALL_URL="$DEFAULT_MISE_INSTALL_URL"
@@ -249,38 +259,38 @@ detect_network_region() {
     print_info "Step 2: Probing installation sources (up to 2 retries each)..."
 
     if [ "$NETWORK_REGION" = "china" ]; then
-        # CN sources: Chinese CDN + Tsinghua
-        local cdn_result tuna_result
+        # CN sources: Chinese CDN + CN_MIRROR_BASE
+        local cdn_result mirror_result
         cdn_result=$(_probe_url_with_retry "$CN_MISE_INSTALL_URL")
-        tuna_result=$(_probe_url_with_retry "$TUNA_MIRROR_BASE_URL")
+        mirror_result=$(_probe_url_with_retry "$CN_MIRROR_BASE")
 
         _print_probe_result "Chinese CDN (mise/Ruby)" "$cdn_result"
-        _print_probe_result "Tsinghua mirror (gem/npm/Node/apt)" "$tuna_result"
+        _print_probe_result "CN mirror (gem/npm/Node/brew)" "$mirror_result"
 
-        local cdn_ok=false tuna_ok=false
-        ! _is_slow_or_unreachable "$cdn_result"  && cdn_ok=true
-        ! _is_slow_or_unreachable "$tuna_result" && tuna_ok=true
+        local cdn_ok=false mirror_ok=false
+        ! _is_slow_or_unreachable "$cdn_result"    && cdn_ok=true
+        ! _is_slow_or_unreachable "$mirror_result" && mirror_ok=true
 
         # Step 3: warn on source failures, but do not abort
         if [ "$cdn_ok" = false ]; then
             print_warning "Chinese CDN is slow/unreachable. mise and Ruby precompiled binaries may fail."
         fi
-        if [ "$tuna_ok" = false ]; then
-            print_warning "Tsinghua mirror is slow/unreachable. gem/npm/Node installs may be slow."
+        if [ "$mirror_ok" = false ]; then
+            print_warning "CN mirror (${CN_MIRROR_BASE}) is slow/unreachable. gem/npm/Node installs may be slow."
         fi
-        if [ "$cdn_ok" = false ] && [ "$tuna_ok" = false ]; then
+        if [ "$cdn_ok" = false ] && [ "$mirror_ok" = false ]; then
             print_warning "All CN mirrors unreachable — falling back to global sources. Expect slow downloads."
         fi
 
         # Step 4: apply CN sources
-        if [ "$cdn_ok" = true ] || [ "$tuna_ok" = true ]; then
+        if [ "$cdn_ok" = true ] || [ "$mirror_ok" = true ]; then
             USE_CN_MIRRORS=true
             MISE_INSTALL_URL="$CN_MISE_INSTALL_URL"
             RUBYGEMS_INSTALL_URL="$CN_RUBYGEMS_URL"
             NPM_REGISTRY_URL="$CN_NPM_REGISTRY"
             NODE_MIRROR_URL="$CN_NODE_MIRROR_URL"
             RUBY_VERSION_SPEC="ruby@3.4.8"
-            print_info "CN mirrors applied: Chinese CDN (mise/Ruby) + Tsinghua (gem/npm/Node/apt)"
+            print_info "CN mirrors applied: Chinese CDN (mise/Ruby) + ${CN_MIRROR_BASE} (gem/npm/Node/brew)"
         else
             USE_CN_MIRRORS=false
             print_info "Falling back to global sources despite CN region detection."
@@ -559,6 +569,8 @@ install_macos_dependencies() {
     # Configure Homebrew CN mirrors before installing (CN mode only)
     if [ "$USE_CN_MIRRORS" = true ]; then
         print_info "Configuring Homebrew CN mirrors..."
+        export HOMEBREW_INSTALL_FROM_API=1
+        export HOMEBREW_API_DOMAIN="$CN_HOMEBREW_API_DOMAIN"
         export HOMEBREW_BREW_GIT_REMOTE="$CN_HOMEBREW_BREW_GIT_REMOTE"
         export HOMEBREW_CORE_GIT_REMOTE="$CN_HOMEBREW_CORE_GIT_REMOTE"
         export HOMEBREW_BOTTLE_DOMAIN="$CN_HOMEBREW_BOTTLE_DOMAIN"
@@ -568,6 +580,8 @@ install_macos_dependencies() {
             {
                 echo ""
                 echo "# Homebrew CN mirrors (added by openclacky installer)"
+                echo "export HOMEBREW_INSTALL_FROM_API=1"
+                echo "export HOMEBREW_API_DOMAIN=\"${CN_HOMEBREW_API_DOMAIN}\""
                 echo "export HOMEBREW_BREW_GIT_REMOTE=\"${CN_HOMEBREW_BREW_GIT_REMOTE}\""
                 echo "export HOMEBREW_CORE_GIT_REMOTE=\"${CN_HOMEBREW_CORE_GIT_REMOTE}\""
                 echo "export HOMEBREW_BOTTLE_DOMAIN=\"${CN_HOMEBREW_BOTTLE_DOMAIN}\""
@@ -582,7 +596,11 @@ install_macos_dependencies() {
     print_info "Checking Homebrew installation..."
     if ! command_exists brew; then
         print_info "Installing Homebrew..."
-        /bin/bash -c "$(curl -fsSL "$HOMEBREW_INSTALL_SCRIPT_URL")"
+        local brew_install_url="$HOMEBREW_INSTALL_SCRIPT_URL"
+        if [ "$USE_CN_MIRRORS" = true ]; then
+            brew_install_url="$CN_HOMEBREW_INSTALL_SCRIPT_URL"
+        fi
+        /bin/bash -c "$(curl -fsSL "$brew_install_url")"
 
         # Add Homebrew to PATH
         echo 'export PATH="/opt/homebrew/bin:$PATH"' >> "$SHELL_RC"
@@ -629,9 +647,9 @@ install_ubuntu_dependencies() {
     echo ""
 
     if [ "$USE_CN_MIRRORS" = true ]; then
-        print_info "Configuring apt mirror (Tsinghua)..."
+        print_info "Configuring apt mirror (${CN_MIRROR_BASE})..."
         local codename="${VERSION_CODENAME:-jammy}"
-        local mirror_base="${TUNA_MIRROR_BASE_URL}/ubuntu/"
+        local mirror_base="${CN_MIRROR_BASE}/ubuntu/"
         local common_components="main restricted universe multiverse"
         sudo tee /etc/apt/sources.list > /dev/null <<EOF
 deb ${mirror_base} ${codename} ${common_components}
