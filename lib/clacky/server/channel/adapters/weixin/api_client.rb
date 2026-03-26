@@ -37,7 +37,10 @@ module Clacky
           # Raised for non-zero API return codes or HTTP errors.
           class ApiError < StandardError
             attr_reader :code
-            def initialize(code, msg) = (@code = code; super("WeixinApiError(#{code}): #{msg.to_s.slice(0, 200)}"))
+            def initialize(code, msg)
+              @code = code
+              super("WeixinApiError(#{code}): #{msg.to_s.slice(0, 200)}")
+            end
           end
 
           # Raised on network/read timeouts.

@@ -194,7 +194,7 @@ module Clacky
 
     def load_config
       return {} unless File.exist?(BROWSER_CONFIG_PATH)
-      YAML.safe_load(File.read(BROWSER_CONFIG_PATH), permitted_classes: [Date, Time, Symbol]) || {}
+      YAMLCompat.safe_load(File.read(BROWSER_CONFIG_PATH), permitted_classes: [Date, Time, Symbol]) || {}
     rescue StandardError => e
       Clacky::Logger.warn("[BrowserManager] Failed to read browser.yml: #{e.message}")
       {}

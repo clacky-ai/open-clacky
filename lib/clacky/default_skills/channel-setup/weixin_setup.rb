@@ -49,8 +49,8 @@ GIVEN_QRCODE_ID = QRCODE_ID_IDX ? ARGV[QRCODE_ID_IDX + 1] : nil
 # Logging (suppress in --fetch-qr mode so stdout is clean JSON)
 # ---------------------------------------------------------------------------
 
-def step(msg) = $stderr.puts("[weixin-setup] #{msg}") unless FETCH_QR_MODE
-def ok(msg)   = $stderr.puts("[weixin-setup] ✅ #{msg}") unless FETCH_QR_MODE
+def step(msg); $stderr.puts("[weixin-setup] #{msg}") unless FETCH_QR_MODE; end
+def ok(msg);   $stderr.puts("[weixin-setup] ✅ #{msg}") unless FETCH_QR_MODE; end
 
 # In fetch-qr mode, write to stderr so stdout stays clean JSON
 def log(msg)

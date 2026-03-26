@@ -234,7 +234,7 @@ module Clacky
       end
 
       private def browser_enabled?
-        config = YAML.safe_load(File.read(BROWSER_CONFIG_PATH), permitted_classes: [Date, Time, Symbol])
+        config = YAMLCompat.safe_load(File.read(BROWSER_CONFIG_PATH), permitted_classes: [Date, Time, Symbol])
         config.is_a?(Hash) && config["enabled"] == true
       end
 

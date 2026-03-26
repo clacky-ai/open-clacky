@@ -244,7 +244,7 @@ module Clacky
       private def load_schedules
         return [] unless File.exist?(SCHEDULES_FILE)
 
-        data = YAML.load_file(SCHEDULES_FILE, permitted_classes: [Symbol])
+        data = YAMLCompat.load_file(SCHEDULES_FILE, permitted_classes: [Symbol])
         Array(data)
       rescue => e
         Clacky::Logger.error("scheduler_load_schedules_error", error: e)

@@ -38,7 +38,7 @@ module Clacky
     # @return [ChannelConfig]
     def self.load(config_file = CONFIG_FILE)
       if File.exist?(config_file)
-        data = YAML.safe_load(File.read(config_file), permitted_classes: [Symbol]) || {}
+        data = YAMLCompat.safe_load(File.read(config_file), permitted_classes: [Symbol]) || {}
       else
         data = {}
       end

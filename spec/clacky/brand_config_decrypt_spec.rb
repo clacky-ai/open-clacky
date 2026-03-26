@@ -6,6 +6,7 @@ require "openssl"
 require "base64"
 require "digest"
 require "json"
+require "clacky/aes_gcm"
 
 # Tests for BrandConfig#decrypt_skill_content AES-256-GCM path,
 # fetch_decryption_key caching, and all error branches.
@@ -21,13 +22,11 @@ RSpec.describe Clacky::BrandConfig, "#decrypt_skill_content (AES-256-GCM)" do
   let(:test_key_hex) { test_key.unpack1("H*") }
 
   # Encrypt plaintext with AES-256-GCM; returns { ciphertext, iv_b64, tag_b64, checksum }
+  # Uses pure-Ruby AesGcm so tests pass on LibreSSL (macOS system Ruby 2.6) and
+  # real OpenSSL alike.
   def aes_gcm_encrypt(key, plaintext)
-    cipher         = OpenSSL::Cipher.new("aes-256-gcm").encrypt
-    cipher.key     = key
-    iv             = cipher.random_iv
-    cipher.auth_data = ""
-    ciphertext     = cipher.update(plaintext) + cipher.final
-    tag            = cipher.auth_tag
+    iv             = OpenSSL::Random.random_bytes(12)
+    ciphertext, tag = Clacky::AesGcm.encrypt(key, iv, plaintext)
 
     {
       ciphertext:  ciphertext,

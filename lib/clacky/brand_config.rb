@@ -1070,11 +1070,24 @@ module Clacky
     # @raise [RuntimeError] on decryption failure (wrong key, tampered data)
     private def aes_gcm_decrypt(key, ciphertext, iv_b64, tag_b64)
       require "base64"
-      cipher          = OpenSSL::Cipher.new("aes-256-gcm").decrypt
-      cipher.key      = key
-      cipher.iv       = Base64.strict_decode64(iv_b64)
-      cipher.auth_tag = Base64.strict_decode64(tag_b64)
-      (cipher.update(ciphertext) + cipher.final).force_encoding("UTF-8")
+      require_relative "aes_gcm"
+
+      iv  = Base64.strict_decode64(iv_b64)
+      tag = Base64.strict_decode64(tag_b64)
+
+      # Try native OpenSSL AES-GCM first (fastest path; works on real OpenSSL).
+      # LibreSSL 3.3.x has a known bug where AES-GCM raises CipherError even
+      # for valid inputs, so we fall back to the pure-Ruby implementation.
+      begin
+        cipher          = OpenSSL::Cipher.new("aes-256-gcm").decrypt
+        cipher.key      = key
+        cipher.iv       = iv
+        cipher.auth_tag = tag
+        (cipher.update(ciphertext) + cipher.final).force_encoding("UTF-8")
+      rescue OpenSSL::Cipher::CipherError
+        # Native GCM failed — use pure-Ruby fallback (LibreSSL-safe)
+        Clacky::AesGcm.decrypt(key, iv, ciphertext, tag)
+      end
     rescue OpenSSL::Cipher::CipherError => e
       raise "Decryption failed: #{e.message}. " \
             "The file may be corrupted or the license key is incorrect."

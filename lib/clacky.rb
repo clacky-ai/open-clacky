@@ -1,5 +1,56 @@
 # frozen_string_literal: true
 
+# ── Ruby < 2.7 polyfills ──────────────────────────────────────────────────────
+
+# Enumerable#filter_map was added in Ruby 2.7.
+if RUBY_VERSION < "2.7"
+  module Enumerable
+    def filter_map(&block)
+      return to_enum(:filter_map) unless block
+
+      each_with_object([]) do |item, result|
+        mapped = block.call(item)
+        result << mapped if mapped
+      end
+    end
+  end
+end
+
+# File.absolute_path? was added in Ruby 2.7.
+# Polyfill: a path is absolute if it starts with "/" (Unix) or a drive letter (Windows).
+unless File.respond_to?(:absolute_path?)
+  def File.absolute_path?(path)
+    File.expand_path(path) == path.to_s
+  end
+end
+
+# URI.encode_uri_component was added in Ruby 3.2.
+# CGI.escape encodes spaces as '+'; replace with '%20' to match URI encoding.
+require "uri"
+require "cgi"
+unless URI.respond_to?(:encode_uri_component)
+  def URI.encode_uri_component(str)
+    CGI.escape(str.to_s).gsub("+", "%20")
+  end
+end
+
+# YAML.safe_load with permitted_classes: keyword was added in Psych 4 (Ruby 3.1).
+# On older Ruby, the second positional argument serves the same purpose.
+# This helper provides a unified interface across Ruby versions.
+module YAMLCompat
+  def self.safe_load(yaml_string, permitted_classes: [])
+    if Psych::VERSION >= "4.0"
+      YAML.safe_load(yaml_string, permitted_classes: permitted_classes)
+    else
+      YAML.safe_load(yaml_string, permitted_classes)
+    end
+  end
+
+  def self.load_file(path, permitted_classes: [])
+    safe_load(File.read(path), permitted_classes: permitted_classes)
+  end
+end
+
 require_relative "clacky/version"
 require_relative "clacky/message_format/anthropic"
 require_relative "clacky/message_format/open_ai"

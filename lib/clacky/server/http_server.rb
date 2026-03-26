@@ -75,7 +75,7 @@ module Clacky
 
       # Ignore all other UI methods (progress, errors, etc.) during history replay
       def method_missing(name, *args, **kwargs); end
-      def respond_to_missing?(name, include_private = false) = true
+      def respond_to_missing?(name, include_private = false); true; end
     end
 
     # HttpServer runs an embedded WEBrick HTTP server with WebSocket support.

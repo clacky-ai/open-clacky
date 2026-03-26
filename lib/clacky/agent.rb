@@ -38,7 +38,9 @@ module Clacky
                 :cache_stats, :cost_source, :ui, :skill_loader, :agent_profile,
                 :status, :error, :updated_at, :source
 
-    def permission_mode = @config&.permission_mode&.to_s || ""
+    def permission_mode
+      @config&.permission_mode&.to_s || ""
+    end
 
     def initialize(client, config, working_dir:, ui:, profile:, session_id:, source:)
       @client = client  # Client for current model

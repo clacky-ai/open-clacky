@@ -2,12 +2,12 @@
 
 # Friendly Ruby version check — must come before anything else so it triggers
 # during `gem install` when the gemspec is evaluated.
-if RUBY_VERSION < "3.1.0"
+if RUBY_VERSION < "2.6.0"
   abort <<~MSG
 
     ✗  Ruby #{RUBY_VERSION} is not supported.
 
-    OpenClacky requires Ruby >= 3.1.0, but your system is running Ruby #{RUBY_VERSION}.
+    OpenClacky requires Ruby >= 2.6.0, but your system is running Ruby #{RUBY_VERSION}.
 
     ──────────────────────────────────────────────────────────────────────
      Recommended: Use the one-line installer (handles Ruby automatically)
@@ -36,7 +36,7 @@ Gem::Specification.new do |spec|
   spec.description = "OpenClacky is a Ruby CLI tool for interacting with AI models via OpenAI-compatible APIs. It provides chat functionality and autonomous AI agent capabilities with tool use."
   spec.homepage = "https://github.com/yafeilee/clacky"
   spec.license = "MIT"
-  spec.required_ruby_version = ">= 3.1.0"
+  spec.required_ruby_version = ">= 2.6.0"
 
   spec.metadata["homepage_uri"] = spec.homepage
   spec.metadata["source_code_uri"] = "https://github.com/yafeilee/clacky"
@@ -65,11 +65,12 @@ Gem::Specification.new do |spec|
   spec.add_dependency "pastel", "~> 0.8"
   spec.add_dependency "tty-screen", "~> 0.8"
   spec.add_dependency "tty-markdown", "~> 0.7"
-  spec.add_dependency "base64", "~> 0.3.0"
+  # base64 is part of Ruby stdlib up to Ruby 3.3; only needed as explicit dep on Ruby 3.4+
+  spec.add_dependency "base64", ">= 0.1.0"
   spec.add_dependency "websocket-driver", "~> 0.7"
   spec.add_dependency "webrick", "~> 1.8"
   spec.add_dependency "artii", "~> 2.1"
-  spec.add_dependency "rubyzip", "~> 3.0"
+  spec.add_dependency "rubyzip", ">= 2.4", "< 4"
   spec.add_dependency "chunky_png", "~> 1.4"
 
   # For more information and examples about making a new gem, check out our
