@@ -111,29 +111,21 @@ DEFAULT_RUBYGEMS_URL="https://rubygems.org"
 DEFAULT_NPM_REGISTRY="https://registry.npmjs.org"
 DEFAULT_MISE_INSTALL_URL="https://mise.run"
 
-# --- CN mirror provider ---
-# Switch this one line to change gem/npm/Node mirrors all at once.
-# Aliyun:   https://mirrors.aliyun.com
-# Tsinghua: https://mirrors.tuna.tsinghua.edu.cn
-CN_MIRROR_BASE="https://mirrors.aliyun.com"
+CN_CDN_BASE_URL="https://oss.1024code.com"       # reverse proxy for raw.githubusercontent.com
 
-CN_CDN_BASE_URL="https://oss.1024code.com"
-
-# --- CN source URLs (derived from CN_CDN_BASE_URL / CN_MIRROR_BASE) ---
+# --- CN source URLs ---
 CN_HOMEBREW_INSTALL_SCRIPT_URL="${CN_CDN_BASE_URL}/Homebrew/install/HEAD/install.sh"
 CN_MISE_INSTALL_URL="${CN_CDN_BASE_URL}/mise.sh"
 CN_RUBY_PRECOMPILED_URL="${CN_CDN_BASE_URL}/ruby/ruby-{version}.{platform}.tar.gz"
-CN_RUBYGEMS_URL="${CN_MIRROR_BASE}/rubygems/"
+CN_RUBYGEMS_URL="https://mirrors.aliyun.com/rubygems/"
 CN_NPM_REGISTRY="https://registry.npmmirror.com"
 CN_NODE_MIRROR_URL="https://cdn.npmmirror.com/binaries/node/"
 
-# --- Homebrew CN mirrors (path layout differs per provider, update together) ---
-# Aliyun:   base=mirrors.aliyun.com, paths below
-# Tsinghua: base=mirrors.tuna.tsinghua.edu.cn, paths: /git/homebrew/brew.git, /homebrew-bottles, (no API domain)
-CN_HOMEBREW_BREW_GIT_REMOTE="${CN_MIRROR_BASE}/homebrew/brew.git"
-CN_HOMEBREW_CORE_GIT_REMOTE="${CN_MIRROR_BASE}/homebrew/homebrew-core.git"
-CN_HOMEBREW_BOTTLE_DOMAIN="${CN_MIRROR_BASE}/homebrew/homebrew-bottles"
-CN_HOMEBREW_API_DOMAIN="${CN_MIRROR_BASE}/homebrew-bottles/api"
+# --- Homebrew CN mirrors (Aliyun) ---
+CN_HOMEBREW_BREW_GIT_REMOTE="https://mirrors.aliyun.com/homebrew/brew.git"
+CN_HOMEBREW_CORE_GIT_REMOTE="https://mirrors.aliyun.com/homebrew/homebrew-core.git"
+CN_HOMEBREW_BOTTLE_DOMAIN="https://mirrors.aliyun.com/homebrew/homebrew-bottles"
+CN_HOMEBREW_API_DOMAIN="https://mirrors.aliyun.com/homebrew-bottles/api"
 
 # --- Active values (overridden by detect_network_region) ---
 MISE_INSTALL_URL="$DEFAULT_MISE_INSTALL_URL"
@@ -259,13 +251,13 @@ detect_network_region() {
     print_info "Step 2: Probing installation sources (up to 2 retries each)..."
 
     if [ "$NETWORK_REGION" = "china" ]; then
-        # CN sources: Chinese CDN + CN_MIRROR_BASE
+        # CN sources: CDN (oss.1024code.com) + Aliyun + npmmirror
         local cdn_result mirror_result
         cdn_result=$(_probe_url_with_retry "$CN_MISE_INSTALL_URL")
-        mirror_result=$(_probe_url_with_retry "$CN_MIRROR_BASE")
+        mirror_result=$(_probe_url_with_retry "$CN_RUBYGEMS_URL")
 
         _print_probe_result "Chinese CDN (mise/Ruby)" "$cdn_result"
-        _print_probe_result "CN mirror (gem/npm/Node/brew)" "$mirror_result"
+        _print_probe_result "CN mirror (gem/brew)" "$mirror_result"
 
         local cdn_ok=false mirror_ok=false
         ! _is_slow_or_unreachable "$cdn_result"    && cdn_ok=true
@@ -276,7 +268,7 @@ detect_network_region() {
             print_warning "Chinese CDN is slow/unreachable. mise and Ruby precompiled binaries may fail."
         fi
         if [ "$mirror_ok" = false ]; then
-            print_warning "CN mirror (${CN_MIRROR_BASE}) is slow/unreachable. gem/npm/Node installs may be slow."
+            print_warning "Aliyun mirror is slow/unreachable. gem/brew installs may be slow."
         fi
         if [ "$cdn_ok" = false ] && [ "$mirror_ok" = false ]; then
             print_warning "All CN mirrors unreachable — falling back to global sources. Expect slow downloads."
@@ -290,7 +282,7 @@ detect_network_region() {
             NPM_REGISTRY_URL="$CN_NPM_REGISTRY"
             NODE_MIRROR_URL="$CN_NODE_MIRROR_URL"
             RUBY_VERSION_SPEC="ruby@3.4.8"
-            print_info "CN mirrors applied: Chinese CDN (mise/Ruby) + ${CN_MIRROR_BASE} (gem/npm/Node/brew)"
+            print_info "CN mirrors applied: CDN (mise/Ruby) + Aliyun (gem/brew) + npmmirror (npm/Node)"
         else
             USE_CN_MIRRORS=false
             print_info "Falling back to global sources despite CN region detection."
@@ -647,9 +639,9 @@ install_ubuntu_dependencies() {
     echo ""
 
     if [ "$USE_CN_MIRRORS" = true ]; then
-        print_info "Configuring apt mirror (${CN_MIRROR_BASE})..."
+        print_info "Configuring apt mirror (Aliyun)..."
         local codename="${VERSION_CODENAME:-jammy}"
-        local mirror_base="${CN_MIRROR_BASE}/ubuntu/"
+        local mirror_base="https://mirrors.aliyun.com/ubuntu/"
         local common_components="main restricted universe multiverse"
         sudo tee /etc/apt/sources.list > /dev/null <<EOF
 deb ${mirror_base} ${codename} ${common_components}
