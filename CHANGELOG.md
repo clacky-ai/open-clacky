@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.13] - 2026-03-27
+
+### Added
+- **Ruby 2.6 compatibility**: the gem now installs cleanly on Ruby 2.6 (including macOS system Ruby 2.6.x) — dependency version constraints for `faraday` and `rouge` are now capped so RubyGems automatically selects compatible versions on older Ruby environments
+
+### Fixed
+- **WebSocket pure-Ruby replacement**: replaced the native WebSocket dependency with a pure-Ruby implementation to improve cross-platform compatibility
+- **Ctrl+C warning in UI suppressed**: fixed a spurious warning printed to the terminal when pressing Ctrl+C in the interactive UI
+- **Parser stderr pollution from Bundler warnings filtered**: Ruby/Bundler version warnings no longer contaminate parser error messages
+
 ## [0.9.12] - 2026-03-27
 
 ### Added

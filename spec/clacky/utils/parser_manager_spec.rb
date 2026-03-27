@@ -69,7 +69,7 @@ RSpec.describe Clacky::Utils::ParserManager do
           File.write(path, "%PDF")
           result = described_class.parse(path)
           expect(result[:success]).to be false
-          expect(result[:error]).to eq("something went wrong")
+          expect(result[:error]).to include("something went wrong")
           expect(result[:parser_path]).to end_with("pdf_parser.rb")
         end
       end

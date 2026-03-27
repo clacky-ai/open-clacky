@@ -72,11 +72,14 @@ module Clacky
 
         stdout, stderr, status = Open3.capture3(RbConfig.ruby, parser_path, file_path)
 
+        # Filter out Ruby/Bundler version warnings that pollute stderr
+        clean_stderr = stderr.lines.reject { |l| l.match?(/warning:|already initialized constant/) }.join.strip
+
         if status.success? && stdout.strip.length > 0
           { success: true, text: stdout.strip, error: nil, parser_path: parser_path }
         else
           { success: false, text: nil,
-            error: stderr.strip.empty? ? "Parser exited with code #{status.exitstatus}" : stderr.strip,
+            error: clean_stderr.empty? ? "Parser exited with code #{status.exitstatus}" : clean_stderr,
             parser_path: parser_path }
         end
       end
