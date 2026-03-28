@@ -177,7 +177,6 @@ module Clacky
             false
           end
 
-          private
 
           def process_message(msg)
             # Only process inbound USER messages (message_type 1 = USER)

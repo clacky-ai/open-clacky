@@ -255,7 +255,6 @@ module Clacky
         $stdout.flush
       end
 
-      private
 
       # Ensure a string is valid UTF-8.
       # stdin stays in UTF-8 mode so getc returns complete characters (including CJK).

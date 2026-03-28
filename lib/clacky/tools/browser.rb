@@ -192,7 +192,6 @@ module Clacky
         }.compact
       end
 
-      private
 
       BROWSER_CONFIG_PATH = File.expand_path("~/.clacky/browser.yml").freeze
 

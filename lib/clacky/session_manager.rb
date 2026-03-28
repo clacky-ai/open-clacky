@@ -108,7 +108,6 @@ module Clacky
       end.size
     end
 
-    private
 
     def ensure_sessions_dir
       FileUtils.mkdir_p(@sessions_dir) unless Dir.exist?(@sessions_dir)

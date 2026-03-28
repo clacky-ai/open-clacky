@@ -187,7 +187,6 @@ module Clacky
         end
       end
 
-      private
 
       # Normalize source field from a disk session hash.
       # "system" is a legacy value renamed to "setup" — treat them as equivalent.

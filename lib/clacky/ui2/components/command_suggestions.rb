@@ -185,7 +185,6 @@ module Clacky
           flush
         end
 
-        private
 
         # Update the complete commands list (system + skills)
         private def update_commands

@@ -173,7 +173,6 @@ module Clacky
             aes_ecb_decrypt(encrypted_bytes, raw_aes_key)
           end
 
-          private
 
           # Full upload pipeline: encrypt → getuploadurl → CDN PUT → return CDNMedia hash.
           def upload_media(raw_bytes:, file_name:, media_type:, to_user_id:)

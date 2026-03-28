@@ -143,7 +143,6 @@ module Clacky
             errors
           end
 
-          private
 
           # Handle incoming WebSocket event
           # @param raw_event [Hash] Raw event data

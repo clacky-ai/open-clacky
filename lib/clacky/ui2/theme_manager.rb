@@ -75,7 +75,6 @@ module Clacky
         @themes[name.to_sym] = theme_class
       end
 
-      private
 
       def register_default_themes
         register_theme(:hacker, Themes::HackerTheme)

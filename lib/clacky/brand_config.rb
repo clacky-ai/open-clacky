@@ -862,7 +862,6 @@ module Clacky
       }
     end
 
-    private
 
     def to_yaml
       data = {}

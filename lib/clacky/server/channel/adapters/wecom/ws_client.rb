@@ -115,7 +115,6 @@ module Clacky
             raise
           end
 
-          private
 
           # Timeout for IO.select on the read loop. If no data arrives within this
           # window we treat the connection as dead and reconnect. This catches the

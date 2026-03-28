@@ -813,7 +813,6 @@ module Clacky
         end
       end
 
-      private
 
       # Build command output lines snapshot from the shared progress buffer
       private def build_command_output_lines

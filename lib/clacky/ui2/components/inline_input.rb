@@ -176,7 +176,6 @@ module Clacky
           @result_queue = nil
         end
 
-        private
 
         def handle_enter
           result = expand_placeholders(current_line)

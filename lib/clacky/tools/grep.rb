@@ -267,7 +267,6 @@ module Clacky
         compact
       end
 
-      private
 
       def search_file(file, regex, context_lines, max_matches)
         matches = []

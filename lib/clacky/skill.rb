@@ -327,7 +327,6 @@ module Clacky
       end
     end
 
-    private
 
     def load_skill
       if @brand_skill

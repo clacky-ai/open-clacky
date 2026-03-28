@@ -51,7 +51,6 @@ module Clacky
             @ws_socket&.close rescue nil
           end
 
-          private
 
           # Timeout for IO.select on the read loop. Feishu server sends pings every
           # @ping_interval seconds (default 90s). Allow two missed pings before

@@ -135,7 +135,6 @@ module Clacky
     def set_input_tips(message, type: :info); end
     def stop; end
 
-    private
 
     def puts_line(text)
       @mutex.synchronize do

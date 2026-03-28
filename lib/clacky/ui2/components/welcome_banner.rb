@@ -127,7 +127,6 @@ module Clacky
           )
         end
 
-        private
 
         # Returns the colourised logo block.
         # - Branded install: dynamically generated artii ASCII art for the brand name

@@ -160,7 +160,6 @@ module Clacky
             end
           end
 
-          private
 
           # Build message content and type based on text content.
           # Uses interactive card (schema 2.0) for code blocks and tables,

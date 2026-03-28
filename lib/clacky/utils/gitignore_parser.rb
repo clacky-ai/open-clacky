@@ -31,7 +31,6 @@ module Clacky
       false
     end
 
-    private
 
     def parse_gitignore(path)
       File.readlines(path, chomp: true).each do |line|

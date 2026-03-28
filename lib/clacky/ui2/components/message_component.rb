@@ -32,7 +32,6 @@ module Clacky
           end
         end
 
-        private
 
         # Render user message
         # @param content [String] Message content

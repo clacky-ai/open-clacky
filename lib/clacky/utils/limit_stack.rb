@@ -72,7 +72,6 @@ module Clacky
         @items.each(&block)
       end
 
-      private
 
       def trim_if_needed
         if @items.size > @max_size

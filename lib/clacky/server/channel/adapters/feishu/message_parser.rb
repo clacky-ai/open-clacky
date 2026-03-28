@@ -42,7 +42,6 @@ module Clacky
             end
           end
 
-          private
 
           # Parse message.receive event
           # @return [Hash, nil]

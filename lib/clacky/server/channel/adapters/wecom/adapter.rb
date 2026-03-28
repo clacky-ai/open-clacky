@@ -74,7 +74,6 @@ module Clacky
             errors
           end
 
-          private
 
           def handle_raw_message(raw)
             msgtype = raw["msgtype"]

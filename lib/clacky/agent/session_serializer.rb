@@ -193,7 +193,6 @@ module Clacky
         { has_more: has_more }
       end
 
-      private
 
       # Render a single non-user message into the UI.
       # Used by both the normal round-based replay and the compressed-session fallback.

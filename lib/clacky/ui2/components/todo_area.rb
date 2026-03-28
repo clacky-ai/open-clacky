@@ -92,7 +92,6 @@ module Clacky
           @height = 0
         end
 
-        private
 
         # Truncate text to fit width
         def truncate_text(text, max_width)

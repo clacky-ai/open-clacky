@@ -313,7 +313,6 @@ module Clacky
         end
       end
 
-      private
 
       # List first-level directory contents (files and directories)
       private def list_directory_contents(path)

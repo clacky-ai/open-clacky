@@ -288,7 +288,6 @@ module Clacky
         emit("server_stop")
       end
 
-      private
 
       # Generate a short human-readable summary for a tool call display.
       # Delegates to each tool's own format_call method when available.

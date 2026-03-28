@@ -96,7 +96,6 @@ module Clacky
         end
       end
 
-      private
 
       def start_adapter(platform)
         klass = Adapters.find(platform)

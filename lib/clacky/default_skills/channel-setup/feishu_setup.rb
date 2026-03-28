@@ -104,7 +104,6 @@ class ToolClient
     raise "ToolClient connection failed: #{e.message}"
   end
 
-  private
 
   def http
     return @http if @http
@@ -286,7 +285,6 @@ class FeishuApiClient
     get_json("#{FEISHU_API_BASE}/app/#{app_id}")
   end
 
-  private
 
   # Execute a GET fetch in the browser page context.
   # Uses window.csrfToken — required by all /developers/v1/ endpoints.

@@ -27,7 +27,6 @@ module Clacky
         end
       end
 
-      private
 
       # Simple JSON repair: complete brackets and quotes, and remove XML contamination
       def self.repair_json(json_str)

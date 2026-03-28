@@ -166,7 +166,6 @@ module Clacky
       def set_input_tips(message, type: :info); end
       def stop; end
 
-      private
 
       def send_text(text)
         text = text.to_s.gsub(/<think>[\s\S]*?<\/think>\n*/i, "").strip

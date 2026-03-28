@@ -100,7 +100,6 @@ module Clacky
         end
       end
 
-      private
 
       def start_project
         config = load_project_config

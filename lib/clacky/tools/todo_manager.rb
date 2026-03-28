@@ -98,7 +98,6 @@ module Clacky
         end
       end
 
-      private
 
       def load_todos
         @todos

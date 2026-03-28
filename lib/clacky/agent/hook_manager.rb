@@ -51,7 +51,6 @@ module Clacky
       end
     end
 
-    private
 
     def validate_event!(event)
       return if HOOK_EVENTS.include?(event)

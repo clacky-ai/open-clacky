@@ -258,7 +258,6 @@ module Clacky
         @ui&.show_info("Injected skill content for /#{skill.identifier}")
       end
 
-      private
 
       # Find skills whose identifiers are similar to the given name.
       # Uses substring matching first, then character overlap as a fallback.

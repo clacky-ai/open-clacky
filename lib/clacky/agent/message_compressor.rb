@@ -108,7 +108,6 @@ module Clacky
       [system_msg, *parsed_messages, *safe_recent].compact
     end
 
-    private
 
     def parse_compressed_result(result, chunk_path: nil)
       # Return the compressed result as a single assistant message

@@ -87,7 +87,6 @@ module Clacky
           ""
         end
 
-        private
 
         # Show menu mode
         private def show_menu_mode(start_row, start_col)

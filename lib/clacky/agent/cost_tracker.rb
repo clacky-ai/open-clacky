@@ -84,7 +84,6 @@ module Clacky
       # Simple approximation: characters / 4 (English text)
 
 
-      private
 
       # Collect token usage data for current iteration and return it.
       # Does NOT call @ui directly — the caller is responsible for displaying

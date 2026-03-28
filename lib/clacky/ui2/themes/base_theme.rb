@@ -88,7 +88,6 @@ module Clacky
           @is_dark_background.nil? ? true : @is_dark_background
         end
 
-        private
 
         # Validate that subclass has defined required constants
         def validate_theme_definition!

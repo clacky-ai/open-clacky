@@ -121,7 +121,6 @@ module Clacky
       model_str.match?(/claude(?:-3[-.]?[5-9]|-[4-9]|-sonnet-[34])/)
     end
 
-    private
 
     # ── Bedrock Converse request / response ───────────────────────────────────
 

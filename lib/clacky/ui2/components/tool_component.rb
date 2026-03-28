@@ -34,7 +34,6 @@ module Clacky
           end
         end
 
-        private
 
         # Render tool call
         # @param data [Hash] Tool call data

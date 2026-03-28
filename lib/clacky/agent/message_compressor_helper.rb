@@ -214,7 +214,6 @@ module Clacky
         end
       end
 
-      private
 
       # Returns true if msg is a tool result, regardless of storage format.
       # Canonical: role:"tool"  |  Legacy Anthropic-native: role:"user" + tool_result blocks

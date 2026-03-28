@@ -297,7 +297,6 @@ module Clacky
       true
     end
 
-    private
 
     def load_skills_from_directory(dir, source_type)
       return [] unless dir.exist?

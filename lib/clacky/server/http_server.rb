@@ -299,7 +299,6 @@ module Clacky
         server.start
       end
 
-      private
 
       # ── Router ────────────────────────────────────────────────────────────────
 

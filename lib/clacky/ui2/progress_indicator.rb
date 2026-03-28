@@ -43,7 +43,6 @@ module Clacky
       puts ""          # Add newline after finishing
     end
 
-    private
 
     def print_thinking_status(text)
       print "\e[u"     # Restore cursor position (to after [..] symbol)

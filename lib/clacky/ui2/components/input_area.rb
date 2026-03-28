@@ -624,7 +624,6 @@ module Clacky
           end
         end
 
-        private
 
         # Update command suggestions based on current input
         # Shows suggestions when input starts with /

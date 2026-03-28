@@ -49,7 +49,6 @@ module Clacky
             content.match?(/^---+$/)          # Horizontal rules
         end
 
-        private
 
         # Get theme-aware colors for markdown rendering
         # @return [Hash] Color configuration for tty-markdown

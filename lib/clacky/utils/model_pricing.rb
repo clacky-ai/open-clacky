@@ -212,7 +212,6 @@ module Clacky
         end
       end
       
-      private
       
       # Normalize model name to match pricing table keys
       def normalize_model_name(model)

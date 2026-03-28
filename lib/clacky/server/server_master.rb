@@ -106,7 +106,6 @@ module Clacky
         remove_pid_file
       end
 
-      private
 
       # Spawn a fresh Ruby process that loads the (possibly updated) gem from disk.
       # The listen socket is inherited via its file descriptor number.
