@@ -19,8 +19,8 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$DisplayName = if ($BrandName)   { $BrandName }   else { "OpenClacky" }
-$DisplayCmd  = if ($CommandName) { $CommandName } else { "openclacky" }
+$global:DisplayName = if ($BrandName)   { $BrandName }   else { "OpenClacky" }
+$global:DisplayCmd  = if ($CommandName) { $CommandName } else { "openclacky" }
 
 $CLACKY_CDN_BASE_URL   = "https://oss.1024code.com"
 $INSTALL_PS1_COMMAND   = "powershell -c `"irm $CLACKY_CDN_BASE_URL/clacky-ai/openclacky/main/scripts/install.ps1 | iex`""
@@ -264,7 +264,7 @@ function Show-PostInstall {
     Write-Info "To use $DisplayName, first enter WSL:"
     Write-Host "   wsl" -ForegroundColor Green
     Write-Host ""
-    Write-Info "Then run $DisplayName:"
+    Write-Info "Then run ${DisplayName}:"
     Write-Host "   $DisplayCmd" -ForegroundColor Green
     Write-Host ""
     Write-Info "Or start the Web UI:"
@@ -324,7 +324,7 @@ function Test-VirtualisationSupported {
         New-Item -ItemType Directory -Force -Path $probeDir | Out-Null
 
         Write-Info "[probe] Running: wsl --import WslProbe $probeDir $probeTar --version 2"
-        wsl.exe --import WslProbe $probeDir $probeTar --version 2 2>$null
+        wsl.exe --import WslProbe $probeDir $probeTar --version 2 >$null 2>$null
         $importExit = $LASTEXITCODE
         Write-Info "[probe] wsl --import exit code: $importExit"
         $ok = ($importExit -eq 0)
@@ -442,23 +442,21 @@ Write-Info "WSL --status exit code: $wslCode"
 $installPhase = Get-InstallReg -Name "InstallPhase" -Default ""
 Write-Info "InstallPhase: '$installPhase'"
 
-if ($wslCode -eq 1) {
-    # exit code 1 = WSL feature not enabled at all.
-    # Negative codes (-1, -444, etc.) mean WSL is functional but no distro installed — that's fine.
-    if ($installPhase -eq "wsl-pending") {
-        # WSL features were enabled last run but still not ready after reboot.
-        Write-Warn "WSL features were enabled but WSL is still not ready."
-        Write-Warn "Please reboot your computer and run the installer again."
-        Write-Warn "If this keeps happening, please contact our support team."
-        exit 1
-    } else {
-        # First time: enable WSL features and reboot.
-        Enable-WslFeatures
-        # Always exits (prompts reboot)
-    }
+if ($installPhase -eq "" -and $wslCode -ne 0) {
+    # First run and WSL not ready: enable WSL features and reboot.
+    Enable-WslFeatures
+    # Always exits (prompts reboot)
 }
 
-# Any other code (0, -1, -444, etc.): WSL subsystem is alive, continue.
+# phase == wsl-pending + code 1: reboot happened but WSL still not ready.
+if ($installPhase -eq "wsl-pending" -and $wslCode -eq 1) {
+    Write-Warn "WSL features were enabled but WSL is still not ready."
+    Write-Warn "Please reboot your computer and run the installer again."
+    Write-Warn "If this keeps happening, please contact our support team."
+    exit 1
+}
+
+# wslCode != 1 (0, -1, -444, 50, etc.): WSL is functional, continue.
 Remove-InstallReg -Name "InstallPhase"
 
 # Step 2: Probe whether WSL2 actually works
