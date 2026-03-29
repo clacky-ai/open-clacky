@@ -90,14 +90,27 @@ function Test-Sha256 {
 # Use cmd.exe to avoid PS5 NativeCommandError and UTF-16LE mojibake on stderr.
 # exit 1 = WSL feature not enabled; exit 0 = WSL is functional.
 # Timeout 10s to avoid hanging when WSL is partially initialised.
-function Invoke-WslListExitCode {
-    $p = Start-Process -FilePath "wsl.exe" -ArgumentList "--list" `
-        -NoNewWindow -PassThru -RedirectStandardOutput "$env:TEMP\wsl_out.txt" `
-        -RedirectStandardError "$env:TEMP\wsl_err.txt"
+function Invoke-WslStatusExitCode {
+    # Returns the exit code of `wsl --status`.
+    # exit 0   = WSL fully enabled (Win11 / distro installed)
+    # exit 1   = WSL feature not enabled
+    # exit -1  = WSL enabled, no distro installed (Win10 wsl --list)
+    # exit -444 = WSL enabled, no distro installed (Win10 wsl --status)
+    # Only exit 1 means "WSL is not set up". All other codes mean WSL is functional.
+    # Timeout (10s) is treated as exit 1 (WSL completely unresponsive).
+    #
+    # Note: Start-Process + -Redirect* loses ExitCode. Use System.Diagnostics.Process directly.
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = "wsl.exe"
+    $psi.Arguments = "--status"
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $p = [System.Diagnostics.Process]::Start($psi)
     $finished = $p.WaitForExit(10000)   # 10 seconds
     if (-not $finished) {
         $p.Kill()
-        Write-Info "WSL --list timed out (WSL not ready)."
+        Write-Info "WSL --status timed out (WSL not ready)."
         return 1
     }
     return $p.ExitCode
@@ -331,39 +344,6 @@ function Test-VirtualisationSupported {
     return $ok
 }
 
-# Probe WSL1 with a minimal tar import — same pattern as Test-VirtualisationSupported.
-# Called in Main before Install-WithWsl1 to confirm WSL1 feature is truly active.
-function Test-Wsl1Supported {
-    Write-Info "Probing WSL1 availability..."
-    $probeTar = "$env:TEMP\wsl1_probe.tar"
-    $probeDir = "$env:TEMP\wsl1_probe"
-    $ok = $false
-    try {
-        $bytes = New-Object byte[] 512
-        [System.IO.File]::WriteAllBytes($probeTar, $bytes)
-        New-Item -ItemType Directory -Force -Path $probeDir | Out-Null
-
-        Write-Info "[wsl1-probe] Running: wsl --import WslProbe1 $probeDir $probeTar --version 1"
-        wsl.exe --import WslProbe1 $probeDir $probeTar --version 1 2>$null | Out-Null
-        $importExit = $LASTEXITCODE
-        Write-Info "[wsl1-probe] wsl --import exit code: $importExit"
-        $ok = ($importExit -eq 0)
-        if ($ok) {
-            wsl.exe --unregister WslProbe1 2>$null | Out-Null
-            Write-Info "[wsl1-probe] WslProbe1 unregistered."
-        }
-    } catch {
-        Write-Info "[wsl1-probe] Exception caught: $_"
-        $ok = $false
-    } finally {
-        Remove-Item -Force -Recurse -ErrorAction SilentlyContinue $probeDir
-        Remove-Item -Force -ErrorAction SilentlyContinue $probeTar
-    }
-
-    Write-Info "[wsl1-probe] Final result: ok=$ok"
-    return $ok
-}
-
 # Download and install the WSL2 kernel MSI from our CDN.
 function Install-WslKernel {
     $cpuArch = Get-CpuArch
@@ -452,28 +432,28 @@ Write-Info "Windows Build $osBuild — OK."
 
 # Step 1: Ensure WSL feature is enabled (same for WSL1 and WSL2)
 Write-Step "Checking WSL status..."
-$wslCode = Invoke-WslListExitCode
-Write-Info "WSL check result: exit code $wslCode"
+$wslCode = Invoke-WslStatusExitCode
+Write-Info "WSL --status exit code: $wslCode"
 $installPhase = Get-InstallReg -Name "InstallPhase" -Default ""
 Write-Info "InstallPhase: '$installPhase'"
 
 if ($wslCode -eq 1) {
+    # exit code 1 = WSL feature not enabled at all.
+    # Negative codes (-1, -444, etc.) mean WSL is functional but no distro installed — that's fine.
     if ($installPhase -eq "wsl-pending") {
         # WSL features were enabled last run but still not ready after reboot.
-        # Allow retrying — user may need to reboot again.
         Write-Warn "WSL features were enabled but WSL is still not ready."
         Write-Warn "Please reboot your computer and run the installer again."
         Write-Warn "If this keeps happening, please contact our support team."
         exit 1
     } else {
         # First time: enable WSL features and reboot.
-        # Phase is set to "wsl-pending" inside Enable-WslFeatures.
         Enable-WslFeatures
         # Always exits (prompts reboot)
     }
 }
 
-# wslCode=0: WSL is ready — clear phase and proceed
+# Any other code (0, -1, -444, etc.): WSL subsystem is alive, continue.
 Remove-InstallReg -Name "InstallPhase"
 
 # Step 2: Probe whether WSL2 actually works
@@ -483,13 +463,7 @@ if ($virt) {
     Install-WithWsl2
     $wslVersion = 2
 } else {
-    Write-Info "[main] WSL2 unavailable, probing WSL1..."
-    if (-not (Test-Wsl1Supported)) {
-        Write-Fail "WSL1 capability check failed."
-        Write-Fail "The installer cannot complete on this machine."
-        Write-Fail "Please contact our support team for assistance."
-        exit 1
-    }
+    Write-Info "[main] WSL2 unavailable, falling back to WSL1..."
     Install-WithWsl1
     $wslVersion = 1
 }
