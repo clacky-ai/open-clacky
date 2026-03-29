@@ -210,17 +210,19 @@ module Clacky
 
     def self.save_preview(content, original_path)
       dest = "#{original_path}.preview.md"
-      File.write(dest, content, encoding: "UTF-8")
+      File.write(dest, content)
       dest
     end
 
     def self.sanitize_filename(name)
       # Keep Unicode letters/digits (including CJK), ASCII word chars, dots, hyphens, spaces.
       # Only strip characters that are unsafe on common filesystems: / \ : * ? " < > | \0
-      base = File.basename(name.to_s)
-               .gsub(/[\/\\\:\*\?"<>|\x00]/, "_")
+      # to_utf8 first: HTTP multipart headers arrive as ASCII-8BIT on Ruby 2.6,
+      # and regex matching against ASCII-8BIT raises "invalid byte sequence in UTF-8".
+      base = File.basename(Clacky::Utils::Encoding.to_utf8(name.to_s))
+               .gsub(/[\/\\:\*?"<>|\x00]/, '_')
                .strip
-      base.empty? ? "upload" : base
+      base.empty? ? 'upload' : base
     end
 
     private_class_method :parse_zip_listing, :save_preview, :sanitize_filename

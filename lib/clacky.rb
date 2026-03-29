@@ -1,5 +1,15 @@
 # frozen_string_literal: true
 
+# ── Global encoding defaults ──────────────────────────────────────────────────
+# Force UTF-8 as the default external/internal encoding for all IO operations
+# (File.read, Open3.capture3, HTTP bodies, etc.) so that binary-encoded strings
+# from external processes or network I/O never cause "invalid byte sequence in
+# UTF-8" errors on Ruby 2.6+.
+# Binary-specific operations (File.binread, IO#read with "b" mode, .b) are
+# unaffected — they always bypass this setting.
+Encoding.default_external = Encoding::UTF_8
+Encoding.default_internal = Encoding::UTF_8
+
 # ── Ruby < 2.7 polyfills ──────────────────────────────────────────────────────
 
 # Enumerable#filter_map was added in Ruby 2.7.

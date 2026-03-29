@@ -1,5 +1,10 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
+# encoding: utf-8
+
+Encoding.default_external = Encoding::UTF_8
+Encoding.default_internal = Encoding::UTF_8
+
 #
 # Clacky DOCX Parser — CLI interface
 #
@@ -22,30 +27,43 @@ require "zip"
 require "rexml/document"
 require "stringio"
 
-def read_document_xml(body)
+def safe_utf8(str)
+  # First try force_encoding (lossless, for content that IS valid UTF-8)
+  utf8 = str.dup.force_encoding("UTF-8")
+  return utf8 if utf8.valid_encoding?
+  # Fallback: transcode with replacement for genuinely invalid bytes
+  str.encode("UTF-8", "binary", invalid: :replace, undef: :replace, replace: "")
+end
+
+def read_zip_entry(body, name)
+  xml = nil
   Zip::File.open_buffer(StringIO.new(body)) do |zip|
-    entry = zip.find_entry("word/document.xml")
-    raise "Could not extract content — possibly encrypted or invalid format" unless entry
-    entry.get_input_stream.read
+    entry = zip.find_entry(name)
+    xml = safe_utf8(entry.get_input_stream.read) if entry
   end
+  xml
+end
+
+def read_document_xml(body)
+  xml = read_zip_entry(body, "word/document.xml")
+  raise "Could not extract content — possibly encrypted or invalid format" unless xml
+  xml
 end
 
 def read_numbering(body)
   result = {}
-  Zip::File.open_buffer(StringIO.new(body)) do |zip|
-    entry = zip.find_entry("word/numbering.xml")
-    break unless entry
-    doc = REXML::Document.new(entry.get_input_stream.read)
-    REXML::XPath.each(doc, "//w:abstractNum") do |an|
-      id = an.attributes["w:abstractNumId"]
-      levels = {}
-      REXML::XPath.each(an, "w:lvl") do |lvl|
-        ilvl = lvl.attributes["w:ilvl"].to_i
-        fmt  = REXML::XPath.first(lvl, "w:numFmt")&.attributes&.[]("w:val")
-        levels[ilvl] = { fmt: fmt || "bullet" }
-      end
-      result[id] = levels
+  xml = read_zip_entry(body, "word/numbering.xml")
+  return result unless xml
+  doc = REXML::Document.new(xml)
+  REXML::XPath.each(doc, "//w:abstractNum") do |an|
+    id = an.attributes["w:abstractNumId"]
+    levels = {}
+    REXML::XPath.each(an, "w:lvl") do |lvl|
+      ilvl = lvl.attributes["w:ilvl"].to_i
+      fmt  = REXML::XPath.first(lvl, "w:numFmt")&.attributes&.[]("w:val")
+      levels[ilvl] = { fmt: fmt || "bullet" }
     end
+    result[id] = levels
   end
   result
 rescue
@@ -54,16 +72,14 @@ end
 
 def read_styles(body)
   result = {}
-  Zip::File.open_buffer(StringIO.new(body)) do |zip|
-    entry = zip.find_entry("word/styles.xml")
-    break unless entry
-    doc = REXML::Document.new(entry.get_input_stream.read)
-    REXML::XPath.each(doc, "//w:style") do |s|
-      sid  = s.attributes["w:styleId"]
-      name = REXML::XPath.first(s, "w:name")&.attributes&.[]("w:val").to_s
-      if name =~ /^heading (\d)/i
-        result[sid] = { heading: $1.to_i }
-      end
+  xml = read_zip_entry(body, "word/styles.xml")
+  return result unless xml
+  doc = REXML::Document.new(xml)
+  REXML::XPath.each(doc, "//w:style") do |s|
+    sid  = s.attributes["w:styleId"]
+    name = REXML::XPath.first(s, "w:name")&.attributes&.[]("w:val").to_s
+    if name =~ /^heading (\d)/i
+      result[sid] = { heading: $1.to_i }
     end
   end
   result

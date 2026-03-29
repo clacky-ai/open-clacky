@@ -70,7 +70,12 @@ module Clacky
                    parser_path: parser_path }
         end
 
-        stdout, stderr, status = Open3.capture3(RbConfig.ruby, parser_path, file_path)
+        raw_stdout, raw_stderr, status = Open3.capture3(RbConfig.ruby, parser_path, file_path)
+
+        # capture3 returns ASCII-8BIT across the subprocess boundary on Ruby 2.6+.
+        # Normalise both streams to UTF-8 immediately so all downstream code is clean.
+        stdout = Clacky::Utils::Encoding.to_utf8(raw_stdout)
+        stderr = Clacky::Utils::Encoding.to_utf8(raw_stderr)
 
         # Filter out Ruby/Bundler version warnings that pollute stderr
         clean_stderr = stderr.lines.reject { |l| l.match?(/warning:|already initialized constant/) }.join.strip

@@ -1838,6 +1838,7 @@ module Clacky
       rescue JSON::ParserError => e
         conn.send_json(type: "error", message: "Invalid JSON: #{e.message}")
       rescue => e
+        Clacky::Logger.error("[on_ws_message] #{e.class}: #{e.message}\n#{e.backtrace.first(10).join("\n")}")
         conn.send_json(type: "error", message: e.message)
       end
 
