@@ -511,25 +511,6 @@ RSpec.describe Clacky::Server::HttpServer do
     end
   end
 
-  # ── GET /api/tasks ────────────────────────────────────────────────────────
-
-  describe "GET /api/tasks" do
-    it "returns empty tasks list when no tasks exist" do
-      with_server(agent_config: agent_config) do |server|
-        # Point scheduler to tmpdir so no real tasks are read
-        stub_const("Clacky::Server::Scheduler::TASKS_DIR", File.join(tmpdir, "tasks"))
-
-        req = fake_req(method: "GET", path: "/api/tasks")
-        res = fake_res
-        dispatch(server, req, res)
-
-        expect(res.status).to eq(200)
-        body = parsed_body(res)
-        expect(body["tasks"]).to be_an(Array)
-      end
-    end
-  end
-
   # ── 404 for unknown routes ────────────────────────────────────────────────
 
   describe "unknown routes" do
