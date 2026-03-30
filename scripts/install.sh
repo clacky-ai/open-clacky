@@ -434,19 +434,18 @@ setup_gem_home() {
 
     export GEM_HOME="$HOME/.gem/ruby/${ruby_api}"
     export GEM_PATH="$HOME/.gem/ruby/${ruby_api}"
-    export PATH="$HOME/.local/bin:$HOME/.gem/ruby/${ruby_api}/bin:$PATH"
+    export PATH="$HOME/.gem/ruby/${ruby_api}/bin:$PATH"
 
     print_info "System Ruby detected — gems will install to ~/.gem/ruby/${ruby_api}"
 
     # Persist to shell rc (use $HOME so the line is portable)
-    # Also add ~/.local/bin so brand wrapper commands installed there are found
     if [ -n "$SHELL_RC" ] && ! grep -q "GEM_HOME" "$SHELL_RC" 2>/dev/null; then
         {
             echo ""
             echo "# Ruby user gem dir (added by openclacky installer)"
             echo "export GEM_HOME=\"\$HOME/.gem/ruby/${ruby_api}\""
             echo "export GEM_PATH=\"\$HOME/.gem/ruby/${ruby_api}\""
-            echo "export PATH=\"\$HOME/.local/bin:\$HOME/.gem/ruby/${ruby_api}/bin:\$PATH\""
+            echo "export PATH=\"\$HOME/.gem/ruby/${ruby_api}/bin:\$PATH\""
         } >> "$SHELL_RC"
         print_info "GEM_HOME written to $SHELL_RC"
     fi
@@ -524,8 +523,17 @@ YAML
     print_success "Brand config written to $brand_file"
 
     if [ -n "$BRAND_COMMAND" ]; then
-        local bin_dir="$HOME/.local/bin"
-        mkdir -p "$bin_dir"
+        # Install wrapper in the same directory as the openclacky binary so it is
+        # always on PATH regardless of whether we are running as root or a normal user.
+        local clacky_bin bin_dir
+        clacky_bin=$(command -v openclacky 2>/dev/null || true)
+        if [ -n "$clacky_bin" ]; then
+            bin_dir=$(dirname "$clacky_bin")
+        else
+            print_warning "openclacky binary not found in PATH; skipping wrapper install"
+            return 0
+        fi
+
         local wrapper="$bin_dir/$BRAND_COMMAND"
         cat > "$wrapper" <<WRAPPER
 #!/bin/sh
@@ -533,13 +541,6 @@ exec openclacky "\$@"
 WRAPPER
         chmod +x "$wrapper"
         print_success "Wrapper installed: $wrapper"
-
-        case ":$PATH:" in
-            *":$bin_dir:"*) ;;
-            *)
-                print_warning "Add to your shell profile: export PATH=\"\$HOME/.local/bin:\$PATH\""
-                ;;
-        esac
     fi
 }
 
