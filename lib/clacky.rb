@@ -74,6 +74,8 @@ require_relative "clacky/message_history"
 require_relative "clacky/agent_config"
 require_relative "clacky/agent_profile"
 require_relative "clacky/providers"
+require_relative "clacky/clacky_auth_client"
+require_relative "clacky/platform_config"
 require_relative "clacky/session_manager"
 require_relative "clacky/idle_compression_timer"
 
