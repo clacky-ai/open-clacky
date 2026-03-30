@@ -17,7 +17,7 @@
 # After rebooting, run the same command again to complete installation.
 #
 # Development: .\install.ps1 -Local
-#   Uses install_simple.sh from the same directory as this script instead of CDN.
+#   Uses install.sh from the same directory as this script instead of CDN.
 
 param(
     [switch]$Local,
@@ -33,7 +33,7 @@ $global:DisplayCmd  = if ($CommandName) { $CommandName } else { "openclacky" }
 
 $CLACKY_CDN_BASE_URL   = "https://oss.1024code.com"
 $INSTALL_PS1_COMMAND   = "powershell -c `"irm $CLACKY_CDN_BASE_URL/clacky-ai/openclacky/main/scripts/install.ps1 | iex`""
-$INSTALL_SCRIPT_URL    = "$CLACKY_CDN_BASE_URL/clacky-ai/openclacky/main/scripts/install_simple.sh"
+$INSTALL_SCRIPT_URL    = "$CLACKY_CDN_BASE_URL/clacky-ai/openclacky/main/scripts/install.sh"
 $UBUNTU_WSL_AMD64_URL        = "$CLACKY_CDN_BASE_URL/ubuntu-jammy-wsl-amd64-ubuntu22.04lts.rootfs.tar.gz"
 $UBUNTU_WSL_AMD64_SHA256_URL = "$CLACKY_CDN_BASE_URL/ubuntu-jammy-wsl-amd64-ubuntu22.04lts.rootfs.tar.gz.sha256"
 $UBUNTU_WSL_ARM64_URL        = "$CLACKY_CDN_BASE_URL/ubuntu-jammy-wsl-arm64-ubuntu22.04lts.rootfs.tar.gz"
@@ -245,9 +245,9 @@ function Run-InstallInWsl {
     if ($Local) {
         # Convert Windows path to WSL path (e.g. C:\foo\bar -> /mnt/c/foo/bar)
         $scriptDir = Split-Path -Parent $MyInvocation.PSCommandPath
-        $localScript = Join-Path $scriptDir "install_simple.sh"
+        $localScript = Join-Path $scriptDir "install.sh"
         if (-not (Test-Path $localScript)) {
-            Write-Fail "Local mode: install_simple.sh not found at $localScript"
+            Write-Fail "Local mode: install.sh not found at $localScript"
             exit 1
         }
         $wslPath = ($localScript -replace '\', '/') -replace '^([A-Za-z]):', { '/mnt/' + $args[0].Groups[1].Value.ToLower() }

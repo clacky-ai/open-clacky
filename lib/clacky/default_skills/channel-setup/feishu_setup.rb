@@ -71,9 +71,9 @@ BOT_PERMISSIONS = %w[
 # Logging helpers
 # ---------------------------------------------------------------------------
 
-def step(msg)  = puts("[feishu-setup] #{msg}")
-def ok(msg)    = puts("[feishu-setup] ✅ #{msg}")
-def warn(msg)  = puts("[feishu-setup] ⚠️  #{msg}")
+def step(msg);  puts("[feishu-setup] #{msg}"); end
+def ok(msg);    puts("[feishu-setup] ✅ #{msg}"); end
+def warn(msg);  puts("[feishu-setup] ⚠️  #{msg}"); end
 def fail!(msg)
   puts("[feishu-setup] ❌ #{msg}")
   exit 1
@@ -501,7 +501,7 @@ def run_setup(browser, api)
     id   = s["id"].to_s
     name_to_id[name] = id if name && !id.empty?
   end
-  ids     = BOT_PERMISSIONS.filter_map { |n| name_to_id[n] }
+  ids     = BOT_PERMISSIONS.map { |n| name_to_id[n] }.compact
   missing = BOT_PERMISSIONS.reject { |n| name_to_id.key?(n) }
   warn "#{missing.size} permissions not matched: #{missing.join(", ")}" unless missing.empty?
   fail! "No permission IDs matched. API response keys: #{name_to_id.keys.first(5).inspect}" if ids.empty?

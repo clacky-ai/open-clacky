@@ -368,9 +368,19 @@ ensure_ruby() {
         return 0
     fi
 
-    # No suitable Ruby — install via mise
+    # Linux: try apt first (fast, Ubuntu 22.04 ships Ruby 3.0)
+    if [ "$OS" = "Linux" ] && ([ "$DISTRO" = "ubuntu" ] || [ "$DISTRO" = "debian" ]); then
+        print_info "Installing Ruby via apt..."
+        if sudo apt-get install -y ruby ruby-dev 2>/dev/null && check_ruby; then
+            return 0
+        fi
+        print_warning "apt Ruby install failed or version too old, falling back to mise..."
+    fi
+
+    # Fallback: install via mise (compiles from source)
     print_step "Installing Ruby via mise..."
     detect_shell
+    install_linux_build_deps
 
     if ! install_mise; then
         return 1
@@ -390,29 +400,37 @@ ensure_ruby() {
 }
 
 # --------------------------------------------------------------------------
-# Linux: install build deps before mise/Ruby (compile fallback)
+# Linux: configure apt mirror + update (always runs before any apt install)
 # --------------------------------------------------------------------------
-install_linux_build_deps() {
-    if [ "$DISTRO" = "ubuntu" ] || [ "$DISTRO" = "debian" ]; then
-        print_step "Installing build dependencies..."
+setup_apt_mirror() {
+    if [ "$DISTRO" != "ubuntu" ] && [ "$DISTRO" != "debian" ]; then return 0; fi
 
-        if [ "$USE_CN_MIRRORS" = true ]; then
-            print_info "Configuring apt mirror (Aliyun)..."
-            local codename="${VERSION_CODENAME:-jammy}"
-            local mirror_base="https://mirrors.aliyun.com/ubuntu/"
-            local components="main restricted universe multiverse"
-            sudo tee /etc/apt/sources.list > /dev/null <<EOF
+    if [ "$USE_CN_MIRRORS" = true ]; then
+        print_info "Configuring apt mirror (Aliyun)..."
+        local codename="${VERSION_CODENAME:-jammy}"
+        local mirror_base="https://mirrors.aliyun.com/ubuntu/"
+        local components="main restricted universe multiverse"
+        sudo tee /etc/apt/sources.list > /dev/null <<EOF
 deb ${mirror_base} ${codename} ${components}
 deb ${mirror_base} ${codename}-updates ${components}
 deb ${mirror_base} ${codename}-backports ${components}
 deb ${mirror_base} ${codename}-security ${components}
 EOF
-        fi
-
-        sudo apt update
-        sudo apt install -y build-essential libssl-dev libyaml-dev zlib1g-dev libgmp-dev git
-        print_success "Build dependencies installed"
     fi
+
+    sudo apt-get update -qq
+    print_success "apt updated"
+}
+
+# --------------------------------------------------------------------------
+# Linux: install build deps (only needed when compiling Ruby via mise)
+# --------------------------------------------------------------------------
+install_linux_build_deps() {
+    if [ "$DISTRO" != "ubuntu" ] && [ "$DISTRO" != "debian" ]; then return 0; fi
+
+    print_step "Installing build dependencies..."
+    sudo apt-get install -y build-essential libssl-dev libyaml-dev zlib1g-dev libgmp-dev git
+    print_success "Build dependencies installed"
 }
 
 # --------------------------------------------------------------------------
@@ -580,10 +598,10 @@ main() {
     detect_shell
     detect_network_region
 
-    # Linux: install build deps first (needed if mise has to compile Ruby)
+    # Linux: configure apt mirror + update (always runs; build deps deferred to mise fallback)
     if [ "$OS" = "Linux" ]; then
         if [ "$DISTRO" = "ubuntu" ] || [ "$DISTRO" = "debian" ]; then
-            install_linux_build_deps
+            setup_apt_mirror
         else
             print_error "Unsupported Linux distribution: $DISTRO"
             print_info "Please install Ruby >= 2.6.0 manually and run: gem install openclacky"
