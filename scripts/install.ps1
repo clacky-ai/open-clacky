@@ -22,7 +22,12 @@
 param(
     [switch]$Local,
     [string]$BrandName   = "",
-    [string]$CommandName = ""
+    [string]$CommandName = "",
+    # When invoked from the GUI installer (open-clacky-installer app):
+    #   - Suppress all Read-Host prompts
+    #   - Exit with code 3 instead of prompting for reboot (caller handles reboot UI)
+    #   - Suppress Show-PostInstall (GUI shows its own completion screen)
+    [switch]$GUIMode
 )
 
 Set-StrictMode -Version Latest
@@ -57,10 +62,81 @@ function Test-IsAdmin {
         [Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
-# Robust file download: try curl first (shows progress), fall back to
+# GUI mode streams logs line-by-line through the Rust app, so `curl --progress-bar`
+# looks frozen and then dumps a huge carriage-return buffer at the end.
+# Use a PowerShell/.NET downloader there and emit newline-based progress updates.
+function Invoke-DownloadWithProgress {
+    param([string]$Url, [string]$OutFile)
+
+    $request = $null
+    $response = $null
+    $inputStream = $null
+    $outputStream = $null
+
+    try {
+        $request = [System.Net.HttpWebRequest]::Create($Url)
+        $request.AllowAutoRedirect = $true
+        $request.AutomaticDecompression = [System.Net.DecompressionMethods]::GZip -bor [System.Net.DecompressionMethods]::Deflate
+        $request.Timeout = 30000
+        $request.ReadWriteTimeout = 30000
+
+        $response = $request.GetResponse()
+        $totalBytes = [int64]$response.ContentLength
+        $inputStream = $response.GetResponseStream()
+        $outputStream = [System.IO.File]::Open($OutFile, [System.IO.FileMode]::Create, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+
+        $buffer = New-Object byte[] 65536
+        $downloadedBytes = [int64]0
+        $lastLoggedPercent = -1
+        $lastLoggedAt = Get-Date
+
+        if ($totalBytes -gt 0) {
+            Write-Info ("Download size: {0:N1} MB" -f ($totalBytes / 1MB))
+        }
+
+        while (($read = $inputStream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+            $outputStream.Write($buffer, 0, $read)
+            $downloadedBytes += $read
+
+            if ($totalBytes -gt 0) {
+                $percent = [math]::Min(100, [int](($downloadedBytes * 100) / $totalBytes))
+                if ($percent -ge ($lastLoggedPercent + 5) -or ($percent -eq 100 -and $percent -ne $lastLoggedPercent)) {
+                    Write-Info "Download progress: $percent%"
+                    $lastLoggedPercent = $percent
+                }
+            } else {
+                $now = Get-Date
+                if (($now - $lastLoggedAt).TotalSeconds -ge 2) {
+                    Write-Info ("Downloaded {0:N1} MB..." -f ($downloadedBytes / 1MB))
+                    $lastLoggedAt = $now
+                }
+            }
+        }
+
+        if ($totalBytes -le 0) {
+            Write-Info ("Downloaded {0:N1} MB." -f ($downloadedBytes / 1MB))
+        }
+
+        return $true
+    } catch {
+        return $false
+    } finally {
+        if ($outputStream) { $outputStream.Dispose() }
+        if ($inputStream) { $inputStream.Dispose() }
+        if ($response) { $response.Dispose() }
+    }
+}
+
+# Robust file download: in GUI mode use line-based progress logs; otherwise try
+# curl first for a nicer interactive terminal progress bar, then fall back to
 # Invoke-WebRequest. Returns $true on success, $false on failure.
 function Invoke-Download {
     param([string]$Url, [string]$OutFile)
+
+    if ($GUIMode) {
+        return (Invoke-DownloadWithProgress -Url $Url -OutFile $OutFile)
+    }
+
     $ok = $false
     try {
         curl.exe -L --fail --progress-bar $Url -o $OutFile
@@ -155,6 +231,10 @@ function Get-CpuArch {
 function Prompt-Reboot {
     Write-Host ""
     Write-Warn "Please restart your computer."
+    if ($GUIMode) {
+        # GUI installer handles the reboot prompt — just signal with exit code 3
+        exit 3
+    }
     Write-Warn "After restarting, run the same command again:"
     Write-Host "  $INSTALL_PS1_COMMAND" -ForegroundColor Yellow
     Write-Host ""
@@ -222,11 +302,24 @@ function Install-UbuntuRootfs {
 
         Write-Step "Importing Ubuntu into WSL$WslVersion (this may take a minute)..."
         New-Item -ItemType Directory -Force -Path $installDir | Out-Null
-        wsl.exe --import Ubuntu $installDir $tarPath --version $WslVersion
-        if ($LASTEXITCODE -ne 0) {
-            Write-Fail "wsl --import failed (exit $LASTEXITCODE)."
-            Write-Fail "Try removing $installDir and running the script again."
-            exit 1
+        # wsl.exe outputs UTF-16LE; set output encoding so PowerShell decodes it correctly.
+        $prevEncoding = [Console]::OutputEncoding
+        [Console]::OutputEncoding = [System.Text.Encoding]::Unicode
+        $importOutput = (wsl.exe --import Ubuntu $installDir $tarPath --version $WslVersion 2>&1) -join " "
+        $importExit   = $LASTEXITCODE
+        [Console]::OutputEncoding = $prevEncoding
+        Write-Info "wsl --import exit code: $importExit"
+        if ($importExit -ne 0) {
+            # Import may have actually succeeded despite a non-zero exit code
+            # (observed on some WSL1 builds). Verify by checking the registry.
+            if (Test-UbuntuInstalled) {
+                Write-Warn "wsl --import returned $importExit but Ubuntu is registered — continuing."
+            } else {
+                Write-Fail "wsl --import failed (exit $importExit)."
+                if ($importOutput) { Write-Info "wsl output: $importOutput" }
+                Write-Fail "Try removing $installDir and running the script again."
+                exit 1
+            }
         }
         Write-Success "Ubuntu (WSL$WslVersion) imported successfully."
     } finally {
@@ -426,7 +519,7 @@ Write-Host ""
 Write-Host "$DisplayName Installation Script (Windows)" -ForegroundColor Cyan
 Write-Host ""
 
-if (-not (Test-IsAdmin)) {
+if (-not $GUIMode -and -not (Test-IsAdmin)) {
     Write-Fail "Please re-run this script as Administrator:"
     Write-Host ""
     Write-Host "  Right-click PowerShell -> 'Run as administrator', then:" -ForegroundColor Yellow
@@ -483,4 +576,6 @@ if ($virt) {
 Write-Success "WSL is ready."
 Run-InstallInWsl
 Set-InstallReg -Name "WslVersion" -Value $wslVersion
-Show-PostInstall -WslVersion $wslVersion
+if (-not $GUIMode) {
+    Show-PostInstall -WslVersion $wslVersion
+}
