@@ -59,6 +59,15 @@ module Clacky
           "abs-claude-haiku-4-5"
         ],
         "website_url" => "https://clacky.ai"
+      }.freeze,
+
+      "mimo" => {
+        "name" => "MiMo (Xiaomi)",
+        "base_url" => "https://api.xiaomimimo.com/v1",
+        "api" => "openai-completions",
+        "default_model" => "mimo-v2-pro",
+        "models" => ["mimo-v2-pro", "mimo-v2-omni"],
+        "website_url" => "https://platform.xiaomimimo.com/"
       }.freeze
 
     }.freeze
