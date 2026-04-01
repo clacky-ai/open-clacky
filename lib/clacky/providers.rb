@@ -49,7 +49,7 @@ module Clacky
       }.freeze,
 
       "clackyai" => {
-        "name" => "Clacky AI",
+        "name" => "ClackyAI",
         "base_url" => "https://api.clacky.ai",
         "api" => "bedrock",
         "default_model" => "abs-claude-sonnet-4-6",
