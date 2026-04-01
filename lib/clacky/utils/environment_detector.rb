@@ -55,29 +55,32 @@ module Clacky
       end
 
       private_class_method def self.wsl_desktop_path
-        if `which powershell.exe 2>/dev/null`.strip.empty?
+        if Utils::Encoding.cmd_to_utf8(`which powershell.exe 2>/dev/null`).strip.empty?
           return fallback_desktop_path
         end
 
-        win_path = `powershell.exe -NoProfile -Command '[Environment]::GetFolderPath("Desktop")' 2>/dev/null`
-                     .strip.tr("\r\n", "")
+        # powershell.exe on Chinese Windows outputs GBK bytes; decode explicitly
+        win_path = Utils::Encoding.cmd_to_utf8(
+          `powershell.exe -NoProfile -Command '[Environment]::GetFolderPath("Desktop")' 2>/dev/null`
+        ).strip.tr("\r\n", "")
         return fallback_desktop_path if win_path.empty?
 
-        linux_path = `wslpath '#{win_path}' 2>/dev/null`.strip
+        # wslpath output is UTF-8 (Linux side)
+        linux_path = Utils::Encoding.cmd_to_utf8(`wslpath '#{win_path}' 2>/dev/null`, source_encoding: "UTF-8").strip
         return linux_path if !linux_path.empty? && Dir.exist?(linux_path)
 
         fallback_desktop_path
       end
 
       private_class_method def self.linux_desktop_path
-        path = `xdg-user-dir DESKTOP 2>/dev/null`.strip
+        path = Utils::Encoding.cmd_to_utf8(`xdg-user-dir DESKTOP 2>/dev/null`, source_encoding: "UTF-8").strip
         return path if !path.empty? && path != Dir.home && Dir.exist?(path)
 
         fallback_desktop_path
       end
 
       private_class_method def self.macos_desktop_path
-        path = `osascript -e 'POSIX path of (path to desktop)' 2>/dev/null`.strip.chomp("/")
+        path = Utils::Encoding.cmd_to_utf8(`osascript -e 'POSIX path of (path to desktop)' 2>/dev/null`, source_encoding: "UTF-8").strip.chomp("/")
         return path if !path.empty? && Dir.exist?(path)
 
         fallback_desktop_path

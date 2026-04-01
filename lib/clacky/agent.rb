@@ -102,6 +102,9 @@ module Clacky
 
       # Ensure user-space parsers are in place (~/.clacky/parsers/)
       Utils::ParserManager.setup!
+
+      # Ensure bundled shell scripts are in place (~/.clacky/scripts/)
+      Utils::ScriptsManager.setup!
     end
 
     # Restore from a saved session
@@ -128,6 +131,7 @@ module Clacky
         @client = Clacky::Client.new(
           @config.api_key,
           base_url: @config.base_url,
+          model: @config.model_name,
           anthropic_format: @config.anthropic_format?
         )
         # Update message compressor with new client and model
@@ -920,6 +924,7 @@ module Clacky
       subagent_client = Clacky::Client.new(
         subagent_config.api_key,
         base_url: subagent_config.base_url,
+        model: subagent_config.model_name,
         anthropic_format: subagent_config.anthropic_format?
       )
 

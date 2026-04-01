@@ -53,6 +53,7 @@ Answer the user's question using the official documentation below. Always fetch 
 | Built-in skills, default skills, what skills ship with OpenClacky | https://www.openclacky.com/docs/built-in-skills |
 | Memory system, long-term memory, ~/.clacky/memories | https://www.openclacky.com/docs/memory-system |
 | Session management, conversation history, context window | https://www.openclacky.com/docs/session-management |
+| Browser automation, browser tool, Chrome, Edge, CDP, remote debugging, WSL browser, browser-setup skill | https://www.openclacky.com/docs/browser-tool |
 
 ## Workflow
 

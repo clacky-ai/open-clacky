@@ -938,7 +938,7 @@ body {
 .task-btn-run  { background: var(--color-accent-primary); color: #fff; }
 .task-btn-run:hover  { background: var(--color-accent-hover); }
 .task-btn-edit { background: var(--color-border-primary); color: var(--color-text-primary); }
-.task-btn-edit:hover { background: #3d444d; }
+.task-btn-edit:hover { background: var(--color-bg-hover); }
 .task-btn-del  { background: var(--color-error-bg); color: var(--color-error); }
 .task-btn-del:hover  { background: var(--color-error); color: #fff; }
 

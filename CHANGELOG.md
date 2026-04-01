@@ -7,6 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.23] - 2026-04-01
+
+### Improved
+- **API client model parameter propagation**: the Client class now accepts and uses an explicit model parameter, enabling better model detection and API routing across all client instantiation points (CLI, agent, subagent)
+- **Bedrock API detection**: improved detection of Bedrock Converse API usage by checking both API key prefix (ABSK) and model prefix (abs-), providing more robust handling of Bedrock models
+
+### Fixed
+- **CLI -c option model initialization**: fixed a bug where the CLI command with -c option was not passing the model name to the client, causing routing failures for certain providers
+
+### More
+- ClackyAI provider updated to use the latest model name format (abs- prefix)
+
+## [0.9.22] - 2026-03-31
+
+### Added
+- **ClackyAI provider (Bedrock with prompt caching)**: added `clackyai` as a first-class provider — uses AWS Bedrock under the hood with prompt caching enabled, normalising token usage to Anthropic semantics so cost calculation works correctly
+- **Browser auto-install script**: `browser-setup` skill can now detect the Chrome/Edge version and automatically download and run the install script, reducing manual setup steps
+
+### Fixed
+- **Feishu setup timeout**: `navigate` method was using `open` (new tab) instead of `navigate` (current tab), causing intermittent timeouts on macOS when opening feishu.cn
+- **Cron task schedule YAML format**: fixed a YAML serialisation bug in the scheduler that produced invalid schedule files
+
+## [0.9.21] - 2026-03-30
+
+### Fixed
+- **Feishu channel setup compatibility with v2.6**: fixed Ruby 3.1 syntax incompatibility in the Feishu setup script that caused failures on newer Feishu API versions
+
+### Improved
+- **skill-creator YAML validation**: added frontmatter schema validation for skill files, catching malformed skill definitions before they cause runtime errors
+
+### More
+- Removed `install_simple.sh` (consolidated into `install.sh`)
+
+## [0.9.20] - 2026-03-30
+
+### Added
+- **SSL error retry**: LLM API calls now automatically retry on SSL errors (same as other network failures — up to 10 retries with 5s delay)
+
+### Fixed
+- **Brand wrapper not found under root**: the install script now places the brand command wrapper in the same directory as the `openclacky` binary, so it is always on PATH regardless of whether running as root or a normal user
+
+### Improved
+- **Cron task management refactored to API**: cron task CRUD operations now go through the HTTP API instead of running ad-hoc Ruby scripts, making the scheduler more reliable and easier to maintain
+- **UTF-8 encoding fix for browser tool on Windows**: browser command output with non-ASCII characters no longer causes encoding errors
+
+### More
+- Installer no longer adds `~/.local/bin` to PATH (wrapper now colocated with gem binary, making the extra PATH entry unnecessary)
+- Brand install tips in Windows PowerShell installer
+
 ## [0.9.19] - 2026-03-29
 
 ### Added

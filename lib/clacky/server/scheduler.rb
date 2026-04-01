@@ -85,6 +85,61 @@ module Clacky
         list.size < before_count
       end
 
+      # Update an existing schedule entry (cron and/or enabled).
+      # Returns false if the schedule does not exist.
+      def update_schedule(name, cron: nil, enabled: nil)
+        list = load_schedules
+        entry = list.find { |s| s["name"] == name }
+        return false unless entry
+
+        entry["cron"]    = cron    unless cron.nil?
+        entry["enabled"] = enabled unless enabled.nil?
+        save_schedules(list)
+        true
+      end
+
+      # ── Composite cron-task helpers ──────────────────────────────────────────
+
+      # Create a task file and its schedule in one step.
+      def create_cron_task(name:, content:, cron:, enabled: true)
+        write_task(name, content)
+        add_schedule(name: name, task: name, cron: cron, enabled: enabled)
+      end
+
+      # Update a cron-task: optionally update content and/or schedule fields.
+      def update_cron_task(name, content: nil, cron: nil, enabled: nil)
+        raise "Cron task not found: #{name}" unless list_tasks.include?(name)
+
+        write_task(name, content) unless content.nil?
+        update_schedule(name, cron: cron, enabled: enabled) if cron || !enabled.nil?
+      end
+
+      # Delete a cron-task: remove both the task file and its schedule.
+      def delete_cron_task(name)
+        removed_schedule = remove_schedule(name)
+        removed_task     = delete_task(name)
+        removed_schedule || removed_task
+      end
+
+      # Return a merged list of cron-tasks (task content + schedule metadata).
+      def list_cron_tasks
+        schedule_map = load_schedules.each_with_object({}) do |s, h|
+          h[s["task"]] = s if s.is_a?(Hash)
+        end
+
+        list_tasks.map do |task_name|
+          content  = begin; read_task(task_name); rescue StandardError; ""; end
+          schedule = schedule_map[task_name] || {}
+          {
+            "name"    => task_name,
+            "content" => content,
+            "cron"    => schedule["cron"],
+            "enabled" => schedule.fetch("enabled", true),
+            "scheduled" => !schedule.empty?
+          }
+        end
+      end
+
       # ── Task file helpers ────────────────────────────────────────────────────
 
       # Read the prompt content of a named task.
@@ -245,7 +300,8 @@ module Clacky
         return [] unless File.exist?(SCHEDULES_FILE)
 
         data = YAMLCompat.load_file(SCHEDULES_FILE, permitted_classes: [Symbol])
-        Array(data)
+        raw  = data.is_a?(Hash) ? data["schedules"] : data
+        Array(raw).select { |s| s.is_a?(Hash) }
       rescue => e
         Clacky::Logger.error("scheduler_load_schedules_error", error: e)
         []

@@ -368,9 +368,19 @@ ensure_ruby() {
         return 0
     fi
 
-    # No suitable Ruby — install via mise
+    # Linux: try apt first (fast, Ubuntu 22.04 ships Ruby 3.0)
+    if [ "$OS" = "Linux" ] && ([ "$DISTRO" = "ubuntu" ] || [ "$DISTRO" = "debian" ]); then
+        print_info "Installing Ruby via apt..."
+        if sudo apt-get install -y ruby ruby-dev 2>/dev/null && check_ruby; then
+            return 0
+        fi
+        print_warning "apt Ruby install failed or version too old, falling back to mise..."
+    fi
+
+    # Fallback: install via mise (compiles from source)
     print_step "Installing Ruby via mise..."
     detect_shell
+    install_linux_build_deps
 
     if ! install_mise; then
         return 1
@@ -390,29 +400,37 @@ ensure_ruby() {
 }
 
 # --------------------------------------------------------------------------
-# Linux: install build deps before mise/Ruby (compile fallback)
+# Linux: configure apt mirror + update (always runs before any apt install)
 # --------------------------------------------------------------------------
-install_linux_build_deps() {
-    if [ "$DISTRO" = "ubuntu" ] || [ "$DISTRO" = "debian" ]; then
-        print_step "Installing build dependencies..."
+setup_apt_mirror() {
+    if [ "$DISTRO" != "ubuntu" ] && [ "$DISTRO" != "debian" ]; then return 0; fi
 
-        if [ "$USE_CN_MIRRORS" = true ]; then
-            print_info "Configuring apt mirror (Aliyun)..."
-            local codename="${VERSION_CODENAME:-jammy}"
-            local mirror_base="https://mirrors.aliyun.com/ubuntu/"
-            local components="main restricted universe multiverse"
-            sudo tee /etc/apt/sources.list > /dev/null <<EOF
+    if [ "$USE_CN_MIRRORS" = true ]; then
+        print_info "Configuring apt mirror (Aliyun)..."
+        local codename="${VERSION_CODENAME:-jammy}"
+        local mirror_base="https://mirrors.aliyun.com/ubuntu/"
+        local components="main restricted universe multiverse"
+        sudo tee /etc/apt/sources.list > /dev/null <<EOF
 deb ${mirror_base} ${codename} ${components}
 deb ${mirror_base} ${codename}-updates ${components}
 deb ${mirror_base} ${codename}-backports ${components}
 deb ${mirror_base} ${codename}-security ${components}
 EOF
-        fi
-
-        sudo apt update
-        sudo apt install -y build-essential libssl-dev libyaml-dev zlib1g-dev libgmp-dev git
-        print_success "Build dependencies installed"
     fi
+
+    sudo apt-get update -qq
+    print_success "apt updated"
+}
+
+# --------------------------------------------------------------------------
+# Linux: install build deps (only needed when compiling Ruby via mise)
+# --------------------------------------------------------------------------
+install_linux_build_deps() {
+    if [ "$DISTRO" != "ubuntu" ] && [ "$DISTRO" != "debian" ]; then return 0; fi
+
+    print_step "Installing build dependencies..."
+    sudo apt-get install -y build-essential libssl-dev libyaml-dev zlib1g-dev libgmp-dev git
+    print_success "Build dependencies installed"
 }
 
 # --------------------------------------------------------------------------
@@ -434,19 +452,18 @@ setup_gem_home() {
 
     export GEM_HOME="$HOME/.gem/ruby/${ruby_api}"
     export GEM_PATH="$HOME/.gem/ruby/${ruby_api}"
-    export PATH="$HOME/.local/bin:$HOME/.gem/ruby/${ruby_api}/bin:$PATH"
+    export PATH="$HOME/.gem/ruby/${ruby_api}/bin:$PATH"
 
     print_info "System Ruby detected — gems will install to ~/.gem/ruby/${ruby_api}"
 
     # Persist to shell rc (use $HOME so the line is portable)
-    # Also add ~/.local/bin so brand wrapper commands installed there are found
     if [ -n "$SHELL_RC" ] && ! grep -q "GEM_HOME" "$SHELL_RC" 2>/dev/null; then
         {
             echo ""
             echo "# Ruby user gem dir (added by openclacky installer)"
             echo "export GEM_HOME=\"\$HOME/.gem/ruby/${ruby_api}\""
             echo "export GEM_PATH=\"\$HOME/.gem/ruby/${ruby_api}\""
-            echo "export PATH=\"\$HOME/.local/bin:\$HOME/.gem/ruby/${ruby_api}/bin:\$PATH\""
+            echo "export PATH=\"\$HOME/.gem/ruby/${ruby_api}/bin:\$PATH\""
         } >> "$SHELL_RC"
         print_info "GEM_HOME written to $SHELL_RC"
     fi
@@ -524,8 +541,17 @@ YAML
     print_success "Brand config written to $brand_file"
 
     if [ -n "$BRAND_COMMAND" ]; then
-        local bin_dir="$HOME/.local/bin"
-        mkdir -p "$bin_dir"
+        # Install wrapper in the same directory as the openclacky binary so it is
+        # always on PATH regardless of whether we are running as root or a normal user.
+        local clacky_bin bin_dir
+        clacky_bin=$(command -v openclacky 2>/dev/null || true)
+        if [ -n "$clacky_bin" ]; then
+            bin_dir=$(dirname "$clacky_bin")
+        else
+            print_warning "openclacky binary not found in PATH; skipping wrapper install"
+            return 0
+        fi
+
         local wrapper="$bin_dir/$BRAND_COMMAND"
         cat > "$wrapper" <<WRAPPER
 #!/bin/sh
@@ -533,13 +559,6 @@ exec openclacky "\$@"
 WRAPPER
         chmod +x "$wrapper"
         print_success "Wrapper installed: $wrapper"
-
-        case ":$PATH:" in
-            *":$bin_dir:"*) ;;
-            *)
-                print_warning "Add to your shell profile: export PATH=\"\$HOME/.local/bin:\$PATH\""
-                ;;
-        esac
     fi
 }
 
@@ -579,10 +598,10 @@ main() {
     detect_shell
     detect_network_region
 
-    # Linux: install build deps first (needed if mise has to compile Ruby)
+    # Linux: configure apt mirror + update (always runs; build deps deferred to mise fallback)
     if [ "$OS" = "Linux" ]; then
         if [ "$DISTRO" = "ubuntu" ] || [ "$DISTRO" = "debian" ]; then
-            install_linux_build_deps
+            setup_apt_mirror
         else
             print_error "Unsupported Linux distribution: $DISTRO"
             print_info "Please install Ruby >= 2.6.0 manually and run: gem install openclacky"

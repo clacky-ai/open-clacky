@@ -91,7 +91,7 @@ RSpec.describe "Prompt Caching Feature" do
   describe "Client prompt caching support" do
     let(:api_key) { "test-key" }
     let(:base_url) { "https://api.example.com" }
-    let(:client) { Clacky::Client.new(api_key, base_url: base_url) }
+    let(:client) { Clacky::Client.new(api_key, base_url: base_url, model: "claude-3.5-sonnet-20241022") }
     
     describe "#supports_prompt_caching?" do
       it "returns true for Claude 3.5 Sonnet models" do

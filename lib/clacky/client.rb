@@ -8,13 +8,13 @@ module Clacky
     MAX_RETRIES = 10
     RETRY_DELAY = 5 # seconds
 
-    def initialize(api_key, base_url:, model: nil, anthropic_format: false)
+    def initialize(api_key, base_url:, model:, anthropic_format: false)
       @api_key = api_key
       @base_url = base_url
       @model = model
       @use_anthropic_format = anthropic_format
-      # Detect Bedrock API key by ABSK prefix — overrides anthropic_format routing
-      @use_bedrock = MessageFormat::Bedrock.bedrock_api_key?(api_key)
+      # Detect Bedrock: ABSK key prefix (native AWS) or abs- model prefix (Clacky AI proxy)
+      @use_bedrock = MessageFormat::Bedrock.bedrock_api_key?(api_key, model)
     end
 
     # Returns true when the client is using the AWS Bedrock Converse API.
@@ -88,7 +88,7 @@ module Clacky
       cloned = deep_clone(messages)
 
       if bedrock?
-        send_bedrock_request(cloned, model, tools, max_tokens)
+        send_bedrock_request(cloned, model, tools, max_tokens, caching_enabled)
       elsif anthropic_format?
         send_anthropic_request(cloned, model, tools, max_tokens, caching_enabled)
       else
@@ -124,8 +124,8 @@ module Clacky
 
     # ── Bedrock Converse request / response ───────────────────────────────────
 
-    def send_bedrock_request(messages, model, tools, max_tokens)
-      body     = MessageFormat::Bedrock.build_request_body(messages, model, tools, max_tokens)
+    def send_bedrock_request(messages, model, tools, max_tokens, caching_enabled)
+      body     = MessageFormat::Bedrock.build_request_body(messages, model, tools, max_tokens, caching_enabled)
       response = bedrock_connection.post(bedrock_endpoint(model)) { |r| r.body = body.to_json }
 
       raise_error(response) unless response.status == 200

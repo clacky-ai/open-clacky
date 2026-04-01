@@ -34,7 +34,7 @@ module Clacky
             max_tokens: @config.max_tokens,
             enable_caching: @config.enable_prompt_caching
           )
-        rescue Faraday::ConnectionFailed, Faraday::TimeoutError, Errno::ECONNREFUSED, Errno::ETIMEDOUT => e
+        rescue Faraday::ConnectionFailed, Faraday::TimeoutError, Faraday::SSLError, Errno::ECONNREFUSED, Errno::ETIMEDOUT => e
           @ui&.clear_progress
           retries += 1
           if retries <= max_retries

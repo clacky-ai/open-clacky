@@ -54,6 +54,27 @@ module Clacky
         str.encode("UTF-8", "UTF-8", invalid: :replace, undef: :replace, replace: "")
       end
 
+      # Convert raw shell command output to valid UTF-8.
+      # Handles two common cases:
+      #   - Windows commands (e.g. powershell.exe) that output GBK/CP936 bytes
+      #   - Unix commands that output UTF-8 or ASCII bytes with ASCII-8BIT encoding
+      #
+      # Strategy: try GBK decode first (superset of ASCII, covers Chinese Windows);
+      # if that fails fall back to UTF-8 scrub.
+      #
+      # @param data [String, nil] raw bytes from backtick / IO.popen
+      # @param source_encoding [String] hint for source encoding (default: "GBK")
+      # @return [String] valid UTF-8 string
+      def self.cmd_to_utf8(data, source_encoding: "GBK")
+        return "" if data.nil? || data.empty?
+
+        data.dup
+            .force_encoding(source_encoding)
+            .encode("UTF-8", invalid: :replace, undef: :replace, replace: "")
+      rescue Encoding::InvalidByteSequenceError, Encoding::UndefinedConversionError
+        to_utf8(data)
+      end
+
       # Return an ASCII-safe UTF-8 copy of *str* suitable for security regex
       # pattern matching.  Any byte that is not valid in the source encoding, or
       # that cannot be represented in UTF-8, is replaced with '?'.  The

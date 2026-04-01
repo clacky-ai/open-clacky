@@ -325,9 +325,9 @@ module Clacky
       current_model&.dig("anthropic_format") || false
     end
 
-    # Check if current model uses AWS Bedrock API key (ABSK prefix)
+    # Check if current model uses Bedrock Converse API (ABSK key prefix or abs- model prefix)
     def bedrock?
-      Clacky::MessageFormat::Bedrock.bedrock_api_key?(api_key.to_s)
+      Clacky::MessageFormat::Bedrock.bedrock_api_key?(api_key.to_s, model_name.to_s)
     end
 
     # Add a new model configuration
@@ -434,6 +434,8 @@ module Clacky
       if data.is_a?(Array)
         # New format: top-level array of model configurations
         models = data.map do |m|
+          # Deep copy to avoid shared references between models
+          m = m.dup.transform_values { |v| v.is_a?(String) ? v.dup : v }
           # Convert old name-based format to new model-based format if needed
           if m["name"] && !m["model"]
             m["model"] = m["name"]

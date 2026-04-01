@@ -86,6 +86,12 @@ Components to fill in:
 >
 > **YAML description gotcha**: If the description contains `word: value` patterns (colons followed by space), YAML treats them as key-value pairs and the frontmatter parse fails silently. Always wrap description values in single quotes. Avoid embedded double-quotes inside single-quoted strings (use rephrasing instead).
 
+> **After writing SKILL.md — always validate and auto-fix**: Run this immediately after creating or updating any skill file:
+> ```bash
+> ruby SKILL_DIR/scripts/validate_skill_frontmatter.rb /path/to/new-skill/SKILL.md
+> ```
+> The script validates the YAML frontmatter and auto-fixes common issues (unquoted descriptions, multi-line block scalars with colons). If it prints `OK:` — you're done. If it prints `Auto-fixed and saved` — it repaired the file automatically. If it prints `ERROR` — manual fix required.
+
 ### Skill Writing Guide
 
 #### Anatomy of a Skill

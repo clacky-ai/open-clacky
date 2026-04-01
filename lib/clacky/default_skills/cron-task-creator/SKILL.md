@@ -17,21 +17,14 @@ Storage:
   ~/.clacky/schedules.yml        # All scheduled plans (YAML list)
   ~/.clacky/logger/clacky-*.log  # Execution logs (daily rotation)
 
-WebUI Task Panel (Clacky Web Interface):
-  - Automatically reads tasks/ + schedules.yml and renders the task list
-  - Each row shows task name, cron expression, and content preview
-  - Action buttons: ▶ Run (execute now), ✎ Edit (edit in session), ✕ (delete)
-  - Run button triggers POST /api/tasks/run → executes task in a new session
+API Base: http://${CLACKY_SERVER_HOST}:${CLACKY_SERVER_PORT}
 
-API Endpoints (available when clacky server is running):
-  GET    /api/tasks              → list all tasks
-  POST   /api/tasks              → create task {name, content}
-  GET    /api/tasks/:name        → get task content
-  DELETE /api/tasks/:name        → delete task
-  POST   /api/tasks/run          → run immediately {name}
-  GET    /api/schedules          → list all schedules
-  POST   /api/schedules          → create schedule {name, task, cron}
-  DELETE /api/schedules/:name    → delete schedule
+Cron-Tasks API (unified — manages task file + schedule together):
+  GET    /api/cron-tasks              → list all cron tasks with schedule info
+  POST   /api/cron-tasks              → create task + schedule {name, content, cron, enabled?}
+  PATCH  /api/cron-tasks/:name        → update {content?, cron?, enabled?}
+  DELETE /api/cron-tasks/:name        → delete task file + schedule
+  POST   /api/cron-tasks/:name/run    → execute immediately (creates a new session)
 ```
 
 ## Cron Expression Quick Reference
@@ -54,10 +47,11 @@ Field order: `minute hour day-of-month month day-of-week`
 
 ### 1. LIST — Show all tasks
 
-When user asks "what tasks do I have", "list scheduled tasks", etc.:
+```bash
+curl -s http://${CLACKY_SERVER_HOST}:${CLACKY_SERVER_PORT}/api/cron-tasks
+```
 
-1. Run `ruby ~/.clacky/skills/cron-task-creator/scripts/list_tasks.rb`
-2. Display results: task name, cron schedule, enabled status, last run status
+Display each task: name, cron schedule, enabled status, content preview.
 
 If no tasks exist, inform the user and offer to create one or show templates.
 
@@ -69,15 +63,14 @@ If no tasks exist, inform the user and offer to create one or show templates.
 
 **Step 1: Gather required info** (only ask for what's missing)
 - What should the task DO? (goal, behavior, output format)
-- How often should it run? (or is it manual-only?)
+- How often should it run? (or is it manual-only without a schedule?)
 - Any specific parameters? (URLs, file paths, output location, language)
 
 **Step 2: Generate task name**
 - Rule: only `[a-z0-9_-]`, lowercase, no spaces
 - Examples: `daily_report`, `price_monitor`, `weekly_summary`
 
-**Step 3: Write the task prompt file**
-Path: `~/.clacky/tasks/<name>.md`
+**Step 3: Write the task prompt**
 
 The prompt must be:
 - **Self-contained**: the agent running it has zero prior context — include everything needed
@@ -85,7 +78,7 @@ The prompt must be:
 - **Detailed**: include URLs, file paths, output format, language, expected output location
 
 Good task prompt example:
-```markdown
+```
 You are a price monitoring assistant. Complete the following task:
 
 ## Goal
@@ -100,14 +93,17 @@ Check the current BTC price on CoinGecko, compare with yesterday's price, and lo
 Execute immediately.
 ```
 
-**Step 4: Write file and add schedule**
+**Step 4: Create via API**
 
 ```bash
-# Write task file
-ruby ~/.clacky/skills/cron-task-creator/scripts/manage_task.rb create "<name>" "<content>"
-
-# Add schedule (if applicable)
-ruby ~/.clacky/skills/cron-task-creator/scripts/manage_schedule.rb add "<name>" "<task_name>" "<cron_expr>"
+curl -s -X POST http://${CLACKY_SERVER_HOST}:${CLACKY_SERVER_PORT}/api/cron-tasks \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "task_name",
+    "content": "task prompt content...",
+    "cron": "0 9 * * *",
+    "enabled": true
+  }'
 ```
 
 **Step 5: Confirm creation**
@@ -116,7 +112,6 @@ ruby ~/.clacky/skills/cron-task-creator/scripts/manage_schedule.rb add "<name>" 
 ✅ Task created successfully!
 
 📋 Task name: daily_standup
-📄 File: ~/.clacky/tasks/daily_standup.md
 ⏰ Schedule: Weekdays at 09:00 (cron: 0 9 * * 1-5)
 
 View and manage this task in the Clacky WebUI → Tasks panel. Click ▶ Run to execute immediately.
@@ -126,24 +121,27 @@ View and manage this task in the Clacky WebUI → Tasks panel. Click ▶ Run to 
 
 ### 3. EDIT — Modify an existing task
 
-When the user wants to change task content, cron schedule, or rename:
+**Step 1**: Identify the task (if unclear, LIST first and ask)
 
-**Step 1**: Identify the task to modify (if unclear, LIST first and ask)
+**Step 2**: Show current state via LIST or ask user to confirm
 
-**Step 2**: Show current state (first 10 lines + cron expression)
-
-**Step 3**: Determine what to change
-- Prompt only → rewrite `~/.clacky/tasks/<name>.md`
-- Schedule only → update `cron` field in `schedules.yml`
-- Both → do both
-- Rename → rename .md file + update schedules.yml
+**Step 3**: Update via API
 
 ```bash
-# Update task content
-ruby ~/.clacky/skills/cron-task-creator/scripts/manage_task.rb update "<name>" "<new_content>"
+# Update content only
+curl -s -X PATCH http://${CLACKY_SERVER_HOST}:${CLACKY_SERVER_PORT}/api/cron-tasks/task_name \
+  -H "Content-Type: application/json" \
+  -d '{"content": "new prompt content..."}'
 
-# Update cron schedule
-ruby ~/.clacky/skills/cron-task-creator/scripts/manage_schedule.rb update "<schedule_name>" "<new_cron>"
+# Update cron schedule only
+curl -s -X PATCH http://${CLACKY_SERVER_HOST}:${CLACKY_SERVER_PORT}/api/cron-tasks/task_name \
+  -H "Content-Type: application/json" \
+  -d '{"cron": "0 8 * * 1-5"}'
+
+# Update both
+curl -s -X PATCH http://${CLACKY_SERVER_HOST}:${CLACKY_SERVER_PORT}/api/cron-tasks/task_name \
+  -H "Content-Type: application/json" \
+  -d '{"content": "...", "cron": "0 8 * * 1-5"}'
 ```
 
 **Step 4**: Confirm changes
@@ -151,7 +149,6 @@ ruby ~/.clacky/skills/cron-task-creator/scripts/manage_schedule.rb update "<sche
 ```
 ✅ Task updated!
 📋 daily_standup
-  Prompt: updated ✓
   Schedule: 0 9 * * 1-5 → 0 8 * * 1-5 (now weekdays at 08:00)
 ```
 
@@ -160,7 +157,15 @@ ruby ~/.clacky/skills/cron-task-creator/scripts/manage_schedule.rb update "<sche
 ### 4. ENABLE / DISABLE — Toggle a task
 
 ```bash
-ruby ~/.clacky/skills/cron-task-creator/scripts/manage_schedule.rb toggle "<schedule_name>" true|false
+# Disable
+curl -s -X PATCH http://${CLACKY_SERVER_HOST}:${CLACKY_SERVER_PORT}/api/cron-tasks/task_name \
+  -H "Content-Type: application/json" \
+  -d '{"enabled": false}'
+
+# Enable
+curl -s -X PATCH http://${CLACKY_SERVER_HOST}:${CLACKY_SERVER_PORT}/api/cron-tasks/task_name \
+  -H "Content-Type: application/json" \
+  -d '{"enabled": true}'
 ```
 
 Confirm:
@@ -180,15 +185,22 @@ Always confirm before deleting (unless the user has explicitly said to delete):
 ```
 
 ```bash
-ruby ~/.clacky/skills/cron-task-creator/scripts/manage_task.rb delete "<name>"
+curl -s -X DELETE http://${CLACKY_SERVER_HOST}:${CLACKY_SERVER_PORT}/api/cron-tasks/task_name
 ```
 
 ---
 
 ### 6. HISTORY — View run history
 
+Read the daily log files directly:
+
 ```bash
-ruby ~/.clacky/skills/cron-task-creator/scripts/task_history.rb "<task_name>"
+grep "task_name" ~/.clacky/logger/clacky-$(date +%Y-%m-%d).log | tail -20
+```
+
+Or search across recent days:
+```bash
+grep -h "task_name" ~/.clacky/logger/clacky-*.log | tail -30
 ```
 
 Display format:
@@ -198,24 +210,21 @@ Display format:
 Mar 10  19:00  ❌ Failed  — JSON::ParserError: unexpected end of input
 Mar 09  19:00  ✅ Success — took 1m 42s
 Mar 08  19:00  ✅ Success — took 2m 10s
-Mar 07  19:00  ⚠️ Skipped — (task was disabled)
-
-Recent error:
-  JSON::ParserError at line 226
-  Possible cause: API response was truncated or empty
 ```
 
 ---
 
 ### 7. RUN NOW — Execute immediately
 
-```
-▶️ Go to the Clacky WebUI → Tasks panel, find the task, and click ▶ Run.
-
-The task will execute in a new session. You can watch it run in real time via the WebUI.
+```bash
+curl -s -X POST http://${CLACKY_SERVER_HOST}:${CLACKY_SERVER_PORT}/api/cron-tasks/task_name/run
 ```
 
-If the user wants to run the task in the current session, read the task file and execute the instructions directly.
+This creates a new session. Tell the user:
+```
+▶️ Task started in a new session.
+   View it in the Clacky WebUI → Sessions panel.
+```
 
 ---
 
@@ -243,8 +252,6 @@ Tell me which one interests you, or describe your own use case!
 ## Important Notes
 
 - Task names: only `[a-z0-9_-]`, no spaces, no uppercase
-- When modifying `schedules.yml`: always read → modify → write back the full file (never append directly)
 - Task prompt files must be **self-contained** — the executing agent has no prior memory
 - Clacky server must be running for cron to trigger automatically (checked every minute)
 - The WebUI Task Panel is the preferred interface for managing tasks — always remind the user to check it after changes
-- Path expansion: always use absolute paths, expand `~` to the actual home directory

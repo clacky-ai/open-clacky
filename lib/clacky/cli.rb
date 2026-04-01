@@ -84,7 +84,7 @@ module Clacky
       agent_config.verbose = options[:verbose] if options[:verbose]
 
       # Create client for current model
-      client = Clacky::Client.new(agent_config.api_key, base_url: agent_config.base_url, anthropic_format: agent_config.anthropic_format?)
+      client = Clacky::Client.new(agent_config.api_key, base_url: agent_config.base_url, model: agent_config.model_name, anthropic_format: agent_config.anthropic_format?)
 
       # Resolve agent profile name from --agent option
       agent_profile = options[:agent] || "coding"
@@ -137,6 +137,7 @@ module Clacky
           test_client = Clacky::Client.new(
             test_config.api_key,
             base_url: test_config.base_url,
+            model: test_config.model_name,
             anthropic_format: test_config.anthropic_format?
           )
 
@@ -162,6 +163,7 @@ module Clacky
         agent.instance_variable_set(:@client, Clacky::Client.new(
           config.api_key,
           base_url: config.base_url,
+          model: config.model_name,
           anthropic_format: config.anthropic_format?
         ))
 
@@ -829,6 +831,7 @@ module Clacky
           Clacky::Client.new(
             agent_config.api_key,
             base_url: agent_config.base_url,
+            model: agent_config.model_name,
             anthropic_format: agent_config.anthropic_format?
           )
         end

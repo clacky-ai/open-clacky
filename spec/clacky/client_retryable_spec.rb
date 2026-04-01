@@ -3,7 +3,7 @@
 require "spec_helper"
 
 RSpec.describe Clacky::Client do
-  let(:client) { described_class.new("test-key", base_url: "https://api.example.com") }
+  let(:client) { described_class.new("test-key", base_url: "https://api.example.com", model: "gpt-4") }
 
   # Helper: build a fake Faraday response
   def fake_response(status:, body:)

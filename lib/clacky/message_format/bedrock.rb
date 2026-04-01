@@ -16,9 +16,12 @@ module Clacky
     #
     # This module converts canonical format ↔ Bedrock Converse API format.
     module Bedrock
-      # Detect if the API key is an AWS Bedrock API key (ABSK prefix)
-      def self.bedrock_api_key?(api_key)
-        api_key.to_s.start_with?("ABSK")
+      # Detect if the request should use the Bedrock Converse API.
+      # Matches either:
+      #   - API key with "ABSK" prefix (native AWS Bedrock)
+      #   - Model ID with "abs-" prefix (Clacky AI proxy that speaks Bedrock Converse)
+      def self.bedrock_api_key?(api_key, model)
+        api_key.to_s.start_with?("ABSK") || model.to_s.start_with?("abs-")
       end
 
       module_function
@@ -32,12 +35,20 @@ module Clacky
       # @param max_tokens [Integer]
       # @param caching_enabled [Boolean] (currently unused for Bedrock)
       # @return [Hash] ready to serialize as JSON body
-      def build_request_body(messages, model, tools, max_tokens, _caching_enabled = false)
+      def build_request_body(messages, model, tools, max_tokens, caching_enabled = false)
         system_messages = messages.select { |m| m[:role] == "system" }
         regular_messages = messages.reject { |m| m[:role] == "system" }
 
         # Merge consecutive same-role messages (Bedrock requires alternating roles)
         api_messages = merge_consecutive_tool_results(regular_messages.map { |msg| to_api_message(msg) })
+
+        # Inject cachePoint blocks AFTER conversion to Bedrock API format.
+        # Doing this on canonical messages (before to_api_message) is incorrect because
+        # tool-result messages (role: "tool") are converted to toolResult blocks, and
+        # Bedrock does not support cachePoint inside toolResult.content.
+        # Operating on the final Bedrock format ensures cachePoint is always a top-level
+        # sibling block in the message's content array, which is what Bedrock expects.
+        api_messages = apply_api_caching(api_messages) if caching_enabled
 
         body = { messages: api_messages }
 
@@ -86,11 +97,24 @@ module Clacky
                         else data["stopReason"]
                         end
 
+        cache_read  = usage["cacheReadInputTokens"].to_i
+        cache_write = usage["cacheWriteInputTokens"].to_i
+
+        # Bedrock `inputTokens` = non-cached input only.
+        # Anthropic direct `input_tokens` = all input including cache_read.
+        # Normalise to Anthropic semantics so ModelPricing.calculate_cost works correctly:
+        #   prompt_tokens = inputTokens + cacheReadInputTokens
+        # (calculate_cost subtracts cache_read_tokens from prompt_tokens to get
+        #  the billable non-cached portion; that arithmetic requires the Anthropic convention.)
+        prompt_tokens = usage["inputTokens"].to_i + cache_read
+
         usage_data = {
-          prompt_tokens:     usage["inputTokens"].to_i,
+          prompt_tokens:     prompt_tokens,
           completion_tokens: usage["outputTokens"].to_i,
           total_tokens:      usage["totalTokens"].to_i
         }
+        usage_data[:cache_read_input_tokens]     = cache_read  if cache_read  > 0
+        usage_data[:cache_creation_input_tokens] = cache_write if cache_write > 0
 
         { content: content, tool_calls: tool_calls, finish_reason: finish_reason,
           usage: usage_data, raw_api_usage: usage }
@@ -185,6 +209,8 @@ module Clacky
         when "image"
           block # already Bedrock format
         else
+          # Pass through Bedrock-native blocks (e.g. cachePoint) unchanged
+          return block if block[:cachePoint]
           # Fallback: try to extract text
           { text: (block[:text] || block.to_s) }
         end
@@ -251,6 +277,38 @@ module Clacky
           end
         end
         merged
+      end
+
+      # Inject cachePoint blocks into already-converted Bedrock API format messages.
+      # Marks the last 2 messages (from the tail) so Bedrock can cache the conversation
+      # prefix up to those points.
+      #
+      # Why operate on Bedrock API format (not canonical):
+      #   - tool-result canonical messages (role: "tool") become toolResult blocks inside
+      #     a user message. Bedrock does NOT allow cachePoint inside toolResult.content.
+      #   - After merge_consecutive_tool_results, message boundaries may differ from canonical.
+      #   - Operating here guarantees cachePoint is always a top-level sibling block.
+      private_class_method def self.apply_api_caching(api_messages)
+        return api_messages if api_messages.empty?
+
+        candidate_indices = []
+        (api_messages.length - 1).downto(0) do |i|
+          break if candidate_indices.length >= 2
+          candidate_indices << i
+        end
+
+        api_messages.map.with_index do |msg, idx|
+          next msg unless candidate_indices.include?(idx)
+
+          content = msg[:content]
+          next msg unless content.is_a?(Array)
+
+          # Don't double-add cachePoint if already present
+          already_marked = content.last.is_a?(Hash) && content.last[:cachePoint]
+          next msg if already_marked
+
+          msg.merge(content: content + [{ cachePoint: { type: "default" } }])
+        end
       end
     end
   end
