@@ -17,7 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **CLI -c option model initialization**: fixed a bug where the CLI command with -c option was not passing the model name to the client, causing routing failures for certain providers
 
 ### More
-- Rename provider display name to "ClackyAI" for consistency
+- ClackyAI provider updated to use the latest model name format (abs- prefix)
 
 ## [0.9.22] - 2026-03-31
 
