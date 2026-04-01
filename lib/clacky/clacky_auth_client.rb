@@ -106,10 +106,8 @@ module Clacky
       { success: false, error: "Unexpected error: #{e.message}" }
     end
 
-    private
-
     # Validate that inputs look reasonable before making a network request.
-    def validate_inputs!
+    private def validate_inputs!
       if @workspace_api_key.empty?
         raise ArgumentError, "Workspace API key is required"
       end
@@ -128,7 +126,7 @@ module Clacky
     end
 
     # Build a Faraday connection pointing at the Clacky backend.
-    def connection
+    private def connection
       @connection ||= Faraday.new(url: @base_url) do |conn|
         conn.headers["Content-Type"]  = "application/json"
         conn.headers["Authorization"] = "Bearer #{@workspace_api_key}"
@@ -140,7 +138,7 @@ module Clacky
     end
 
     # Extract a human-readable error from a failed response.
-    def extract_error(response)
+    private def extract_error(response)
       body = JSON.parse(response.body) rescue nil
       return response.body.to_s[0..200] unless body.is_a?(Hash)
 
