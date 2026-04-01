@@ -160,6 +160,12 @@ module Clacky
             @ping_interval = (client_config["PingInterval"] || 90).to_i
 
             url = data.dig("data", "URL")
+            if url.nil? || url.strip.empty?
+              Clacky::Logger.error("[feishu-ws] WebSocket endpoint URL is missing from response. " \
+                                   "Please verify your Feishu App ID and App Secret are correct.")
+              raise "Failed to get WebSocket endpoint: URL is missing (check your Feishu App ID / App Secret)"
+            end
+
             if url =~ /service_id=(\d+)/
               @service_id = $1.to_i
             end
