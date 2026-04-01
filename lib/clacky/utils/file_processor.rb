@@ -25,7 +25,7 @@ module Clacky
   module FileProcessor
     UPLOAD_DIR      = File.join(Dir.tmpdir, "clacky-uploads").freeze
     MAX_FILE_BYTES  = 32 * 1024 * 1024  # 32 MB
-    MAX_IMAGE_BYTES = 512 * 1024         # 512 KB
+    MAX_IMAGE_BYTES = 5 * 1024 * 1024    # 5 MB
 
     # Alias used by FileReader tool
     MAX_FILE_SIZE = MAX_FILE_BYTES
