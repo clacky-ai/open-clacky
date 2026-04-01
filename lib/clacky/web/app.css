@@ -1269,13 +1269,18 @@ body {
 .msg-time {
   display: block;
   font-size: 10px;
-  margin-top: 4px;
+  height: 0;
+  overflow: hidden;
   opacity: 0;
-  transition: opacity 0.15s;
+  transition: height 0.15s, opacity 0.15s, margin-top 0.15s;
   pointer-events: none;
   white-space: nowrap;
 }
-.msg:hover .msg-time { opacity: 1; }
+.msg:hover .msg-time {
+  height: 1.4em;
+  margin-top: 4px;
+  opacity: 1;
+}
 .msg-user .msg-time      { color: rgba(255,255,255,0.7); text-align: right; }
 .msg-assistant .msg-time { color: var(--color-text-secondary); text-align: left; }
 .msg-user      { background: #3b82f6; color: #ffffff; align-self: flex-end; border-bottom-right-radius: 2px; }
