@@ -64,14 +64,16 @@ module Clacky
         session_data = nil
 
         @mutex.synchronize do
-          # Already fully ready — fast path.
-          return true if @sessions.key?(session_id)
-
-          # Another thread is currently restoring this session — wait for it.
+          # Another thread is currently restoring this session (including the case where
+          # @registry.create was already called but with_session agent-set is not yet done) —
+          # wait for it to finish so callers never see agent=nil.
           if @restoring[session_id]
             @restore_cond.wait(@mutex) until !@restoring[session_id]
             return @sessions.key?(session_id)
           end
+
+          # Already fully ready (not being restored) — fast path.
+          return true if @sessions.key?(session_id)
 
           return false unless @session_manager && @session_restorer
 

@@ -152,6 +152,16 @@ module Clacky
             # Compressed summary sitting before any user rounds — expand it from chunk md
             chunk_rounds = parse_chunk_md_to_rounds(msg[:chunk_path])
             rounds.concat(chunk_rounds)
+            # After expanding, treat the last chunk round as the current round so that
+            # any orphaned assistant/tool messages that follow in session.json (belonging
+            # to the same task whose user message was compressed into the chunk) get
+            # appended here instead of being silently discarded.
+            current_round = rounds.last
+          elsif rounds.last
+            # Orphaned non-user message with no current_round yet (e.g. recent_messages
+            # after compression started mid-task with no leading user message).
+            # Attach to the last known round rather than drop silently.
+            rounds.last[:events] << msg
           end
         end
 
