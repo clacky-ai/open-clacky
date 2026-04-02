@@ -92,6 +92,7 @@ Run the setup script (full path is available in the supporting files list above)
 ```bash
 ruby "SKILL_DIR/feishu_setup.rb"
 ```
+**Important**: call `safe_shell` with `timeout: 180` — the script may wait up to 90s for a WebSocket connection in Phase 4.
 
 **If exit code is 0:**
 - The script completed successfully.
