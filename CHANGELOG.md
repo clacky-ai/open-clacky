@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.26] - 2026-04-03
+
+### Added
+- **Long-running shell output streaming**: shell commands that run for a long time now stream output progressively to the Web UI instead of waiting until completion — no more blank screen for slow commands
+
+### Fixed
+- **Session rename for non-active sessions**: renaming a session that isn't currently active now updates immediately in the sidebar (previously required a page refresh)
+- **Feishu channel setup timeout**: increased timeout to 180s to prevent setup failures on slow networks
+- **WSL browser setup tip**: improved browser-setup skill instructions for WSL environments
+- **ARM install mirror**: install scripts now correctly use the Aliyun mirror on ARM machines
+
 ## [0.9.25] - 2026-04-02
 
 ### Added

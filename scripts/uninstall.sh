@@ -35,34 +35,29 @@ command_exists() {
     command -v "$1" >/dev/null 2>&1
 }
 
+# --------------------------------------------------------------------------
+# Load brand config from ~/.clacky/brand.yml
+# --------------------------------------------------------------------------
+BRAND_NAME=""
+BRAND_COMMAND=""
+DISPLAY_NAME="OpenClacky"
+
+load_brand() {
+    local brand_file="$HOME/.clacky/brand.yml"
+    if [ -f "$brand_file" ]; then
+        BRAND_NAME=$(grep 'product_name:' "$brand_file" | sed 's/product_name: *"//' | sed 's/"//' | tr -d '[:space:]') || true
+        BRAND_COMMAND=$(grep 'package_name:' "$brand_file" | sed 's/package_name: *"//' | sed 's/"//' | tr -d '[:space:]') || true
+        [ -n "$BRAND_NAME" ] && DISPLAY_NAME="$BRAND_NAME"
+    fi
+}
+
 # Check if OpenClacky is installed
 check_installation() {
     if command_exists clacky || command_exists openclacky; then
         return 0
-    else
-        return 1
     fi
-}
-
-# Uninstall via Homebrew
-uninstall_homebrew() {
-    if command_exists brew; then
-        if brew list openclacky >/dev/null 2>&1; then
-            print_step "Uninstalling via Homebrew..."
-            brew uninstall openclacky
-
-            # Optionally untap
-            if brew tap | grep -q "clacky-ai/openclacky"; then
-                read -p "$(echo -e ${YELLOW}?${NC}) Remove Homebrew tap (clacky-ai/openclacky)? [y/N] " -n 1 -r
-                echo
-                if [[ $REPLY =~ ^[Yy]$ ]]; then
-                    brew untap clacky-ai/openclacky
-                    print_success "Tap removed"
-                fi
-            fi
-
-            return 0
-        fi
+    if [ -n "$BRAND_COMMAND" ] && command_exists "$BRAND_COMMAND"; then
+        return 0
     fi
     return 1
 }
@@ -77,6 +72,32 @@ uninstall_gem() {
         fi
     fi
     return 1
+}
+
+# Remove brand wrapper binary
+remove_brand() {
+    if [ -n "$BRAND_COMMAND" ]; then
+        local clacky_bin dir
+        clacky_bin=$(command -v openclacky 2>/dev/null || true)
+        if [ -n "$clacky_bin" ]; then
+            dir=$(dirname "$clacky_bin")
+            if [ -f "$dir/$BRAND_COMMAND" ]; then
+                rm -f "$dir/$BRAND_COMMAND"
+                print_success "Brand wrapper removed: $dir/$BRAND_COMMAND"
+            fi
+        fi
+    fi
+}
+
+# Restore original gemrc if we backed it up during install
+restore_gemrc() {
+    if [ -f "$HOME/.gemrc_clackybak" ]; then
+        if [ -f "$HOME/.gemrc" ]; then
+            rm -f "$HOME/.gemrc"
+        fi
+        mv "$HOME/.gemrc_clackybak" "$HOME/.gemrc"
+        print_success "gem source restored from backup"
+    fi
 }
 
 # Remove configuration files
@@ -99,47 +120,44 @@ remove_config() {
 
 # Main uninstallation
 main() {
+    load_brand
+
     echo ""
     echo "╔═══════════════════════════════════════════════════════════╗"
     echo "║                                                           ║"
-    echo "║   🗑️  OpenClacky Uninstallation                          ║"
+    echo -e "║   🗑️  ${DISPLAY_NAME} Uninstallation                     ║"
     echo "║                                                           ║"
     echo "╚═══════════════════════════════════════════════════════════╝"
     echo ""
 
     if ! check_installation; then
-        print_warning "OpenClacky does not appear to be installed"
+        print_warning "${DISPLAY_NAME} does not appear to be installed"
         exit 0
     fi
 
-    UNINSTALLED=false
+    # Remove brand wrapper first (needs openclacky still in PATH)
+    remove_brand
 
-    # Try Homebrew first
-    if uninstall_homebrew; then
-        UNINSTALLED=true
-    fi
-
-    # Try gem
-    if uninstall_gem; then
-        UNINSTALLED=true
-    fi
-
-    if [ "$UNINSTALLED" = false ]; then
-        print_error "Could not automatically uninstall OpenClacky"
+    # Uninstall openclacky gem
+    if ! uninstall_gem; then
+        print_error "Could not automatically uninstall ${DISPLAY_NAME}"
         print_info "You may need to uninstall manually:"
-        echo "  - Via Homebrew: brew uninstall openclacky"
-        echo "  - Via RubyGems: gem uninstall openclacky"
+        echo "  gem uninstall openclacky"
+        echo "  rm -rf ~/.clacky"
         exit 1
     fi
 
-    print_success "OpenClacky uninstalled successfully"
+    print_success "${DISPLAY_NAME} uninstalled successfully"
+
+    # Restore original gemrc
+    restore_gemrc
 
     # Ask about config removal
     remove_config
 
     echo ""
     print_success "Uninstallation complete!"
-    print_info "Thank you for using OpenClacky 👋"
+    print_info "Thank you for using ${DISPLAY_NAME} 👋"
     echo ""
 }
 
