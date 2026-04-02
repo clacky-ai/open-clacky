@@ -120,7 +120,7 @@ function Invoke-WslStatusExitCode {
     $psi.UseShellExecute = $false
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
-    $p = [System.Diagnostics.Process]::Start($psi)
+    try { $p = [System.Diagnostics.Process]::Start($psi) } catch { return 1 }
     $finished = $p.WaitForExit(10000)   # 10 seconds
     if (-not $finished) {
         $p.Kill()
