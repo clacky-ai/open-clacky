@@ -79,15 +79,25 @@ Tell the user:
 > I've opened `chrome://inspect/#remote-debugging` in your browser.
 > Please click **"Allow remote debugging for this browser instance"** and let me know when done.
 
-If `open` fails (e.g. on WSL or Linux), fall back to:
+If `open` fails (e.g. on WSL or Linux):
+
+**On WSL**, guide the user in simple steps (no PowerShell commands needed):
+
+> To enable remote debugging, please follow these steps:
+>
+> 1. Open **Edge** on Windows
+> 2. Type the following in the address bar and press Enter:
+>    ```
+>    edge://inspect/#remote-debugging
+>    ```
+> 3. Click **"Allow remote debugging for this browser instance"**
+> 4. Let me know when done and I'll continue ✅
+
+**On Linux (non-WSL)**:
 
 > Please open this URL in Chrome or Edge:
 > `chrome://inspect/#remote-debugging`
 > Then click **"Allow remote debugging for this browser instance"** and let me know when done.
->
-> On WSL: launch your browser from PowerShell with remote debugging enabled:
-> - Edge: `Start-Process msedge --ArgumentList "--remote-debugging-port=9222"`
-> - Chrome: `Start-Process chrome --ArgumentList "--remote-debugging-port=9222"`
 
 Wait for the user to confirm, then retry the connection once. If still failing, stop:
 
