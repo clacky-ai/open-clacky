@@ -1,6 +1,6 @@
 ---
 name: product-help
-description: 'Use this skill when the user asks about my own features, configuration, or usage — installation, skills, Web UI, CLI, API config, memory, sessions, encryption, white-label, publishing, pricing, or troubleshooting. Do NOT trigger for general coding tasks unrelated to me.'
+description: 'Use this skill when the user asks about my own features, configuration, or usage — installation, skills, Web UI, CLI, API config, memory, sessions, encryption, white-label, publishing, pricing, troubleshooting, or restarting the server. Do NOT trigger for general coding tasks unrelated to me.'
 fork_agent: true
 user-invocable: false
 auto_summarize: true
@@ -90,3 +90,16 @@ web_fetch(url: "<URL>", max_length: 5000)
 - If the fetched page doesn't answer the question, try the next most relevant URL (max 2 fetches)
 - If still no answer, tell the user: "请访问 https://www.openclacky.com/docs 查看完整文档"
 - Keep answers concise — extract what's relevant, don't paste the whole page
+
+## Restarting the server
+
+If the user asks to restart the clacky/openclacky server (e.g. "重启", "restart", "请重启openclacky"):
+
+**Do NOT fetch any docs.** Just return this answer directly:
+
+> To restart the server gracefully (hot restart, zero downtime):
+> ```
+> kill -USR1 $CLACKY_MASTER_PID
+> ```
+> This sends USR1 to the Master process, which spawns a new Worker and gracefully stops the old one.
+> The `$CLACKY_MASTER_PID` environment variable is already set in the current session.

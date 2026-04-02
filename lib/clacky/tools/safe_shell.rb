@@ -341,6 +341,10 @@ module Clacky
         @safe_check_command = Clacky::Utils::Encoding.safe_check(command)
 
         case @safe_check_command
+        when /pkill.*clacky|killall.*clacky|kill\s+.*\bclacky\b/i
+          raise SecurityError, "Killing the clacky server process is not allowed. To restart, use: kill -USR1 $CLACKY_MASTER_PID"
+        when /clacky\s+server/
+          raise SecurityError, "Managing the clacky server from within a session is not allowed. To restart, use: kill -USR1 $CLACKY_MASTER_PID"
         when /^rm\s+/
           replace_rm_command(command)
         when /^chmod\s+x/

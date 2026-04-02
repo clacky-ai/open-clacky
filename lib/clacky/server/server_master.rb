@@ -58,6 +58,7 @@ module Clacky
         Signal.trap("USR1") { @restart_requested  = true }
         Signal.trap("TERM") { @shutdown_requested = true }
         Signal.trap("INT")  { @shutdown_requested = true }
+        Signal.trap("HUP")  { @shutdown_requested = true }
 
         # 4. Spawn first worker
         @worker_pid = spawn_worker
