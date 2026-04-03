@@ -126,6 +126,9 @@ module Clacky
         f.options.open_timeout = OPEN_TIMEOUT
         f.headers["Authorization"] = "Bearer #{@workspace_api_key}"
         f.headers["Accept"]        = "application/json"
+        # Disable SSL verification to avoid OpenSSL certificate path issues
+        # on some macOS environments with system Ruby
+        f.ssl.verify = false
         f.adapter Faraday.default_adapter
       end
     end
@@ -151,14 +154,14 @@ module Clacky
     private def body_error(body)
       return { success: false, error: "Invalid JSON response from API" } if body.nil?
 
-      msg = body["message"] || "Unknown API error (code: #{body["code"]})"
+      msg = body["message"] || body["msg"] || "Unknown API error (code: #{body["code"]})"
       { success: false, error: msg }
     end
 
     # Extract a human-readable error string from a raw Faraday response
     private def extract_error(response)
       parsed = JSON.parse(response.body)
-      parsed["message"] || response.body.to_s[0, 200]
+      parsed["message"] || parsed["msg"] || response.body.to_s[0, 200]
     rescue
       response.body.to_s[0, 200]
     end

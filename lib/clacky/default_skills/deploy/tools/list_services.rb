@@ -1,79 +1,66 @@
 # frozen_string_literal: true
 
+require "open3"
+require "json"
+
 module Clacky
   module DeployTools
-    # List Railway services with environment variables (sensitive data masked)
+    # List Railway services for the linked project.
+    # Uses RAILWAY_TOKEN passed through environment — no clackycli wrapper needed.
+    #
+    # NOTE: In the new deploy flow, service discovery is primarily done via the
+    # Clacky Deploy API (deploy/services endpoint). This tool is kept as a
+    # fallback for detecting the main service name via `railway service list`.
     class ListServices
-      SENSITIVE_PATTERNS = [
-        /password/i,
-        /secret/i,
-        /api_key/i,
-        /token/i,
-        /credential/i,
-        /private_key/i
-      ].freeze
 
-      # Execute the list_services command
+      # List services for the current Railway project.
       #
-      # @return [Hash] Result containing services array
-      def self.execute
-        output = `clackycli service list --json 2>&1`
-        exit_code = $?.exitstatus
+      # @param platform_token [String] RAILWAY_TOKEN for this deploy task
+      # @return [Hash] {
+      #   success:      Boolean,
+      #   services:     Array<Hash>,
+      #   main_service: Hash | nil,   # first non-middleware service
+      #   db_service:   Hash | nil    # first postgres/mysql service
+      # }
+      def self.execute(platform_token:)
+        if platform_token.nil? || platform_token.strip.empty?
+          return { success: false, error: "platform_token is required" }
+        end
 
-        if exit_code != 0
+        env = ENV.to_h.merge("RAILWAY_TOKEN" => platform_token)
+        out, err, status = Open3.capture3(env, "railway status --json")
+
+        unless status.success?
           return {
-            error: "Failed to list services",
-            details: output,
-            exit_code: exit_code
+            success: false,
+            error:   "railway service list failed (exit #{status.exitstatus})",
+            details: err
           }
         end
 
-        begin
-          services = JSON.parse(output)
-          masked_services = mask_sensitive_data(services)
-          
-          {
-            success: true,
-            services: masked_services,
-            count: masked_services.length
-          }
-        rescue JSON::ParserError => e
-          {
-            error: "Failed to parse Railway CLI output",
-            details: e.message,
-            raw_output: output
-          }
-        end
-      end
+        info     = JSON.parse(out)
+        services = info["services"] || []
 
-      # Mask sensitive environment variable values
-      #
-      # @param services [Array<Hash>] Array of service objects
-      # @return [Array<Hash>] Services with masked sensitive data
-      def self.mask_sensitive_data(services)
-        services.map do |service|
-          service = service.dup
-          
-          if service['variables']
-            service['variables'] = mask_variables(service['variables'])
-          end
-          
-          service
+        main_svc = services.find do |s|
+          name = s["name"].to_s.downcase
+          !%w[postgres postgresql mysql redis].any? { |db| name.include?(db) }
         end
-      end
 
-      # Mask sensitive variable values
-      #
-      # @param variables [Hash] Environment variables
-      # @return [Hash] Variables with sensitive values masked
-      def self.mask_variables(variables)
-        variables.transform_values do |value|
-          next value unless value.is_a?(String)
-          
-          # Check if variable name matches sensitive patterns
-          is_sensitive = SENSITIVE_PATTERNS.any? { |pattern| value =~ pattern }
-          is_sensitive ? '******' : value
+        db_svc = services.find do |s|
+          name = s["name"].to_s.downcase
+          %w[postgres postgresql mysql].any? { |db| name.include?(db) }
         end
+
+        {
+          success:      true,
+          services:     services,
+          main_service: main_svc,
+          db_service:   db_svc
+        }
+      rescue JSON::ParserError => e
+        { success: false, error: "Failed to parse service list: #{e.message}", raw: out.to_s[0, 200] }
+      rescue => e
+        { success: false, error: "Unexpected error: #{e.message}" }
       end
     end
   end

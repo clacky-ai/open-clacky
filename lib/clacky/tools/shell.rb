@@ -318,7 +318,10 @@ module Clacky
           next if line_stripped.empty?
 
           INTERACTION_PATTERNS.each do |pattern, type|
-            return { type: type, line: line_stripped } if line.match?(pattern)
+            # Force encoding to UTF-8 to avoid ASCII-8BIT / UTF-8 incompatibility
+            # when the line comes from raw terminal byte streams.
+            safe_line = line_stripped.encode("UTF-8", invalid: :replace, undef: :replace, replace: "?")
+            return { type: type, line: safe_line } if line.match?(pattern)
           end
         end
 
@@ -351,6 +354,9 @@ module Clacky
       end
 
       def format_waiting_message(output, interaction)
+        # Ensure strings from raw byte streams are valid UTF-8 before interpolation
+        output = output.to_s.encode("UTF-8", invalid: :replace, undef: :replace, replace: "?")
+
         password_hint = if interaction[:type] == "password"
           <<~HINT
 
