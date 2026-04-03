@@ -406,6 +406,109 @@ body {
   color: var(--color-accent-primary);
 }
 
+.dropdown-divider {
+  height: 1px;
+  background: var(--color-border-primary);
+  margin: 4px 0;
+}
+
+/* ── New Project inline panel ────────────────────────────────────────────── */
+.new-project-panel {
+  overflow: hidden;
+  max-height: 0;
+  opacity: 0;
+  transition: max-height 0.2s ease, opacity 0.15s ease;
+  padding: 0 10px;
+}
+.new-project-panel.panel--open {
+  max-height: 160px;
+  opacity: 1;
+  padding: 6px 10px 8px;
+}
+
+.new-project-card {
+  border: 1px solid var(--color-accent-primary);
+  border-radius: 8px;
+  background: var(--color-bg-secondary);
+  padding: 10px 12px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.new-project-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.new-project-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.new-project-label {
+  font-size: 10px;
+  color: var(--color-text-muted);
+  font-weight: 500;
+  letter-spacing: 0.2px;
+}
+
+.new-project-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 5px 8px;
+  font-size: 12px;
+  font-family: var(--font-mono, monospace);
+  border: 1px solid var(--color-border-primary);
+  border-radius: 5px;
+  background: var(--color-bg-primary);
+  color: var(--color-text-primary);
+  outline: none;
+  transition: border-color 0.15s;
+}
+.new-project-input:focus {
+  border-color: var(--color-accent-primary);
+}
+.new-project-input::placeholder {
+  color: var(--color-text-muted);
+}
+
+.new-project-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.btn-new-project-cancel {
+  padding: 4px 10px;
+  font-size: 12px;
+  border: 1px solid var(--color-border-primary);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: background 0.12s;
+}
+.btn-new-project-cancel:hover {
+  background: var(--color-bg-hover);
+}
+
+.btn-new-project-create {
+  padding: 4px 12px;
+  font-size: 12px;
+  border: none;
+  border-radius: 5px;
+  background: var(--color-accent-primary);
+  color: #fff;
+  cursor: pointer;
+  font-weight: 600;
+  transition: opacity 0.12s;
+}
+.btn-new-project-create:hover { opacity: 0.88; }
+.btn-new-project-create:disabled { opacity: 0.5; cursor: not-allowed; }
+
 /* ── Session source badge ────────────────────────────────────────────────── */
 .session-badge {
   display: inline-block;

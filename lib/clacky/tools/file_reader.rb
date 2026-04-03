@@ -45,8 +45,8 @@ module Clacky
       MAX_LINE_CHARS = 1000
 
       def execute(path:, max_lines: 500, start_line: nil, end_line: nil, working_dir: nil)
-        # Expand ~ to home directory
-        expanded_path = expand_path(path)
+        # Expand path relative to working_dir when provided
+        expanded_path = expand_path(path, working_dir: working_dir)
 
         unless File.exist?(expanded_path)
           return {

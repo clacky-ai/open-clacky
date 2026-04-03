@@ -189,6 +189,46 @@ RSpec.describe Clacky::Tools::Glob do
     end
   end
 
+  describe "working_dir resolution" do
+    it "resolves base_path '.' relative to working_dir, not process cwd" do
+      Dir.mktmpdir do |dir|
+        FileUtils.touch(File.join(dir, "hello.rb"))
+
+        # base_path is "." and working_dir is dir — should search dir, not process cwd
+        result = tool.execute(pattern: "*.rb", base_path: ".", working_dir: dir)
+
+        expect(result[:error]).to be_nil
+        expect(result[:matches].map { |m| File.basename(m) }).to include("hello.rb")
+        # Must NOT return files from the process cwd
+        expect(result[:matches].none? { |m| m.start_with?(Dir.pwd) }).to be true
+      end
+    end
+
+    it "resolves relative base_path against working_dir" do
+      Dir.mktmpdir do |dir|
+        subdir = File.join(dir, "src")
+        FileUtils.mkdir_p(subdir)
+        FileUtils.touch(File.join(subdir, "app.js"))
+
+        result = tool.execute(pattern: "*.js", base_path: "src", working_dir: dir)
+
+        expect(result[:error]).to be_nil
+        expect(result[:matches].map { |m| File.basename(m) }).to include("app.js")
+      end
+    end
+
+    it "still works with absolute base_path regardless of working_dir" do
+      Dir.mktmpdir do |dir|
+        FileUtils.touch(File.join(dir, "data.txt"))
+
+        result = tool.execute(pattern: "*.txt", base_path: dir, working_dir: "/some/other/dir")
+
+        expect(result[:error]).to be_nil
+        expect(result[:matches].map { |m| File.basename(m) }).to include("data.txt")
+      end
+    end
+  end
+
   describe "#to_function_definition" do
     it "returns OpenAI function calling format" do
       definition = tool.to_function_definition

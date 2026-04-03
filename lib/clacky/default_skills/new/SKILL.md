@@ -16,6 +16,26 @@ When user wants to create a new Rails project:
 
 ## Process Steps
 
+### 0. Ask Project Type and Requirement
+Before doing anything, use `request_user_feedback` to ask the user two things:
+
+```
+project_type: "demo" or "production"
+requirement: one-sentence description of what they want to build
+```
+
+Card content:
+- Title: "🚀 New Project"
+- Two options for project type:
+  - **⚡ Demo** — no database, AI builds freely, quick prototype
+  - **🏗️ Production** — real app, ready to deploy, full Rails setup
+- One text input: "Describe your project in one sentence"
+- Confirm button: "Let's go!"
+
+**Based on user's choice:**
+- If **Demo**: do NOT follow the Rails setup steps below. Instead, freely build a simple HTML/CSS/JS (or React) prototype directly in the working directory based on their requirement. Use your creativity.
+- If **Production**: continue with steps 1–3 below (full Rails flow).
+
 ### 1. Check Directory Before Starting
 Before running the setup script, check if current directory is empty:
 - Use glob tool to check if directory has files: `glob("*", base_path: ".")`

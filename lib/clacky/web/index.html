@@ -73,6 +73,8 @@
               <div id="new-session-dropdown" class="new-session-dropdown" hidden>
                 <div class="dropdown-item" data-profile="general">✦ General</div>
                 <div class="dropdown-item" data-profile="coding">👨‍💻 Coding</div>
+                <div class="dropdown-divider"></div>
+                <div class="dropdown-item" id="btn-new-project-entry">🚀 New Project</div>
               </div>
             </div>
           </div>
@@ -103,6 +105,23 @@
                 <input id="session-search-date" type="date" class="search-date" />
               </div>
               <button id="btn-search-clear-all" class="btn-search-clear-all" aria-label="Clear filters" hidden>✕</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- New Project inline form (hidden by default, toggled by "New Project" dropdown item) -->
+        <div id="new-project-form" class="new-project-panel" hidden>
+          <div class="new-project-card">
+            <div class="new-project-title">🚀 New Project</div>
+            <div class="new-project-field">
+              <label class="new-project-label" for="new-project-dir">Working Directory</label>
+              <input id="new-project-dir" type="text" class="new-project-input"
+                     placeholder="~/clacky_projects/my-project"
+                     autocomplete="off" spellcheck="false" />
+            </div>
+            <div class="new-project-actions">
+              <button id="btn-new-project-cancel" class="btn-new-project-cancel">Cancel</button>
+              <button id="btn-new-project-create" class="btn-new-project-create">Create →</button>
             </div>
           </div>
         </div>

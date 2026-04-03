@@ -451,7 +451,15 @@ module Clacky
         raw_source = body["source"].to_s.strip
         source = %w[manual cron channel setup].include?(raw_source) ? raw_source.to_sym : :manual
 
-        working_dir = default_working_dir
+        raw_dir = body["working_dir"].to_s.strip
+        working_dir = raw_dir.empty? ? default_working_dir : File.expand_path(raw_dir)
+
+        # If a custom working_dir was requested and the directory already exists and is non-empty,
+        # refuse to create the session to prevent accidentally clobbering an existing project.
+        if !raw_dir.empty? && Dir.exist?(working_dir) && Dir.children(working_dir).any?
+          return json_response(res, 409, { error: "Directory already exists and is not empty: #{working_dir}" })
+        end
+
         FileUtils.mkdir_p(working_dir)
 
         session_id = build_session(name: name, working_dir: working_dir, profile: profile, source: source)

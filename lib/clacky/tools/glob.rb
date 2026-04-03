@@ -39,9 +39,10 @@ module Clacky
           return { error: "Pattern cannot be empty" }
         end
 
-        # Expand ~ to home directory in pattern and base_path
-        pattern = expand_path(pattern)
-        base_path = expand_path(base_path)
+        # Expand ~ in pattern only (pattern is relative to base_path, not working_dir)
+        pattern = pattern.start_with?("~") ? File.expand_path(pattern) : pattern
+        # Expand base_path fully (~ and relative paths resolved against working_dir)
+        base_path = expand_path(base_path, working_dir: working_dir)
 
         # Validate base_path
         unless Dir.exist?(base_path)
@@ -49,8 +50,7 @@ module Clacky
         end
 
         begin
-          # Expand base path relative to working_dir when provided
-          expanded_path = working_dir ? File.expand_path(base_path, working_dir) : File.expand_path(base_path)
+          expanded_path = base_path
 
           # Initialize gitignore parser
           gitignore_path = Clacky::Utils::FileIgnoreHelper.find_gitignore(expanded_path)

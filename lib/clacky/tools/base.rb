@@ -37,6 +37,9 @@ module Clacky
         return path if path.nil? || path.strip.empty?
         return File.expand_path(path) if path.start_with?("~")
         return File.expand_path(path, working_dir) if working_dir && !path.start_with?("/")
+        # Always resolve relative paths to absolute (even without working_dir), so callers
+        # never receive a bare "." that resolves against the process cwd unexpectedly.
+        return File.expand_path(path) unless path.start_with?("/")
 
         path
       end

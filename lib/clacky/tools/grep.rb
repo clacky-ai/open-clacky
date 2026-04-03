@@ -83,7 +83,7 @@ module Clacky
 
         # Validate and expand path relative to working_dir when provided
         begin
-          expanded_path = working_dir ? File.expand_path(expand_path(path), working_dir) : expand_path(path)
+          expanded_path = expand_path(path, working_dir: working_dir)
         rescue StandardError => e
           return { error: "Invalid path: #{e.message}" }
         end
