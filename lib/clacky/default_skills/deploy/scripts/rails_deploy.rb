@@ -514,48 +514,28 @@ module Clacky
           return { success: true }
         end
 
-        # Check whether Node.js is used in this project (package.json present)
-        has_node = File.exist?("package.json")
-
-        print "  🐳 Generating Dockerfile (optimized layer cache)..."
-        File.write("Dockerfile", build_dockerfile_content(has_node: has_node))
-        puts " ✅"
-        { success: true }
-      rescue => e
-        hard_fail("Failed to create Dockerfile: #{e.message}")
+        hard_fail(
+          "Dockerfile not found.\n" \
+          "  A Dockerfile is required for Railway deployment.\n" \
+          "  The rails-template-7x-starter includes one by default — " \
+          "make sure you haven't accidentally deleted it."
+        )
       end
 
       def ensure_railway_toml
         toml_path = "railway.toml"
 
         if File.exist?(toml_path)
-          content = File.read(toml_path)
-          # Ensure preDeployCommand is present — add it if missing
-          unless content.include?("preDeployCommand")
-            print "  ⚙️  Adding preDeployCommand to railway.toml..."
-            # Insert under [deploy] section if present, otherwise append
-            if content.include?("[deploy]")
-              new_content = content.sub(
-                /(\[deploy\][^\[]*)/m,
-                "\1preDeployCommand = \"bundle exec rails db:migrate\"\n"
-              )
-            else
-              new_content = content + "\n[deploy]\npreDeployCommand = \"bundle exec rails db:migrate\"\n"
-            end
-            File.write(toml_path, new_content)
-            puts " ✅"
-          else
-            puts "  ✅ railway.toml already exists (with preDeployCommand)"
-          end
+          puts "  ✅ railway.toml already exists"
           return { success: true }
         end
 
-        print "  🚂 Generating railway.toml (DOCKERFILE builder + preDeployCommand)..."
-        File.write(toml_path, build_railway_toml_content)
-        puts " ✅"
-        { success: true }
-      rescue => e
-        hard_fail("Failed to create railway.toml: #{e.message}")
+        hard_fail(
+          "railway.toml not found.\n" \
+          "  A railway.toml is required for Railway deployment.\n" \
+          "  The rails-template-7x-starter includes one by default — " \
+          "make sure you haven't accidentally deleted it."
+        )
       end
 
       def ensure_linux_platform
@@ -567,29 +547,18 @@ module Clacky
           )
         end
 
-        # Check 2: already present → idempotent skip
+        # Check 2: x86_64-linux must already be present
         lock_content = File.read("Gemfile.lock")
         if platform_already_present?(lock_content, "x86_64-linux")
           puts "  ✅ x86_64-linux platform already present in Gemfile.lock"
           return { success: true }
         end
 
-        # Check 3: bundle must be available
-        _out, _err, check_status = Open3.capture3("bundle --version")
-        unless check_status.success?
-          return hard_fail("bundler not found. Run `gem install bundler` and retry.")
-        end
-
-        print "  🐧 Adding x86_64-linux platform to Gemfile.lock..."
-        out, err, status = Open3.capture3("bundle lock --add-platform x86_64-linux")
-
-        unless status.success?
-          puts " ❌"
-          return hard_fail("bundle lock --add-platform failed:\n#{err}\n#{out}")
-        end
-
-        puts " ✅"
-        { success: true }
+        hard_fail(
+          "x86_64-linux platform is missing from Gemfile.lock.\n" \
+          "  Run: bundle lock --add-platform x86_64-linux\n" \
+          "  Then commit the updated Gemfile.lock and retry."
+        )
       end
 
       def commit_deploy_files
@@ -622,51 +591,6 @@ module Clacky
 
         puts " ✅"
         { success: true }
-      end
-
-      def build_dockerfile_content(has_node: true)
-        node_layers = has_node ? <<~NODE
-          # Layer: Node modules (rebuild only when package.json changes)
-          COPY --chown=ruby:ruby package.json package-lock.json ./
-          RUN npm ci --production=false
-
-        NODE
-        : ""
-
-        <<~DOCKERFILE
-          FROM ghcr.io/clacky-ai/rails-base-template:latest
-
-          WORKDIR /app
-
-          ENV RAILS_ENV="production" \
-              NODE_ENV="production" \
-              PORT="3000"
-
-          # Layer: Ruby gems (rebuild only when Gemfile changes)
-          COPY --chown=ruby:ruby Gemfile Gemfile.lock ./
-          RUN bundle install --jobs=4 --retry=3
-
-          #{node_layers.chomp}
-          # Layer: Application code (changes every deploy, but keeps gem/npm layers cached)
-          COPY --chown=ruby:ruby . .
-
-          # Compile assets (SECRET_KEY_BASE_DUMMY avoids Rails initializer requirement)
-          RUN SECRET_KEY_BASE_DUMMY=1 bundle exec rails assets:precompile
-
-          ENTRYPOINT ["/app/bin/docker-entrypoint"]
-          EXPOSE ${PORT}
-          CMD ["./bin/rails", "server"]
-        DOCKERFILE
-      end
-
-      def build_railway_toml_content
-        <<~TOML
-          [build]
-          builder = "DOCKERFILE"
-
-          [deploy]
-          preDeployCommand = "bundle exec rails db:migrate"
-        TOML
       end
 
       def step1_create_task(project_id, api_client, region: nil)
