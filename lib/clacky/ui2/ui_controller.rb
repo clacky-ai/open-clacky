@@ -394,6 +394,10 @@ module Clacky
       # @param name [String] Tool name
       # @param args [String, Hash] Tool arguments (JSON string or Hash)
       def show_tool_call(name, args)
+        # Reset stdout buffer on each new tool call so previous command output
+        # doesn't bleed into the next one, and so the buffer is ready before
+        # on_output starts firing (which can happen before show_progress is called).
+        @stdout_lines = nil
         formatted_call = format_tool_call(name, args)
         output = @renderer.render_tool_call(tool_name: name, formatted_call: formatted_call)
         append_output(output)
@@ -412,6 +416,16 @@ module Clacky
         error_msg = error.is_a?(Exception) ? error.message : error.to_s
         output = @renderer.render_tool_error(error: error_msg)
         append_output(output)
+      end
+
+      # Receive a chunk of shell stdout from the on_output callback.
+      # Lines are buffered into @stdout_lines so that Ctrl+O can open a
+      # fullscreen live view, matching the original output_buffer interaction.
+      # @param lines [Array<String>] One or more stdout chunks
+      def show_tool_stdout(lines)
+        return if lines.nil? || lines.empty?
+        @stdout_lines ||= []
+        @stdout_lines.concat(lines.map(&:chomp))
       end
 
       # Show completion status (only for tasks with more than 5 iterations)
@@ -470,11 +484,13 @@ module Clacky
 
         # Show initial progress (yellow, active)
         append_output("") if prefix_newline
-        hint = output_buffer ? "(Ctrl+C to interrupt · Ctrl+O to view output)" : "(Ctrl+C to interrupt)"
-        output = @renderer.render_working("#{@progress_message}… #{hint}")
+        # Initial hint — no stdout yet, so no Ctrl+O tip at this point.
+        # The background thread will add the Ctrl+O tip as soon as any stdout arrives.
+        output = @renderer.render_working("#{@progress_message}… (Ctrl+C to interrupt)")
         append_output(output)
 
-        # Start background thread to update elapsed time
+        # Start background thread to update elapsed time.
+        # Also dynamically adds "Ctrl+O to view output" hint once @stdout_lines is populated.
         @progress_thread = Thread.new do
           until @progress_thread_stop
             sleep 0.5
@@ -484,8 +500,10 @@ module Clacky
             next unless start
 
             elapsed = (Time.now - start).to_i
-            buf = @progress_output_buffer
-            hint = buf ? "(Ctrl+C to interrupt · Ctrl+O to view output · #{elapsed}s)" : "(Ctrl+C to interrupt · #{elapsed}s)"
+            has_output = @stdout_lines && !@stdout_lines.empty?
+            hint = has_output ?
+              "(Ctrl+C to interrupt · Ctrl+O to view output · #{elapsed}s)" :
+              "(Ctrl+C to interrupt · #{elapsed}s)"
             update_progress_line(@renderer.render_working("#{@progress_message}… #{hint}"))
           end
         rescue StandardError
@@ -512,6 +530,9 @@ module Clacky
 
         # Stop the progress thread (blocks until thread exits or timeout)
         stop_progress_thread
+
+        # stdout buffer no longer needed after command finishes
+        @stdout_lines = nil
 
         # Update the final progress line to gray (stopped state)
         if @progress_message && elapsed_time > 0
@@ -542,6 +563,7 @@ module Clacky
         # Signal thread to stop without joining — it will exit on next loop tick
         @progress_start_time = nil
         @progress_output_buffer = nil
+        @stdout_lines = nil
         @progress_thread_stop = true
         # Detach: let the thread die on its own; we do NOT join here
         @progress_thread = nil
@@ -789,7 +811,7 @@ module Clacky
 
       # Show fullscreen command output view
       def show_command_output
-        return unless @progress_output_buffer
+        return unless @stdout_lines && !@stdout_lines.empty?
         return if @layout.fullscreen_mode?
 
         lines = build_command_output_lines
@@ -798,15 +820,13 @@ module Clacky
         # Start background thread to refresh fullscreen content in real-time.
         # Use a dedicated stop flag so we can join() the thread cleanly and
         # avoid Thread#kill interrupting the thread while it holds @render_mutex.
-        buffer_ref = @progress_output_buffer
         @fullscreen_refresh_stop = false
         @fullscreen_refresh_thread = Thread.new do
           until @fullscreen_refresh_stop || !@layout.fullscreen_mode?
             sleep 0.3
             next if @fullscreen_refresh_stop || !@layout.fullscreen_mode?
 
-            updated_lines = build_command_output_lines_from(buffer_ref)
-            @layout.refresh_fullscreen(updated_lines)
+            @layout.refresh_fullscreen(build_command_output_lines)
           end
         rescue StandardError
           # Silently handle thread errors
@@ -814,26 +834,10 @@ module Clacky
       end
 
 
-      # Build command output lines snapshot from the shared progress buffer
+      # Build command output lines snapshot from @stdout_lines
+      # @return [Array<String>] Lines to display in fullscreen
       private def build_command_output_lines
-        build_command_output_lines_from(@progress_output_buffer)
-      end
-
-      # Build command output lines from a given buffer hash
-      # @param buffer [Hash, nil] Buffer with :stdout_lines and :stderr_lines keys
-      # @return [Array<String>] Lines to display
-      private def build_command_output_lines_from(buffer)
-        return ["(No output yet)"] unless buffer
-
-        stdout_lines = buffer[:stdout_lines]&.to_a || []
-        stderr_lines = buffer[:stderr_lines]&.to_a || []
-
-        lines = stdout_lines.map(&:chomp)
-        unless stderr_lines.empty?
-          lines << ""
-          lines << "--- STDERR ---"
-          lines += stderr_lines.map(&:chomp)
-        end
+        lines = @stdout_lines&.dup || []
         lines.empty? ? ["(No output yet)"] : lines
       end
 
@@ -1016,7 +1020,7 @@ module Clacky
           toggle_mode
         when :toggle_expand
           # If there's command output available, show it; otherwise show diff
-          if @progress_output_buffer
+          if @stdout_lines && !@stdout_lines.empty?
             show_command_output
           else
             redisplay_diff
@@ -1049,7 +1053,7 @@ module Clacky
           return
         when :toggle_expand
           # If there's command output available, show it; otherwise show diff
-          if @progress_output_buffer
+          if @stdout_lines && !@stdout_lines.empty?
             show_command_output
           else
             redisplay_diff

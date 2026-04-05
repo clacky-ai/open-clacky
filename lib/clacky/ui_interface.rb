@@ -10,6 +10,7 @@ module Clacky
     def show_assistant_message(content, files:); end
     def show_tool_call(name, args); end
     def show_tool_result(result); end
+    def show_tool_stdout(lines); end
     def show_tool_error(error); end
     def show_tool_args(formatted_args); end
     def show_file_write_preview(path, is_new_file:); end
