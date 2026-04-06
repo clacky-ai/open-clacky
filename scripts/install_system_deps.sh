@@ -437,24 +437,11 @@ ensure_xcode_clt() {
 }
 
 ensure_linux_deps() {
-    print_step "Checking Linux build dependencies..."
-
-    local missing=()
-    command_exists gcc     || missing+=("build-essential")
-    command_exists python3 || missing+=("python3")
-    command_exists git     || missing+=("git")
-    command_exists curl    || missing+=("curl")
-
-    if [ ${#missing[@]} -eq 0 ]; then
-        print_success "All dependencies already installed"
-        return 0
-    fi
-
-    print_info "Missing: ${missing[*]}"
+    print_step "Installing Linux build dependencies..."
 
     detect_network_region
     setup_apt_mirror
-    sudo apt-get install -y "${missing[@]}"
+    sudo apt-get install -y build-essential git curl python3
     print_success "Dependencies installed"
 }
 

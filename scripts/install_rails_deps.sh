@@ -607,6 +607,14 @@ restore_gem_home() {
 install_ruby() {
     print_step "Installing Ruby via mise..."
 
+    # Install Ruby compile-time dependencies first
+    if is_macos; then
+        brew install openssl@3 libyaml gmp
+    elif is_linux_apt; then
+        sudo apt-get install -y \
+            rustc libssl-dev libyaml-dev zlib1g-dev libgmp-dev
+    fi
+
     ensure_mise || return 1
     install_ruby_via_mise || return 1
 
