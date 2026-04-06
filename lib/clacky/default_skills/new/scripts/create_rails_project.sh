@@ -33,16 +33,13 @@ print_step() {
     echo -e "\n${BLUE}==>${NC} $1"
 }
 
-# Get script directory
-SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-
 # Check if current directory is empty
 check_current_directory() {
     print_step "Checking current directory..."
-    
+
     local current_dir=$(pwd)
     print_info "Working in: $current_dir"
-    
+
     # Check if directory is empty (silently continue if not)
     if [ "$(ls -A .)" ]; then
         print_warning "Current directory is not empty - continuing anyway"
@@ -54,11 +51,11 @@ check_current_directory() {
 # Clone template to current directory
 clone_template() {
     print_step "Cloning Rails template..."
-    
+
     # Create temporary directory
     local temp_dir=$(mktemp -d)
     print_info "Using temporary directory: $temp_dir"
-    
+
     # Clone template to temp directory
     print_info "Downloading template from GitHub..."
     if git clone https://github.com/clacky-ai/rails-template-7x-starter.git "$temp_dir" >/dev/null 2>&1; then
@@ -68,18 +65,18 @@ clone_template() {
         rm -rf "$temp_dir"
         exit 1
     fi
-    
+
     # Move all files to current directory
     print_info "Moving files to current directory..."
     mv "$temp_dir"/* "$temp_dir"/.* . 2>/dev/null || true
-    
+
     # Delete .git directory
     rm -rf .git
-    
+
     # Clean up temp directory
     rm -rf "$temp_dir"
     print_success "Template files copied to current directory"
-    
+
     # Initialize new git repository
     print_info "Initializing git repository..."
     git init > /dev/null 2>&1
@@ -88,37 +85,37 @@ clone_template() {
     print_success "Git repository initialized"
 }
 
-# Check environment dependencies
+# Check and install environment dependencies
 check_environment() {
     print_step "Checking environment dependencies..."
-    
-    # Run rails_env_checker.sh
-    if [ -f "$SCRIPT_DIR/rails_env_checker.sh" ]; then
-        if bash "$SCRIPT_DIR/rails_env_checker.sh"; then
-            print_success "Environment check passed"
-            return 0
-        else
-            print_error "Environment check failed"
-            return 1
-        fi
-    else
-        print_warning "rails_env_checker.sh not found, skipping environment check"
-        print_info "Please ensure you have Ruby 3.x, Node.js 22+, and PostgreSQL installed"
+
+    local installer="$HOME/.clacky/scripts/install_rails_deps.sh"
+    if [ ! -f "$installer" ]; then
+        print_warning "install_rails_deps.sh not found at $installer"
+        print_info "Please ensure Ruby 3.3+, Node.js 22+, and PostgreSQL are installed"
+        return 1
+    fi
+
+    if bash "$installer"; then
+        print_success "Environment ready"
         return 0
+    else
+        print_error "Environment setup failed"
+        return 1
     fi
 }
 
 # Run project setup
 run_project_setup() {
     print_step "Running project setup..."
-    
+
     if [ ! -f "./bin/setup" ]; then
         print_error "bin/setup not found"
         return 1
     fi
-    
+
     chmod +x ./bin/setup
-    
+
     if ./bin/setup; then
         print_success "Project setup completed"
         return 0
@@ -139,27 +136,27 @@ main() {
     echo "║                                                           ║"
     echo "╚═══════════════════════════════════════════════════════════╝"
     echo ""
-    
+
     # Check current directory
     check_current_directory
-    
+
     # Clone template
     if ! clone_template; then
         exit 1
     fi
-    
+
     # Check environment
     if ! check_environment; then
         print_error "Please fix environment issues and run ./bin/setup manually"
         exit 1
     fi
-    
+
     # Run project setup
     if ! run_project_setup; then
         print_error "Setup failed. You can try running './bin/setup' manually"
         exit 1
     fi
-    
+
     # Project is ready
     echo ""
     echo "╔═══════════════════════════════════════════════════════════╗"

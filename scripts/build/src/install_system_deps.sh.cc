@@ -2,15 +2,17 @@
 # install_system_deps.sh — install system-level build tools
 # Generated from scripts/build/src/install_system_deps.sh.cc — DO NOT EDIT DIRECTLY
 #
-# macOS : Xcode Command Line Tools
+# macOS : Xcode Command Line Tools + Homebrew
 # Linux : build-essential + python3 + git + curl (apt, Ubuntu/Debian)
 
 set -e
 
 @include lib/colors.sh
 @include lib/os.sh
+@include lib/shell.sh
 @include lib/network.sh
 @include lib/apt.sh
+@include lib/brew.sh
 _clt_installed() {
     [ -e "/Library/Developer/CommandLineTools/usr/bin/git" ]
 }
@@ -115,7 +117,13 @@ main() {
     assert_supported_os
 
     case "$OS" in
-        macOS) ensure_xcode_clt  || exit 1 ;;
+        macOS)
+            detect_shell
+            ensure_xcode_clt  || exit 1
+            detect_network_region
+            configure_homebrew_cn_mirrors
+            ensure_homebrew   || exit 1
+            ;;
         Linux) ensure_linux_deps || exit 1 ;;
     esac
 

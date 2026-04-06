@@ -2,7 +2,7 @@
 # install_system_deps.sh — install system-level build tools
 # Generated from scripts/build/src/install_system_deps.sh.cc — DO NOT EDIT DIRECTLY
 #
-# macOS : Xcode Command Line Tools
+# macOS : Xcode Command Line Tools + Homebrew
 # Linux : build-essential + python3 + git + curl (apt, Ubuntu/Debian)
 
 set -e
@@ -75,6 +75,41 @@ assert_supported_os() {
         [ -n "$hint" ] && print_info "$hint"
         exit 1
     fi
+}
+
+
+# ---[ @include lib/shell.sh ]---
+
+# Sets CURRENT_SHELL (zsh | bash | fish) and SHELL_RC (path to rc file)
+detect_shell() {
+    local shell_name
+    shell_name=$(basename "$SHELL")
+
+    case "$shell_name" in
+        zsh)
+            CURRENT_SHELL="zsh"
+            SHELL_RC="$HOME/.zshrc"
+            ;;
+        fish)
+            CURRENT_SHELL="fish"
+            SHELL_RC="$HOME/.config/fish/config.fish"
+            ;;
+        bash)
+            CURRENT_SHELL="bash"
+            # macOS uses ~/.bash_profile; Linux uses ~/.bashrc
+            if is_macos; then
+                SHELL_RC="$HOME/.bash_profile"
+            else
+                SHELL_RC="$HOME/.bashrc"
+            fi
+            ;;
+        *)
+            CURRENT_SHELL="bash"
+            SHELL_RC="$HOME/.bashrc"
+            ;;
+    esac
+
+    print_info "Detected shell: $CURRENT_SHELL (rc file: $SHELL_RC)"
 }
 
 
@@ -265,6 +300,93 @@ EOF
     print_success "apt updated"
 }
 
+
+# ---[ @include lib/brew.sh ]---
+
+# --------------------------------------------------------------------------
+# Homebrew CN mirror URLs (Aliyun)
+# --------------------------------------------------------------------------
+CN_HOMEBREW_INSTALL_SCRIPT_URL="${CN_CDN_BASE_URL}/Homebrew/install/HEAD/install.sh"
+CN_HOMEBREW_BREW_GIT_REMOTE="https://mirrors.aliyun.com/homebrew/brew.git"
+CN_HOMEBREW_CORE_GIT_REMOTE="https://mirrors.aliyun.com/homebrew/homebrew-core.git"
+CN_HOMEBREW_BOTTLE_DOMAIN="https://mirrors.aliyun.com/homebrew/homebrew-bottles"
+CN_HOMEBREW_API_DOMAIN="https://mirrors.aliyun.com/homebrew-bottles/api"
+
+HOMEBREW_INSTALL_SCRIPT_URL="https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh"
+
+# --------------------------------------------------------------------------
+# configure_homebrew_cn_mirrors — export env vars and persist to SHELL_RC
+# Only runs when USE_CN_MIRRORS=true
+# --------------------------------------------------------------------------
+configure_homebrew_cn_mirrors() {
+    [ "$USE_CN_MIRRORS" = true ] || return 0
+
+    print_info "Configuring Homebrew CN mirrors..."
+    export HOMEBREW_INSTALL_FROM_API=1
+    export HOMEBREW_API_DOMAIN="$CN_HOMEBREW_API_DOMAIN"
+    export HOMEBREW_BREW_GIT_REMOTE="$CN_HOMEBREW_BREW_GIT_REMOTE"
+    export HOMEBREW_CORE_GIT_REMOTE="$CN_HOMEBREW_CORE_GIT_REMOTE"
+    export HOMEBREW_BOTTLE_DOMAIN="$CN_HOMEBREW_BOTTLE_DOMAIN"
+
+    if ! grep -q "HOMEBREW_BOTTLE_DOMAIN" "$SHELL_RC" 2>/dev/null; then
+        {
+            echo ""
+            echo "# Homebrew CN mirrors (added by openclacky installer)"
+            echo "export HOMEBREW_INSTALL_FROM_API=1"
+            echo "export HOMEBREW_API_DOMAIN=\"${CN_HOMEBREW_API_DOMAIN}\""
+            echo "export HOMEBREW_BREW_GIT_REMOTE=\"${CN_HOMEBREW_BREW_GIT_REMOTE}\""
+            echo "export HOMEBREW_CORE_GIT_REMOTE=\"${CN_HOMEBREW_CORE_GIT_REMOTE}\""
+            echo "export HOMEBREW_BOTTLE_DOMAIN=\"${CN_HOMEBREW_BOTTLE_DOMAIN}\""
+        } >> "$SHELL_RC"
+        print_success "Homebrew CN mirrors written to $SHELL_RC"
+    else
+        print_success "Homebrew CN mirrors already configured in $SHELL_RC"
+    fi
+}
+
+# --------------------------------------------------------------------------
+# restore_homebrew_cn_mirrors — remove CN mirror lines from SHELL_RC
+# --------------------------------------------------------------------------
+restore_homebrew_cn_mirrors() {
+    if [ -n "$SHELL_RC" ] && [ -f "$SHELL_RC" ] && grep -q "HOMEBREW_BOTTLE_DOMAIN" "$SHELL_RC" 2>/dev/null; then
+        sed -i.bak '/# Homebrew CN mirrors (added by openclacky installer)/d' "$SHELL_RC"
+        sed -i.bak '/HOMEBREW_INSTALL_FROM_API/d' "$SHELL_RC"
+        sed -i.bak '/HOMEBREW_API_DOMAIN/d' "$SHELL_RC"
+        sed -i.bak '/HOMEBREW_BREW_GIT_REMOTE/d' "$SHELL_RC"
+        sed -i.bak '/HOMEBREW_CORE_GIT_REMOTE/d' "$SHELL_RC"
+        sed -i.bak '/HOMEBREW_BOTTLE_DOMAIN/d' "$SHELL_RC"
+        rm -f "${SHELL_RC}.bak"
+        unset HOMEBREW_BREW_GIT_REMOTE HOMEBREW_CORE_GIT_REMOTE HOMEBREW_BOTTLE_DOMAIN
+        print_success "Homebrew CN mirrors removed from $SHELL_RC"
+    else
+        print_info "Homebrew CN mirrors — nothing to restore"
+    fi
+}
+
+# --------------------------------------------------------------------------
+# ensure_homebrew — install Homebrew if missing, add to PATH
+# --------------------------------------------------------------------------
+ensure_homebrew() {
+    if command_exists brew; then
+        print_success "Homebrew already installed"
+        return 0
+    fi
+
+    print_info "Installing Homebrew..."
+    local brew_url="$HOMEBREW_INSTALL_SCRIPT_URL"
+    [ "$USE_CN_MIRRORS" = true ] && brew_url="$CN_HOMEBREW_INSTALL_SCRIPT_URL"
+
+    if /bin/bash -c "$(curl -fsSL "$brew_url")"; then
+        # Add Homebrew to PATH (Apple Silicon default path)
+        echo 'export PATH="/opt/homebrew/bin:$PATH"' >> "$SHELL_RC"
+        export PATH="/opt/homebrew/bin:$PATH"
+        print_success "Homebrew installed"
+    else
+        print_error "Failed to install Homebrew"
+        return 1
+    fi
+}
+
 _clt_installed() {
     [ -e "/Library/Developer/CommandLineTools/usr/bin/git" ]
 }
@@ -369,7 +491,13 @@ main() {
     assert_supported_os
 
     case "$OS" in
-        macOS) ensure_xcode_clt  || exit 1 ;;
+        macOS)
+            detect_shell
+            ensure_xcode_clt  || exit 1
+            detect_network_region
+            configure_homebrew_cn_mirrors
+            ensure_homebrew   || exit 1
+            ;;
         Linux) ensure_linux_deps || exit 1 ;;
     esac
 

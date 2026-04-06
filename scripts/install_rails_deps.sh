@@ -1,15 +1,16 @@
 #!/bin/bash
-# install_rails_deps.sh — install Ruby 3.3+ and Node.js 22+ via mise for Rails development
+# install_rails_deps.sh — install Ruby 3.3+ and Node.js 22+ via mise, and PostgreSQL for Rails development
 # Generated from scripts/build/src/install_rails_deps.sh.cc — DO NOT EDIT DIRECTLY
 #
 # Usage:
-#   bash install_rails_deps.sh            # install ruby + node
-#   bash install_rails_deps.sh ruby       # install ruby only
-#   bash install_rails_deps.sh node       # install node only
+#   bash install_rails_deps.sh               # install ruby + node + postgres
+#   bash install_rails_deps.sh ruby          # ruby only
+#   bash install_rails_deps.sh node          # node only
+#   bash install_rails_deps.sh postgres      # postgres only
 
 set -e
 
-INSTALL_TARGET="${1:-all}"  # all | ruby | node
+INSTALL_TARGET="${1:-all}"  # all | ruby | node | postgres
 
 
 # ---[ @include lib/colors.sh ]---
@@ -271,6 +272,127 @@ detect_network_region() {
 }
 
 
+# ---[ @include lib/apt.sh ]---
+
+# Configure apt mirror for CN region and run apt-get update.
+# Guards: only runs on ubuntu/debian ($DISTRO).
+# Relies on $USE_CN_MIRRORS set by detect_network_region (network.sh).
+setup_apt_mirror() {
+    [ "$DISTRO" = "ubuntu" ] || [ "$DISTRO" = "debian" ] || return 0
+
+    if [ "$USE_CN_MIRRORS" = true ]; then
+        print_info "Region: China — configuring Aliyun apt mirror"
+        local codename="${VERSION_CODENAME:-jammy}"
+        local components="main restricted universe multiverse"
+        local arch; arch=$(dpkg --print-architecture 2>/dev/null || uname -m)
+        if [ "$arch" = "arm64" ] || [ "$arch" = "aarch64" ]; then
+            local mirror="https://mirrors.aliyun.com/ubuntu-ports/"
+        else
+            local mirror="https://mirrors.aliyun.com/ubuntu/"
+        fi
+        sudo tee /etc/apt/sources.list > /dev/null <<EOF
+deb ${mirror} ${codename} ${components}
+deb ${mirror} ${codename}-updates ${components}
+deb ${mirror} ${codename}-backports ${components}
+deb ${mirror} ${codename}-security ${components}
+EOF
+        print_success "apt mirror set to Aliyun"
+    else
+        print_info "Region: global — using default apt sources"
+    fi
+
+    sudo apt-get update -qq
+    print_success "apt updated"
+}
+
+
+# ---[ @include lib/brew.sh ]---
+
+# --------------------------------------------------------------------------
+# Homebrew CN mirror URLs (Aliyun)
+# --------------------------------------------------------------------------
+CN_HOMEBREW_INSTALL_SCRIPT_URL="${CN_CDN_BASE_URL}/Homebrew/install/HEAD/install.sh"
+CN_HOMEBREW_BREW_GIT_REMOTE="https://mirrors.aliyun.com/homebrew/brew.git"
+CN_HOMEBREW_CORE_GIT_REMOTE="https://mirrors.aliyun.com/homebrew/homebrew-core.git"
+CN_HOMEBREW_BOTTLE_DOMAIN="https://mirrors.aliyun.com/homebrew/homebrew-bottles"
+CN_HOMEBREW_API_DOMAIN="https://mirrors.aliyun.com/homebrew-bottles/api"
+
+HOMEBREW_INSTALL_SCRIPT_URL="https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh"
+
+# --------------------------------------------------------------------------
+# configure_homebrew_cn_mirrors — export env vars and persist to SHELL_RC
+# Only runs when USE_CN_MIRRORS=true
+# --------------------------------------------------------------------------
+configure_homebrew_cn_mirrors() {
+    [ "$USE_CN_MIRRORS" = true ] || return 0
+
+    print_info "Configuring Homebrew CN mirrors..."
+    export HOMEBREW_INSTALL_FROM_API=1
+    export HOMEBREW_API_DOMAIN="$CN_HOMEBREW_API_DOMAIN"
+    export HOMEBREW_BREW_GIT_REMOTE="$CN_HOMEBREW_BREW_GIT_REMOTE"
+    export HOMEBREW_CORE_GIT_REMOTE="$CN_HOMEBREW_CORE_GIT_REMOTE"
+    export HOMEBREW_BOTTLE_DOMAIN="$CN_HOMEBREW_BOTTLE_DOMAIN"
+
+    if ! grep -q "HOMEBREW_BOTTLE_DOMAIN" "$SHELL_RC" 2>/dev/null; then
+        {
+            echo ""
+            echo "# Homebrew CN mirrors (added by openclacky installer)"
+            echo "export HOMEBREW_INSTALL_FROM_API=1"
+            echo "export HOMEBREW_API_DOMAIN=\"${CN_HOMEBREW_API_DOMAIN}\""
+            echo "export HOMEBREW_BREW_GIT_REMOTE=\"${CN_HOMEBREW_BREW_GIT_REMOTE}\""
+            echo "export HOMEBREW_CORE_GIT_REMOTE=\"${CN_HOMEBREW_CORE_GIT_REMOTE}\""
+            echo "export HOMEBREW_BOTTLE_DOMAIN=\"${CN_HOMEBREW_BOTTLE_DOMAIN}\""
+        } >> "$SHELL_RC"
+        print_success "Homebrew CN mirrors written to $SHELL_RC"
+    else
+        print_success "Homebrew CN mirrors already configured in $SHELL_RC"
+    fi
+}
+
+# --------------------------------------------------------------------------
+# restore_homebrew_cn_mirrors — remove CN mirror lines from SHELL_RC
+# --------------------------------------------------------------------------
+restore_homebrew_cn_mirrors() {
+    if [ -n "$SHELL_RC" ] && [ -f "$SHELL_RC" ] && grep -q "HOMEBREW_BOTTLE_DOMAIN" "$SHELL_RC" 2>/dev/null; then
+        sed -i.bak '/# Homebrew CN mirrors (added by openclacky installer)/d' "$SHELL_RC"
+        sed -i.bak '/HOMEBREW_INSTALL_FROM_API/d' "$SHELL_RC"
+        sed -i.bak '/HOMEBREW_API_DOMAIN/d' "$SHELL_RC"
+        sed -i.bak '/HOMEBREW_BREW_GIT_REMOTE/d' "$SHELL_RC"
+        sed -i.bak '/HOMEBREW_CORE_GIT_REMOTE/d' "$SHELL_RC"
+        sed -i.bak '/HOMEBREW_BOTTLE_DOMAIN/d' "$SHELL_RC"
+        rm -f "${SHELL_RC}.bak"
+        unset HOMEBREW_BREW_GIT_REMOTE HOMEBREW_CORE_GIT_REMOTE HOMEBREW_BOTTLE_DOMAIN
+        print_success "Homebrew CN mirrors removed from $SHELL_RC"
+    else
+        print_info "Homebrew CN mirrors — nothing to restore"
+    fi
+}
+
+# --------------------------------------------------------------------------
+# ensure_homebrew — install Homebrew if missing, add to PATH
+# --------------------------------------------------------------------------
+ensure_homebrew() {
+    if command_exists brew; then
+        print_success "Homebrew already installed"
+        return 0
+    fi
+
+    print_info "Installing Homebrew..."
+    local brew_url="$HOMEBREW_INSTALL_SCRIPT_URL"
+    [ "$USE_CN_MIRRORS" = true ] && brew_url="$CN_HOMEBREW_INSTALL_SCRIPT_URL"
+
+    if /bin/bash -c "$(curl -fsSL "$brew_url")"; then
+        # Add Homebrew to PATH (Apple Silicon default path)
+        echo 'export PATH="/opt/homebrew/bin:$PATH"' >> "$SHELL_RC"
+        export PATH="/opt/homebrew/bin:$PATH"
+        print_success "Homebrew installed"
+    else
+        print_error "Failed to install Homebrew"
+        return 1
+    fi
+}
+
+
 # ---[ @include lib/mise.sh ]---
 
 # --------------------------------------------------------------------------
@@ -513,6 +635,27 @@ install_node() {
 }
 
 # --------------------------------------------------------------------------
+# PostgreSQL: install server + client via brew (macOS) or apt (Linux/WSL)
+# --------------------------------------------------------------------------
+install_postgres() {
+    print_step "Installing PostgreSQL..."
+
+    if is_macos; then
+        ensure_homebrew || return 1
+        brew install postgresql
+        brew services start postgresql
+
+    elif is_linux_apt; then
+        setup_apt_mirror
+        sudo apt-get install -y postgresql libpq-dev \
+            libssl-dev libreadline-dev zlib1g-dev libyaml-dev libffi-dev
+        sudo systemctl enable --now postgresql || true
+    fi
+
+    print_success "PostgreSQL installed"
+}
+
+# --------------------------------------------------------------------------
 # Main
 # --------------------------------------------------------------------------
 main() {
@@ -527,16 +670,42 @@ main() {
     detect_shell
     detect_network_region
 
+    # On macOS, Homebrew is required — if missing, guide the user to install_full.sh
+    if is_macos && ! command_exists brew; then
+        local install_cmd
+        if [ "$USE_CN_MIRRORS" = true ]; then
+            install_cmd='/bin/bash -c "$(curl -sSL https://oss.1024code.com/scripts/install_full.sh)"'
+        else
+            install_cmd='/bin/bash -c "$(curl -sSL https://raw.githubusercontent.com/clacky-ai/openclacky/main/scripts/install_full.sh)"'
+        fi
+        echo ""
+        print_error "Homebrew is not installed — it is required to continue."
+        echo ""
+        echo "  Homebrew installation requires your sudo password and interactive confirmation"
+        echo "  — it cannot be run automatically by the AI agent."
+        echo ""
+        echo "  Please open a new terminal window and run the full installer:"
+        echo ""
+        echo "    ${install_cmd}"
+        echo ""
+        echo "  This will install Homebrew, Ruby, Node.js, and all required dependencies."
+        echo "  Once done, come back and try again."
+        echo ""
+        exit 1
+    fi
+
     # Run system deps script if available
     local sys_deps="$HOME/.clacky/scripts/install_system_deps.sh"
     [ -f "$sys_deps" ] && { bash "$sys_deps" || print_warning "System deps install had warnings — continuing"; }
 
     case "$INSTALL_TARGET" in
-        ruby) install_ruby || exit 1 ;;
-        node) install_node || exit 1 ;;
+        ruby)     install_ruby     || exit 1 ;;
+        node)     install_node     || exit 1 ;;
+        postgres) install_postgres || exit 1 ;;
         *)
-            install_ruby || exit 1
-            install_node || exit 1
+            install_ruby     || exit 1
+            install_node     || exit 1
+            install_postgres || exit 1
             ;;
     esac
 
