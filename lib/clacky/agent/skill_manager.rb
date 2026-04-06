@@ -379,9 +379,6 @@ module Clacky
       # @param arguments [String] Arguments for the skill
       # @return [String] Summary of subagent execution
       def execute_skill_with_subagent(skill, arguments)
-        # Log subagent fork
-        @ui&.show_info("Subagent start: #{skill.identifier}")
-
         # For encrypted brand skills with supporting scripts: decrypt to a tmpdir.
         # Subagent path has a clear boundary (subagent.run returns), so we shred inline
         # rather than registering on the parent agent.
@@ -405,6 +402,10 @@ module Clacky
           forbidden_tools: skill.forbidden_tools_list,
           system_prompt_suffix: skill_instructions
         )
+
+        # Log which model the subagent is actually using (may differ from requested
+        # when "lite" falls back to default due to no lite model configured)
+        @ui&.show_info("Subagent start: #{skill.identifier} [#{subagent.current_model_info[:model]}]")
 
         # Run subagent with the actual task as the sole user turn.
         # If the user typed the skill command with no arguments (e.g. "/jade-appraisal"),
@@ -446,8 +447,14 @@ module Clacky
           m[:skill_name] = skill.identifier
         end
 
+        # Merge subagent cost into parent agent's total so the sessionbar reflects
+        # the real cumulative spend across all subagents
+        subagent_cost = result[:total_cost_usd] || 0.0
+        @total_cost += subagent_cost
+        @ui&.update_sessionbar(cost: @total_cost)
+
         # Log completion
-        @ui&.show_info("Subagent completed: #{result[:iterations]} iterations, $#{result[:total_cost_usd].round(4)}")
+        @ui&.show_info("Subagent completed: #{result[:iterations]} iterations, $#{subagent_cost.round(4)} (total: $#{@total_cost.round(4)})")
 
         # Return summary as the skill execution result
         summary

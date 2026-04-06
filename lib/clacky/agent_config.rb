@@ -222,7 +222,43 @@ module Clacky
         end
       end
 
+      # Auto-inject lite model from provider preset when:
+      # 1. A default model exists
+      # 2. No lite model is configured yet (neither in file nor env)
+      # 3. The default model's provider has a known lite_model
+      # The injected lite model is runtime-only (not persisted to config.yml)
+      inject_provider_lite_model(models)
+
       new(models: models)
+    end
+
+    # Auto-inject a lite model entry if the default model's provider supports one
+    # and no lite model is already present. The injected entry reuses the same
+    # api_key and base_url as the default model — only the model name differs.
+    # @param models [Array<Hash>] mutable models array (modified in-place)
+    private_class_method def self.inject_provider_lite_model(models)
+      return if models.any? { |m| m["type"] == "lite" }
+
+      default_model = models.find { |m| m["type"] == "default" } || models.first
+      return unless default_model
+
+      provider_id = Clacky::Providers.find_by_base_url(default_model["base_url"])
+      return unless provider_id
+
+      lite_model_name = Clacky::Providers.lite_model(provider_id)
+      return unless lite_model_name
+
+      # Don't inject if the default model IS the lite model
+      return if default_model["model"] == lite_model_name
+
+      models << {
+        "api_key"          => default_model["api_key"],
+        "base_url"         => default_model["base_url"],
+        "model"            => lite_model_name,
+        "anthropic_format" => default_model["anthropic_format"] || false,
+        "type"             => "lite",
+        "auto_injected"    => true  # Mark as auto-injected (not saved to file)
+      }
     end
 
     # Save configuration to file
@@ -244,8 +280,11 @@ module Clacky
     end
 
     # Convert to YAML format (top-level array)
+    # Auto-injected lite models (auto_injected: true) are excluded from persistence —
+    # they are regenerated at load time from the provider preset.
     def to_yaml
-      YAML.dump(@models)
+      persistable = @models.reject { |m| m["auto_injected"] }
+      YAML.dump(persistable)
     end
 
     # Check if any model is configured

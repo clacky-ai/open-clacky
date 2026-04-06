@@ -682,6 +682,171 @@ RSpec.describe Clacky::AgentConfig do
     end
   end
 
+  # ─────────────────────────────────────────────────────────────────────────
+  # Auto-injection of lite model from provider preset
+  # ─────────────────────────────────────────────────────────────────────────
+  describe "auto-inject lite model from provider preset" do
+    context "when clackyai is the configured provider (base_url matches)" do
+      it "automatically injects a lite model at load time" do
+        with_temp_config([
+          {
+            "model"            => "abs-claude-sonnet-4-6",
+            "api_key"          => "absk-test-key",
+            "base_url"         => "https://api.clacky.ai",
+            "anthropic_format" => false,
+            "type"             => "default"
+          }
+        ]) do |config_file|
+          config = described_class.load(config_file)
+
+          expect(config.models.length).to eq(2)
+          lite = config.lite_model
+          expect(lite).not_to be_nil
+          expect(lite["model"]).to eq("abs-claude-haiku-4-5")
+          expect(lite["api_key"]).to eq("absk-test-key")
+          expect(lite["base_url"]).to eq("https://api.clacky.ai")
+          expect(lite["type"]).to eq("lite")
+          expect(lite["auto_injected"]).to be true
+        end
+      end
+
+      it "does not inject a lite model when one is already explicitly configured" do
+        with_temp_config([
+          {
+            "model"            => "abs-claude-sonnet-4-6",
+            "api_key"          => "absk-test-key",
+            "base_url"         => "https://api.clacky.ai",
+            "anthropic_format" => false,
+            "type"             => "default"
+          },
+          {
+            "model"            => "abs-claude-haiku-4-5",
+            "api_key"          => "absk-test-key",
+            "base_url"         => "https://api.clacky.ai",
+            "anthropic_format" => false,
+            "type"             => "lite"
+          }
+        ]) do |config_file|
+          config = described_class.load(config_file)
+
+          # Should still be exactly 2 models — no duplicate injection
+          expect(config.models.length).to eq(2)
+          lite_models = config.models.select { |m| m["type"] == "lite" }
+          expect(lite_models.length).to eq(1)
+          expect(lite_models.first["auto_injected"]).to be_nil
+        end
+      end
+
+      it "does not inject when the default model is already the lite model" do
+        with_temp_config([
+          {
+            "model"            => "abs-claude-haiku-4-5",
+            "api_key"          => "absk-test-key",
+            "base_url"         => "https://api.clacky.ai",
+            "anthropic_format" => false,
+            "type"             => "default"
+          }
+        ]) do |config_file|
+          config = described_class.load(config_file)
+
+          # haiku IS the lite model — no injection needed
+          expect(config.models.length).to eq(1)
+          expect(config.lite_model).to be_nil
+        end
+      end
+    end
+
+    context "when provider is not clackyai (no known lite model)" do
+      it "does not inject a lite model for an unknown provider" do
+        with_temp_config([
+          {
+            "model"            => "some-model",
+            "api_key"          => "sk-custom",
+            "base_url"         => "https://api.custom-provider.com",
+            "anthropic_format" => false,
+            "type"             => "default"
+          }
+        ]) do |config_file|
+          config = described_class.load(config_file)
+
+          expect(config.models.length).to eq(1)
+          expect(config.lite_model).to be_nil
+        end
+      end
+    end
+
+    describe "#to_yaml / #save persistence" do
+      it "does NOT persist auto-injected lite model to config file" do
+        with_temp_config([
+          {
+            "model"            => "abs-claude-sonnet-4-6",
+            "api_key"          => "absk-test-key",
+            "base_url"         => "https://api.clacky.ai",
+            "anthropic_format" => false,
+            "type"             => "default"
+          }
+        ]) do |config_file|
+          config = described_class.load(config_file)
+
+          # In memory: 2 models (default + auto-injected lite)
+          expect(config.models.length).to eq(2)
+
+          # Save and reload
+          config.save(config_file)
+          saved_data = YAML.load_file(config_file)
+
+          # On disk: only 1 model (auto-injected lite is excluded)
+          expect(saved_data.length).to eq(1)
+          expect(saved_data.none? { |m| m["type"] == "lite" }).to be true
+          expect(saved_data.none? { |m| m["auto_injected"] }).to be true
+
+          # After reload: auto-injection happens again
+          reloaded = described_class.load(config_file)
+          expect(reloaded.models.length).to eq(2)
+          expect(reloaded.lite_model["auto_injected"]).to be true
+        end
+      end
+    end
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Providers.find_by_base_url
+  # ─────────────────────────────────────────────────────────────────────────
+  describe "Clacky::Providers.find_by_base_url" do
+    it "returns clackyai for https://api.clacky.ai" do
+      expect(Clacky::Providers.find_by_base_url("https://api.clacky.ai")).to eq("clackyai")
+    end
+
+    it "is tolerant of trailing slashes" do
+      expect(Clacky::Providers.find_by_base_url("https://api.clacky.ai/")).to eq("clackyai")
+    end
+
+    it "returns nil for unknown base URLs" do
+      expect(Clacky::Providers.find_by_base_url("https://unknown.example.com")).to be_nil
+    end
+
+    it "returns nil for nil input" do
+      expect(Clacky::Providers.find_by_base_url(nil)).to be_nil
+    end
+  end
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Providers.lite_model
+  # ─────────────────────────────────────────────────────────────────────────
+  describe "Clacky::Providers.lite_model" do
+    it "returns abs-claude-haiku-4-5 for clackyai" do
+      expect(Clacky::Providers.lite_model("clackyai")).to eq("abs-claude-haiku-4-5")
+    end
+
+    it "returns nil for providers without a lite model (e.g. minimax)" do
+      expect(Clacky::Providers.lite_model("minimax")).to be_nil
+    end
+
+    it "returns nil for unknown provider IDs" do
+      expect(Clacky::Providers.lite_model("nonexistent")).to be_nil
+    end
+  end
+
   # Helper to set environment variables temporarily
   def with_env(vars)
     old_values = {}

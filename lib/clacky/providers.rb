@@ -17,6 +17,7 @@ module Clacky
         "base_url" => "https://openrouter.ai/api/v1",
         "api" => "openai-responses",
         "default_model" => "anthropic/claude-sonnet-4-6",
+        "lite_model" => "anthropic/claude-haiku-4-5",
         "models" => [],  # Dynamic - fetched from API
         "website_url" => "https://openrouter.ai/keys"
       }.freeze,
@@ -53,6 +54,7 @@ module Clacky
         "base_url" => "https://api.clacky.ai",
         "api" => "bedrock",
         "default_model" => "abs-claude-sonnet-4-6",
+        "lite_model" => "abs-claude-haiku-4-5",
         "models" => [
           "abs-claude-opus-4-6",
           "abs-claude-sonnet-4-6",
@@ -129,6 +131,23 @@ module Clacky
       def models(provider_id)
         preset = PRESETS[provider_id]
         preset&.dig("models") || []
+      end
+
+      # Get the lite model for a provider (if any)
+      # @param provider_id [String] The provider identifier
+      # @return [String, nil] The lite model name or nil if provider has no lite model
+      def lite_model(provider_id)
+        preset = PRESETS[provider_id]
+        preset&.dig("lite_model")
+      end
+
+      # Find provider ID by base URL
+      # @param base_url [String] The base URL to look up
+      # @return [String, nil] The provider ID or nil if not found
+      def find_by_base_url(base_url)
+        return nil if base_url.nil? || base_url.empty?
+        normalized = base_url.to_s.chomp("/")
+        PRESETS.find { |_id, preset| preset["base_url"].to_s.chomp("/") == normalized }&.first
       end
     end
   end
