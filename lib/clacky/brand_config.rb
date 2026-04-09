@@ -560,7 +560,7 @@ module Clacky
       # Record installed version in brand_skills.json (including description for
       # offline display when the remote API is unreachable).
       # encrypted: true because the ZIP contains MANIFEST.enc.json + AES-256-GCM encrypted files.
-      record_installed_skill(slug, version, skill_info["description"], encrypted: true)
+      record_installed_skill(slug, version, skill_info["description"], encrypted: true, description_zh: skill_info["description_zh"])
 
       { success: true, name: slug, version: version }
     rescue StandardError, ScriptError => e
@@ -583,11 +583,12 @@ module Clacky
     #   optionally "version" and "emoji".
     # @return [Hash] { success: bool, name:, version: }
     def install_mock_brand_skill!(skill_info)
-      slug        = skill_info["name"].to_s.strip
-      version     = (skill_info["latest_version"] || {})["version"] || skill_info["version"] || "1.0.0"
-      name        = slug
-      description = skill_info["description"] || "A private brand skill."
-      emoji       = skill_info["emoji"] || "⭐"
+      slug           = skill_info["name"].to_s.strip
+      version        = (skill_info["latest_version"] || {})["version"] || skill_info["version"] || "1.0.0"
+      name           = slug
+      description    = skill_info["description"] || "A private brand skill."
+      description_zh = skill_info["description_zh"] || "私有品牌技能。"
+      emoji          = skill_info["emoji"] || "⭐"
 
       return { success: false, error: "Missing skill name" } if slug.empty?
 
@@ -622,7 +623,7 @@ module Clacky
       File.binwrite(enc_path, mock_content.encode("UTF-8"))
 
       # encrypted: false — mock skills store plain bytes in .enc, no MANIFEST needed.
-      record_installed_skill(slug, version, description, encrypted: false)
+      record_installed_skill(slug, version, description, encrypted: false, description_zh: description_zh)
       { success: true, name: slug, version: version }
     rescue StandardError => e
       { success: false, error: e.message }
@@ -650,6 +651,14 @@ module Clacky
         begin
           result = fetch_brand_skills!
           next unless result[:success]
+
+          # Remove locally installed skills that have been deleted on the remote.
+          # Compare the set of remote skill names against what is installed locally
+          # and delete any skill that no longer exists in the remote catalogue.
+          remote_skill_names = result[:skills].map { |s| s["name"] }
+          installed_brand_skills.each_key do |local_name|
+            delete_brand_skill!(local_name) unless remote_skill_names.include?(local_name)
+          end
 
           # Auto-sync is intentionally limited to skills the user has already
           # installed and that have a newer version available.
@@ -684,6 +693,43 @@ module Clacky
       FileUtils.rm_rf(dir)
       # Also clear in-memory decryption key cache so no stale keys survive
       @decryption_keys.clear if @decryption_keys
+    end
+
+    # Remove a single locally installed brand skill by name.
+    #
+    # Deletes the skill's directory from disk and removes its entry from
+    # brand_skills.json.  Also evicts any cached decryption key for that skill
+    # so no stale key survives in memory.
+    #
+    # This is called during background sync when a skill that was previously
+    # installed is no longer present in the remote catalogue (i.e. the brand
+    # administrator deleted it on the platform side).
+    #
+    # @param skill_name [String] The slug/name of the skill to remove.
+    # @return [void]
+    private def delete_brand_skill!(skill_name)
+      # Remove files from disk.
+      skill_dir = File.join(brand_skills_dir, skill_name)
+      FileUtils.rm_rf(skill_dir) if Dir.exist?(skill_dir)
+
+      # Remove entry from brand_skills.json.
+      json_path = File.join(brand_skills_dir, "brand_skills.json")
+      if File.exist?(json_path)
+        registry = JSON.parse(File.read(json_path))
+        registry.delete(skill_name)
+        File.write(json_path, JSON.generate(registry))
+      end
+
+      # Evict cached decryption key (keyed by skill_version_id strings).
+      # We don't know the exact version id here, but we can drop any key whose
+      # associated manifest lives inside the now-deleted directory (they are
+      # already gone from disk).  The simplest safe approach: clear the whole
+      # in-memory cache — keys will be re-fetched on next access for surviving
+      # skills.
+      @decryption_keys&.clear
+    rescue StandardError
+      # Deletion errors are non-fatal — a stale skill directory is harmless
+      # compared to aborting the entire sync operation.
     end
 
     # Decrypt an encrypted brand skill file and return its content in memory.
@@ -1023,18 +1069,19 @@ module Clacky
     #   1. name already valid            → use name as-is
     #   2. name invalid — sanitize       → downcase, spaces→hyphens, strip illegal chars
     #   3. still invalid after sanitize  → raise, caller gets { success: false }
-    private def record_installed_skill(name, version, description = nil, encrypted: true)
+    private def record_installed_skill(name, version, description = nil, encrypted: true, description_zh: nil)
       safe_name = sanitize_skill_name(name)
 
       FileUtils.mkdir_p(brand_skills_dir)
       path      = File.join(brand_skills_dir, "brand_skills.json")
       installed = installed_brand_skills
       installed[safe_name] = {
-        "version"      => version,
-        "name"         => safe_name,
-        "description"  => description.to_s,
-        "encrypted"    => encrypted,
-        "installed_at" => Time.now.utc.iso8601
+        "version"        => version,
+        "name"           => safe_name,
+        "description"    => description.to_s,
+        "description_zh" => description_zh.to_s,
+        "encrypted"      => encrypted,
+        "installed_at"   => Time.now.utc.iso8601
       }
       File.write(path, JSON.generate(installed))
     end

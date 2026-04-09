@@ -725,6 +725,7 @@ module Clacky
               "name"              => meta["name"] || name,
               # Use locally cached description so it renders correctly offline
               "description"       => meta["description"].to_s,
+              "description_zh"    => meta["description_zh"].to_s,
               "installed_version" => meta["version"],
               "needs_update"      => false
             }

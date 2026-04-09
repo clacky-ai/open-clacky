@@ -149,6 +149,117 @@ RSpec.describe "Brand Skill system" do
       expect(config.sync_brand_skills_async!).to be_nil
     end
 
+    # ── Remote deletion cleanup ──────────────────────────────────────────────
+
+    it "removes locally installed skill that was deleted on the remote" do
+      with_temp_config_dir do |tmp|
+        config = activated_brand_config(tmp)
+        # Undo the global stub from spec_helper so the real method runs.
+        allow(config).to receive(:sync_brand_skills_async!).and_call_original
+
+        # Set up two installed brand skills on disk.
+        brand_dir = File.join(tmp, "brand_skills")
+        ["skill-alpha", "skill-beta"].each do |slug|
+          skill_dir = File.join(brand_dir, slug)
+          FileUtils.mkdir_p(skill_dir)
+          File.binwrite(File.join(skill_dir, "SKILL.md.enc"), "---\nname: #{slug}\n---\nContent")
+        end
+
+        # Persist both in brand_skills.json.
+        json_path = File.join(brand_dir, "brand_skills.json")
+        File.write(json_path, JSON.generate({
+          "skill-alpha" => { "name" => "skill-alpha", "version" => "1.0.0" },
+          "skill-beta"  => { "name" => "skill-beta",  "version" => "1.0.0" }
+        }))
+
+        # Remote only returns skill-alpha — skill-beta has been deleted.
+        allow(config).to receive(:fetch_brand_skills!).and_return({
+          success: true,
+          skills: [
+            { "name" => "skill-alpha", "needs_update" => false }
+          ]
+        })
+
+        completed = nil
+        thread = config.sync_brand_skills_async!(on_complete: ->(r) { completed = r })
+        thread.join(5)
+
+        # skill-beta directory should be gone.
+        expect(Dir.exist?(File.join(brand_dir, "skill-beta"))).to be false
+
+        # brand_skills.json should no longer mention skill-beta.
+        registry = JSON.parse(File.read(json_path))
+        expect(registry.keys).to contain_exactly("skill-alpha")
+
+        # skill-alpha must remain intact.
+        expect(Dir.exist?(File.join(brand_dir, "skill-alpha"))).to be true
+      end
+    end
+
+    it "does not touch local skills that are still present on the remote" do
+      with_temp_config_dir do |tmp|
+        config = activated_brand_config(tmp)
+        # Undo the global stub from spec_helper so the real method runs.
+        allow(config).to receive(:sync_brand_skills_async!).and_call_original
+
+        brand_dir = File.join(tmp, "brand_skills")
+        skill_dir = File.join(brand_dir, "skill-keep")
+        FileUtils.mkdir_p(skill_dir)
+        File.binwrite(File.join(skill_dir, "SKILL.md.enc"), "---\nname: skill-keep\n---\nOK")
+
+        json_path = File.join(brand_dir, "brand_skills.json")
+        File.write(json_path, JSON.generate({
+          "skill-keep" => { "name" => "skill-keep", "version" => "1.0.0" }
+        }))
+
+        # Remote still lists the skill, no update needed.
+        allow(config).to receive(:fetch_brand_skills!).and_return({
+          success: true,
+          skills: [{ "name" => "skill-keep", "needs_update" => false }]
+        })
+
+        thread = config.sync_brand_skills_async!
+        thread.join(5)
+
+        expect(Dir.exist?(skill_dir)).to be true
+        registry = JSON.parse(File.read(json_path))
+        expect(registry.keys).to include("skill-keep")
+      end
+    end
+
+    it "removes all local skills when remote returns an empty list" do
+      with_temp_config_dir do |tmp|
+        config    = activated_brand_config(tmp)
+        # Undo the global stub from spec_helper so the real method runs.
+        allow(config).to receive(:sync_brand_skills_async!).and_call_original
+        brand_dir = File.join(tmp, "brand_skills")
+
+        ["skill-one", "skill-two"].each do |slug|
+          d = File.join(brand_dir, slug)
+          FileUtils.mkdir_p(d)
+          File.binwrite(File.join(d, "SKILL.md.enc"), "---\nname: #{slug}\n---\nX")
+        end
+        json_path = File.join(brand_dir, "brand_skills.json")
+        File.write(json_path, JSON.generate({
+          "skill-one" => { "name" => "skill-one", "version" => "1.0.0" },
+          "skill-two" => { "name" => "skill-two", "version" => "1.0.0" }
+        }))
+
+        allow(config).to receive(:fetch_brand_skills!).and_return({
+          success: true,
+          skills: []   # remote catalogue is empty
+        })
+
+        thread = config.sync_brand_skills_async!
+        thread.join(5)
+
+        expect(Dir.exist?(File.join(brand_dir, "skill-one"))).to be false
+        expect(Dir.exist?(File.join(brand_dir, "skill-two"))).to be false
+        registry = JSON.parse(File.read(json_path))
+        expect(registry).to be_empty
+      end
+    end
+
     # TODO: These two tests conflict with the CLACKY_TEST guard added to
     # prevent real network calls during the test suite. The around hook that
     # temporarily unsets CLACKY_TEST does not interact well with stub_const
