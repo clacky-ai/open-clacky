@@ -305,24 +305,6 @@ RSpec.describe Clacky::Tools::Browser do
     end
   end
 
-  describe ".build_mcp_command" do
-    it "returns an array starting with chrome-devtools-mcp" do
-      cmd = described_class.build_mcp_command
-      expect(cmd).to be_an(Array)
-      expect(cmd.first).to eq("chrome-devtools-mcp")
-    end
-
-    it "includes --userDataDir when user_data_dir is provided" do
-      cmd = described_class.build_mcp_command(user_data_dir: "/tmp/profile")
-      expect(cmd).to include("--userDataDir", "/tmp/profile")
-    end
-
-    it "excludes --userDataDir when user_data_dir is nil" do
-      cmd = described_class.build_mcp_command
-      expect(cmd).not_to include("--userDataDir")
-    end
-  end
-
   # ---------------------------------------------------------------------------
   # Tool metadata
   # ---------------------------------------------------------------------------

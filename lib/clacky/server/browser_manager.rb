@@ -151,11 +151,12 @@ module Clacky
     # @param arguments  [Hash]
     # @return [Hash] parsed MCP result
     # @raise [RuntimeError] on timeout or protocol error
+    # @raise [BrowserNotReachableError] when Chrome is not running
     def mcp_call(tool_name, arguments = {})
       call_resp = nil
 
       @mutex.synchronize do
-        ensure_process!
+        ensure_process!  # May raise BrowserNotReachableError
 
         call_id  = @call_id
         @call_id += 1
@@ -185,6 +186,9 @@ module Clacky
 
         result
       end
+    rescue Clacky::BrowserNotReachableError => e
+      # Return friendly error for AI to guide user
+      raise Clacky::AgentError, e.message
     end
 
     # ---------------------------------------------------------------------------
@@ -203,7 +207,26 @@ module Clacky
     def ensure_process!
       return if process_alive?
 
-      cmd = Clacky::Tools::Browser.build_mcp_command
+      # ⭐️ Critical: Verify Chrome is reachable BEFORE starting MCP daemon
+      detected = Clacky::Utils::BrowserDetector.detect
+
+      if detected[:status] == :not_found
+        raise Clacky::BrowserNotReachableError, <<~MSG.strip
+          Chrome/Edge is not running or remote debugging is not enabled.
+
+          Please:
+          1. Open Chrome or Edge
+          2. Enable remote debugging: Visit chrome://inspect/#remote-debugging and click "Allow remote debugging"
+          3. Retry this action
+
+          The browser tool will automatically reconnect once Chrome is running.
+        MSG
+      end
+
+      # Build command with verified detection result
+      cmd = build_mcp_command(detected)
+      Clacky::Logger.info("[BrowserManager] Starting MCP daemon: #{cmd.join(' ')}")
+      
       stdin, stdout, stderr_io, wait_thr = Open3.popen3(*cmd)
       Thread.new { stderr_io.read rescue nil }
 
@@ -220,22 +243,50 @@ module Clacky
         params:  {}
       })
 
+      Clacky::Logger.debug("[BrowserManager] Sending MCP initialize...")
       stdin.write(init_msg + "\n")
       stdin.flush
 
       init_resp = read_response(stdout, target_id: 1,
                                 timeout: Clacky::Tools::Browser::MCP_HANDSHAKE_TIMEOUT)
       unless init_resp
+        Clacky::Logger.error("[BrowserManager] MCP initialize handshake timed out after #{Clacky::Tools::Browser::MCP_HANDSHAKE_TIMEOUT}s")
         Process.kill("TERM", wait_thr.pid) rescue nil
         raise "Chrome MCP initialize handshake timed out"
       end
 
+      Clacky::Logger.debug("[BrowserManager] MCP initialize successful, sending initialized notification...")
       stdin.write(notify_msg + "\n")
       stdin.flush
 
       @process = { stdin: stdin, stdout: stdout, pid: wait_thr.pid, wait_thr: wait_thr }
       @call_id = 2
-      Clacky::Logger.info("[BrowserManager] MCP daemon started (pid=#{wait_thr.pid})")
+      Clacky::Logger.info("[BrowserManager] MCP daemon started successfully (pid=#{wait_thr.pid})")
+    end
+
+    # Build chrome-devtools-mcp command with explicit connection parameters.
+    # Always uses the detected browser endpoint (no --autoConnect fallback).
+    # @param detected [Hash] { mode: :ws_endpoint, value: String } from BrowserDetector
+    # @return [Array<String>] command array
+    def build_mcp_command(detected)
+      args = chrome_mcp_feature_flags
+      
+      case detected[:mode]
+      when :ws_endpoint
+        Clacky::Logger.info("[BrowserManager] Using ws_endpoint mode: #{detected[:value]}")
+        ["chrome-devtools-mcp", *args, "--wsEndpoint", detected[:value]]
+      else
+        raise "Unknown detection mode: #{detected[:mode]}"
+      end
+    end
+
+    # Feature flags for chrome-devtools-mcp
+    def chrome_mcp_feature_flags
+      %w[
+        --experimentalStructuredContent
+        --experimental-page-id-routing
+        --experimentalVision
+      ]
     end
 
     # Must be called inside @mutex.

@@ -133,5 +133,6 @@ module Clacky
   class BadRequestError < AgentError; end  # 400 errors — our request was malformed, history should be rolled back
   class RetryableError < StandardError; end  # Transient errors that should be retried (5xx, HTML response, rate limit)
   class ToolCallError < AgentError; end  # Raised when tool call fails due to invalid parameters
+  class BrowserNotReachableError < AgentError; end  # Chrome/Edge not running or remote debugging disabled
   # BrowserManager singleton: Clacky::BrowserManager.instance
 end

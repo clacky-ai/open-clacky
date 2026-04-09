@@ -254,6 +254,13 @@ RSpec.describe Clacky::BrowserManager do
     end
 
     it "starts a new daemon and completes the MCP handshake" do
+      # Mock browser detection to return success
+      allow(Clacky::Utils::BrowserDetector).to receive(:detect).and_return({
+        status: :ok,
+        mode: :ws_endpoint,
+        value: "ws://127.0.0.1:9222/devtools/browser/test"
+      })
+
       init_resp   = json_rpc_response(id: 1, result: { "protocolVersion" => "2024-11-05", "capabilities" => {} })
       fake_stdin  = StringIO.new
       fake_stdout = StringIO.new(init_resp + "\n")
@@ -272,6 +279,13 @@ RSpec.describe Clacky::BrowserManager do
     end
 
     it "raises when the initialize handshake times out" do
+      # Mock browser detection to return success
+      allow(Clacky::Utils::BrowserDetector).to receive(:detect).and_return({
+        status: :ok,
+        mode: :ws_endpoint,
+        value: "ws://127.0.0.1:9222/devtools/browser/test"
+      })
+
       fake_stdin  = StringIO.new
       fake_stderr = StringIO.new
       fake_wait   = double("wait_thr", pid: 12_346)
@@ -281,6 +295,15 @@ RSpec.describe Clacky::BrowserManager do
       allow(manager).to receive(:read_response).and_return(nil)
 
       expect { manager.send(:ensure_process!) }.to raise_error(/initialize handshake timed out/)
+    end
+
+    it "raises BrowserNotReachableError when browser is not found" do
+      allow(Clacky::Utils::BrowserDetector).to receive(:detect).and_return({ status: :not_found })
+
+      expect { manager.send(:ensure_process!) }.to raise_error(
+        Clacky::BrowserNotReachableError,
+        /Chrome\/Edge is not running/
+      )
     end
   end
 

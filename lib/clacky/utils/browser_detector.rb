@@ -6,55 +6,95 @@ module Clacky
   module Utils
     # Detects a running browser (Chrome/Edge) that has remote debugging enabled.
     #
-    # Detection strategy (in priority order):
+    # Detection strategy:
     #
     #   1. Scan known UserData directories for DevToolsActivePort file.
     #      This file contains the exact port + WS path — most reliable.
     #      Returns { mode: :ws_endpoint, value: "ws://127.0.0.1:PORT/PATH" }
     #
-    #   2. TCP port scan on common remote debugging ports (9222–9224).
-    #      Chrome 146+ dropped HTTP /json/version, so we just probe TCP connectivity
-    #      and hand off to chrome-devtools-mcp via --browserUrl.
-    #      Returns { mode: :browser_url, value: "http://127.0.0.1:PORT" }
+    #   2. Verify the port is actually reachable via TCP probe.
     #
-    #   3. Nothing found → returns nil (caller should show guidance to user).
+    #   3. Nothing found or port unreachable → returns nil (browser not running).
     #
     # Supported environments: WSL, Linux, macOS.
     module BrowserDetector
-      # Ports to probe when DevToolsActivePort file is not found.
-      TCP_PROBE_PORTS = [9222, 9223, 9224].freeze
-      TCP_PROBE_TIMEOUT = 0.5 # seconds
 
       # Detect a running debuggable browser.
-      # @return [Hash, nil] { mode: :ws_endpoint|:browser_url, value: String } or nil
+      # Scans for DevToolsActivePort file across all platforms (macOS/Linux/WSL).
+      # Returns the detected WebSocket endpoint only if the port is reachable.
+      # @return [Hash] { mode: :ws_endpoint, value: String, status: :ok|:not_found }
       def self.detect
-        result = detect_via_active_port_file
-        result ||= detect_via_tcp_probe
-        result
+        os = EnvironmentDetector.os_type
+        Clacky::Logger.debug("[BrowserDetector] Starting browser detection (OS: #{os})...")
+        
+        detected = detect_via_active_port_file
+        
+        unless detected
+          Clacky::Logger.warn("[BrowserDetector] ✗ No reachable browser found")
+          return { status: :not_found }
+        end
+        
+        Clacky::Logger.info("[BrowserDetector] ✓ Browser detected and reachable: #{detected[:mode]} → #{detected[:value]}")
+        detected.merge(status: :ok)
       end
 
       # -----------------------------------------------------------------------
-      # Strategy 1: DevToolsActivePort file scan
+      # DevToolsActivePort file scan
       # -----------------------------------------------------------------------
 
       # @return [Hash, nil]
       def self.detect_via_active_port_file
-        user_data_dirs.each do |dir|
+        Clacky::Logger.debug("[BrowserDetector] Scanning UserData directories for DevToolsActivePort...")
+        
+        dirs = user_data_dirs
+        Clacky::Logger.debug("[BrowserDetector] Candidate directories: #{dirs.size} found")
+        
+        dirs.each do |dir|
           port_file = File.join(dir, "DevToolsActivePort")
           next unless File.exist?(port_file)
 
+          Clacky::Logger.debug("[BrowserDetector] Found DevToolsActivePort: #{port_file}")
+          
           ws = parse_active_port_file(port_file)
-          return { mode: :ws_endpoint, value: ws } if ws
+          unless ws
+            Clacky::Logger.debug("[BrowserDetector] ✗ Failed to parse #{port_file}")
+            next
+          end
+          
+          Clacky::Logger.debug("[BrowserDetector] Parsed WS endpoint: #{ws}")
+          
+          # ⭐️ Verify port BEFORE returning — skip stale files
+          candidate = { mode: :ws_endpoint, value: ws }
+          if verify_port(candidate)
+            Clacky::Logger.debug("[BrowserDetector] ✓ Port is reachable, using this endpoint")
+            return candidate
+          else
+            Clacky::Logger.debug("[BrowserDetector] ✗ Port not reachable, trying next directory...")
+          end
         end
+        
+        Clacky::Logger.debug("[BrowserDetector] No reachable browser found")
         nil
       end
 
-      # @return [Hash, nil]
-      def self.detect_via_tcp_probe
-        TCP_PROBE_PORTS.each do |port|
-          return { mode: :browser_url, value: "http://127.0.0.1:#{port}" } if tcp_open?("127.0.0.1", port)
+      # Verify that the detected browser port is actually reachable.
+      # Extracts port from ws:// URL and attempts TCP connection.
+      # @param detected [Hash] { mode: :ws_endpoint, value: String }
+      # @return [Boolean] true if port is open and reachable
+      def self.verify_port(detected)
+        return false unless detected
+
+        port = case detected[:mode]
+        when :ws_endpoint
+          # ws://127.0.0.1:9222/devtools/...
+          detected[:value][/ws:\/\/127\.0\.0\.1:(\d+)/, 1]&.to_i
         end
-        nil
+
+        return false unless port && port > 0
+
+        reachable = tcp_open?("127.0.0.1", port)
+        Clacky::Logger.debug("[BrowserDetector] Port #{port} reachable: #{reachable}")
+        reachable
       end
 
       # -----------------------------------------------------------------------
@@ -64,11 +104,16 @@ module Clacky
       # Returns ordered list of candidate UserData dirs to check.
       # @return [Array<String>]
       def self.user_data_dirs
-        case EnvironmentDetector.os_type
+        os = EnvironmentDetector.os_type
+        Clacky::Logger.debug("[BrowserDetector] Detected OS: #{os}")
+        
+        case os
         when :wsl   then wsl_user_data_dirs
         when :linux then linux_user_data_dirs
         when :macos then macos_user_data_dirs
-        else []
+        else
+          Clacky::Logger.warn("[BrowserDetector] Unknown OS type: #{os}")
+          []
         end
       end
 
@@ -136,11 +181,12 @@ module Clacky
         nil
       end
 
-      # Probe TCP port with a short timeout.
-      # Chrome 146+ dropped HTTP /json/version — TCP reachability is sufficient.
-      # @return [Boolean]
+      # Probe TCP port with a short timeout to verify port is actually reachable.
+      # @param host [String] hostname
+      # @param port [Integer] port number
+      # @return [Boolean] true if port is open and reachable
       private_class_method def self.tcp_open?(host, port)
-        Socket.tcp(host, port, connect_timeout: TCP_PROBE_TIMEOUT) { true }
+        Socket.tcp(host, port, connect_timeout: 0.5) { true }
       rescue Errno::ECONNREFUSED, Errno::ETIMEDOUT, SocketError, Errno::EHOSTUNREACH
         false
       end
