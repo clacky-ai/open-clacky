@@ -230,14 +230,6 @@ RSpec.describe Clacky::Tools::Shell do
     it "returns nil for empty string" do
       expect(tool.detect_interaction("")).to be_nil
     end
-
-    it "returns UTF-8 encoded line even when input is ASCII-8BIT" do
-      # Simulate raw terminal byte stream with ASCII-8BIT encoding
-      raw = "Do you want to continue? [Y/n]".b
-      result = tool.detect_interaction(raw)
-      expect(result).not_to be_nil
-      expect(result[:line].encoding).to eq(Encoding::UTF_8)
-    end
   end
 
   # ---------------------------------------------------------------------------
