@@ -454,6 +454,15 @@ module Clacky
       # @param prefix_newline [Boolean] Whether to add a blank line before progress (default: true)
       # @param output_buffer [Hash, nil] Shared output buffer for real-time command output (optional)
       def show_progress(message = nil, prefix_newline: true, output_buffer: nil)
+        # If a shell command is currently streaming output (output_buffer active),
+        # do NOT interrupt it with a generic LLM-thinking progress. The shell progress
+        # already shows elapsed time and live output — overwriting it would destroy
+        # visibility. Only override when the caller explicitly provides its own buffer
+        # or when no shell buffer is active.
+        if output_buffer.nil? && @progress_output_buffer
+          return
+        end
+
         # Stop any existing progress thread
         stop_progress_thread
 
@@ -463,6 +472,9 @@ module Clacky
         @progress_message = message || Clacky::THINKING_VERBS.sample
         @progress_start_time = Time.now
         @progress_output_buffer = output_buffer
+        # Track how many output lines we've already streamed to the terminal,
+        # so we only print *new* lines each tick.
+        @progress_streamed_line_count = 0
         # Flag used by the progress thread to know when to stop gracefully.
         # Using a flag + join is safe because Thread#kill can interrupt a thread
         # while it holds @render_mutex, causing a permanent deadlock.
@@ -474,7 +486,7 @@ module Clacky
         output = @renderer.render_working("#{@progress_message}… #{hint}")
         append_output(output)
 
-        # Start background thread to update elapsed time
+        # Start background thread to update elapsed time and stream shell output
         @progress_thread = Thread.new do
           until @progress_thread_stop
             sleep 0.5
@@ -486,10 +498,24 @@ module Clacky
             elapsed = (Time.now - start).to_i
             buf = @progress_output_buffer
             hint = buf ? "(Ctrl+C to interrupt · Ctrl+O to view output · #{elapsed}s)" : "(Ctrl+C to interrupt · #{elapsed}s)"
-            update_progress_line(@renderer.render_working("#{@progress_message}… #{hint}"))
+            spinner_line = @renderer.render_working("#{@progress_message}… #{hint}")
+
+            # Stream new output lines from the shared command buffer inline
+            if buf
+              new_lines = collect_new_output_lines(buf)
+              unless new_lines.empty?
+                # Insert output lines above the spinner, then fall through to
+                # update_progress_line so the spinner always shows the latest elapsed time.
+                @layout.insert_lines_before_last(new_lines, spinner_line)
+              end
+            end
+
+            update_progress_line(spinner_line)
           end
-        rescue StandardError
-          # Silently handle thread errors
+        rescue StandardError => e
+          # Swallow thread errors silently — the progress thread is best-effort;
+          # a crash here should not bubble up and kill the main agent loop.
+          nil
         end
       end
 
@@ -501,11 +527,18 @@ module Clacky
       end
 
       # Clear progress indicator
-      def clear_progress
+      # @param force [Boolean] If true, clear even if a shell output_buffer is active.
+      #   Use force: true only from agent.rb's ensure block after a shell tool completes.
+      def clear_progress(force: false)
         # Guard: if no progress is active, do nothing.
         # This makes clear_progress idempotent — safe to call multiple times
         # (e.g. once from handle_submit and again from handle_agent_exception).
         return unless progress_active?
+
+        # Guard: if a shell command is actively streaming output (has output_buffer),
+        # do NOT clear it from a generic LLM call. The shell progress will be
+        # cleared by agent.rb's ensure block (with force: true) once the shell tool completes.
+        return if @progress_output_buffer && !force
 
         # Calculate elapsed time before stopping
         elapsed_time = @progress_start_time ? (Time.now - @progress_start_time).to_i : 0
@@ -542,6 +575,7 @@ module Clacky
         # Signal thread to stop without joining — it will exit on next loop tick
         @progress_start_time = nil
         @progress_output_buffer = nil
+        @progress_streamed_line_count = 0
         @progress_thread_stop = true
         # Detach: let the thread die on its own; we do NOT join here
         @progress_thread = nil
@@ -573,6 +607,7 @@ module Clacky
       def stop_progress_thread
         @progress_start_time = nil
         @progress_output_buffer = nil
+        @progress_streamed_line_count = 0
         @progress_thread_stop = true
         if @progress_thread&.alive?
           # Join with a short timeout; fall back to kill only as a last resort
@@ -835,6 +870,71 @@ module Clacky
           lines += stderr_lines.map(&:chomp)
         end
         lines.empty? ? ["(No output yet)"] : lines
+      end
+
+      # Collect new shell output lines since the last time we streamed them.
+      # Returns an array of rendered (styled) lines ready to be passed to
+      # `@layout.insert_lines_before_last`.  Updates @progress_streamed_line_count
+      # so the next call only picks up truly-new content.
+      #
+      # We combine stdout and stderr into a flat list (same order as they arrive)
+      # and style each line as dim gray so they look different from agent messages.
+      #
+      # @param buffer [Hash] The shared output_buffer ({stdout_lines:, stderr_lines:})
+      # @return [Array<String>] Rendered lines (may be empty)
+      # Patterns that indicate a line contains sensitive credential data.
+      # These lines are suppressed from the live streaming output shown inline.
+      SENSITIVE_LINE_PATTERNS = [
+        /ACCESS_KEY/i,
+        /SECRET_KEY/i,
+        /SECRET_ACCESS/i,
+        /PASSWORD/i,
+        /API_TOKEN/i,
+        /RAILWAY_TOKEN/i,
+        /clacky_ak_/i,
+        /clacky_dk_/i,
+        /tid_[A-Za-z0-9]{10}/,   # Tencent COS-style access key IDs
+      ].freeze
+
+      private def collect_new_output_lines(buffer)
+        return [] unless buffer
+
+        stdout_lines = buffer[:stdout_lines]&.to_a || []
+        stderr_lines = buffer[:stderr_lines]&.to_a || []
+
+        # Shell output arrives as ASCII-8BIT (binary pipe read).
+        # The actual bytes are valid UTF-8 (scripts use puts with UTF-8 source encoding).
+        # Use force_encoding to re-label the string as UTF-8 without replacing any bytes.
+        # Fall back to replacing invalid bytes only if force_encoding still produces an
+        # invalid string (e.g. genuinely binary data from a subprocess).
+        encode_safe = lambda do |s|
+          utf = s.dup.force_encoding("UTF-8")
+          utf.valid_encoding? ? utf : utf.encode("UTF-8", invalid: :replace, undef: :replace, replace: "?")
+        end
+
+        # Build a combined flat list: stdout lines first, then stderr lines if any
+        all_lines = stdout_lines.map { |l| encode_safe.call(l.chomp) }
+        all_lines += stderr_lines.map { |l| "  [err] #{encode_safe.call(l.chomp)}" } unless stderr_lines.empty?
+
+        already_shown = @progress_streamed_line_count || 0
+        # Guard: if already_shown >= current size, nothing new
+        return [] if already_shown >= all_lines.size
+
+        new_raw = all_lines[already_shown..]
+        return [] if new_raw.nil? || new_raw.empty?
+
+        # Update counter before rendering (prevents double-printing on re-entry)
+        @progress_streamed_line_count = all_lines.size
+
+        # Render each new line with a leading dim marker so users know it's live output
+        pastel = Pastel.new
+        new_raw.filter_map do |line|
+          # Skip blank lines to reduce noise
+          next nil if line.strip.empty?
+          # Suppress lines containing sensitive credentials (tokens, keys, passwords)
+          next nil if SENSITIVE_LINE_PATTERNS.any? { |pat| line.match?(pat) }
+          pastel.dim("  │ #{line}")
+        end
       end
 
       # Format tool call for display

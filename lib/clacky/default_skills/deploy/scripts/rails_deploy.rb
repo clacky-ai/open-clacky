@@ -51,27 +51,115 @@ module Clacky
       end
 
       # -----------------------------------------------------------------------
+      # Heartbeat — prints a progress line every HEARTBEAT_INTERVAL seconds so
+      # the user sees activity even when safe_shell is not streaming output.
+      # -----------------------------------------------------------------------
+
+      HEARTBEAT_INTERVAL = 10  # seconds
+
+      private def start_heartbeat(started_at)
+        @heartbeat_stop   = false
+        @current_phase    = "initializing"
+        @heartbeat_thread = Thread.new do
+          loop do
+            sleep HEARTBEAT_INTERVAL
+            break if @heartbeat_stop
+            elapsed = (Time.now - started_at).round
+            puts "[heartbeat] #{@current_phase} — #{elapsed}s elapsed"
+            $stdout.flush
+          end
+        end
+      end
+
+      private def stop_heartbeat
+        @heartbeat_stop = true
+        @heartbeat_thread&.join(2)
+      end
+
+      private def set_phase(label)
+        now = Time.now
+        # Print timing for the phase that just completed
+        if @current_phase && @phase_started_at
+          elapsed = (now - @phase_started_at).round
+          puts "  ⏱  #{@current_phase} — #{elapsed}s"
+        end
+        @current_phase  = label
+        @phase_started_at = now
+        puts "[phase] #{label}"
+        $stdout.flush
+      end
+
+      # Call at the very end of run to print timing for the last phase.
+      private def finish_phase
+        return unless @current_phase && @phase_started_at
+        elapsed = (Time.now - @phase_started_at).round
+        puts "  ⏱  #{@current_phase} — #{elapsed}s"
+        $stdout.flush
+      end
+
+      # -----------------------------------------------------------------------
       # Top-level orchestration
       # -----------------------------------------------------------------------
 
       def run
-        print_banner
+        result     = nil
+        started_at = Time.now
 
-        # Phase 0: binding + workspace key + project details
-        phase0 = run_phase0
-        return phase0 unless phase0[:success]
+        begin
+          print_banner
+          puts "[DEPLOY] Started at #{started_at.strftime("%Y-%m-%d %H:%M:%S")}"
 
-        # @dashboard_base_url is set by load_platform_config during Phase 0
-        project       = phase0[:project]
-        project_id    = phase0[:project_id]
-        api_client    = phase0[:api_client]
+          start_heartbeat(started_at)
 
-        # Phase 1: subscription / payment
-        phase1 = run_phase1(project, project_id, api_client)
-        return phase1 unless phase1[:success]
+          # Phase 0: binding + workspace key + project details
+          set_phase("Phase 0: verifying cloud project binding")
+          phase0 = run_phase0
+          unless phase0[:success]
+            result = phase0
+            return result
+          end
 
-        # Phase 2: deploy
-        run_phase2(project, project_id, api_client)
+          # @dashboard_base_url is set by load_platform_config during Phase 0
+          project       = phase0[:project]
+          project_id    = phase0[:project_id]
+          api_client    = phase0[:api_client]
+
+          # Phase 1: subscription / payment
+          set_phase("Phase 1: checking subscription")
+          phase1 = run_phase1(project, project_id, api_client)
+          unless phase1[:success]
+            result = phase1
+            return result
+          end
+
+          # Phase 2: deploy
+          set_phase("Phase 2: Railway deployment")
+          result = run_phase2(project, project_id, api_client, started_at: started_at)
+          result
+        rescue => e
+          result = { success: false, error: "Unexpected error: #{e.message}" }
+          puts "❌ Unexpected error: #{e.message}"
+          puts e.backtrace.first(10).join("\n")
+          result
+        ensure
+          stop_heartbeat
+          finish_phase   # print timing for the last phase
+          result ||= { success: false, error: "Unknown error" }
+          elapsed_total = (Time.now - started_at).round
+          duration_str  = format_duration(elapsed_total)
+          if result[:success]
+            puts "\n[DEPLOY] RESULT: SUCCESS (#{duration_str})"
+          else
+            puts "\n[DEPLOY] RESULT: FAILED (#{duration_str}) — #{result[:error]}"
+          end
+        end
+      end
+
+      private def format_duration(seconds)
+        return "#{seconds}s" if seconds < 60
+        m = seconds / 60
+        s = seconds % 60
+        s > 0 ? "#{m}m #{s}s" : "#{m}m"
       end
 
       # -----------------------------------------------------------------------
@@ -145,7 +233,7 @@ module Clacky
       # Phase 2 — Railway deployment (8 steps)
       # -----------------------------------------------------------------------
 
-      def run_phase2(project, project_id, api_client)
+      def run_phase2(project, project_id, api_client, started_at: nil)
         puts "\n[Phase 2] Starting Railway deployment...\n"
 
         # Pre-check: railway CLI installed?
@@ -158,15 +246,18 @@ module Clacky
         end
 
         # Step 0: ensure Gemfile.lock includes x86_64-linux platform
+        set_phase("Step 0: preparing project for Railway")
         step0 = step0_prepare_linux_platform
         return step0 unless step0[:success]
 
         # Step 0b: let user choose a deployment region
-        region_step = step0b_select_region(api_client)
+        set_phase("Step 0b: selecting deployment region")
+        region_step = step0b_select_region(api_client, project_id)
         return region_step unless region_step[:success]
         selected_region = region_step[:region]
 
         # Step 1: create deploy task (pass selected region if any)
+        set_phase("Step 1: creating deploy task")
         task = step1_create_task(project_id, api_client, region: selected_region)
         return task unless task[:success]
 
@@ -179,16 +270,19 @@ module Clacky
         deploy_service_id      = task[:deploy_service_id]
 
         # Step 2: railway link
+        set_phase("Step 2: linking Railway project")
         link = step2_railway_link(railway_token, platform_project_id)
         return link unless link[:success]
         main_service_name = link[:service_name]
 
         # Step 3: inject env vars
+        set_phase("Step 3: injecting env vars")
         env_result = step3_inject_env_vars(main_service_name, project, railway_token)
         return env_result unless env_result[:success]
 
         # Step 4: wait for DB + inject DATABASE_URL + bind domain
         # Also returns bucket_credentials from the Clacky services API
+        set_phase("Step 4: waiting for database + binding domain")
         step4 = step4_wait_db_and_bind(deploy_task_id, main_service_name, api_client, railway_token)
         return step4 unless step4[:success]
         domain_name        = step4[:domain_name]
@@ -202,19 +296,24 @@ module Clacky
         end
 
         # Step 5: trigger build
+        set_phase("Step 5: triggering build (railway up)")
         build = step5_trigger_build(main_service_name, project_id, deploy_task_id, api_client, railway_token)
         return build unless build[:success]
 
         # Step 6: monitor deploy status
+        set_phase("Step 6: monitoring build & deployment status")
         monitor = step6_monitor_status(deploy_task_id, project_id, deploy_service_id, api_client,
                                        main_service_name, railway_token)
         return monitor unless monitor[:success]
 
         # Step 7: database migrations
+        set_phase("Step 7: running database migrations")
         step7_run_migrations(main_service_name, railway_token)
 
         # Step 8: health check + notify success
-        step8_finish(domain_name, project_id, deploy_task_id, deploy_service_id, api_client)
+        set_phase("Step 8: health check + finalising")
+        step8_finish(domain_name, project_id, deploy_task_id, deploy_service_id, api_client,
+                     started_at: started_at)
       end
 
       # -----------------------------------------------------------------------
@@ -338,6 +437,40 @@ module Clacky
         YAML
       end
 
+      # Persist the most recent deploy_task_id into .clacky/openclacky.yml.
+      # Merges into the existing file so project_id / project_name are preserved.
+      def write_deploy_task_id(deploy_task_id)
+        return if deploy_task_id.to_s.strip.empty?
+
+        binding_file = ".clacky/openclacky.yml"
+        data = if File.exist?(binding_file)
+                 YAML.safe_load(File.read(binding_file)) || {}
+               else
+                 {}
+               end
+
+        data["deploy_task_id"] = deploy_task_id.to_s.strip
+
+        FileUtils.mkdir_p(".clacky")
+        File.write(binding_file, data.to_yaml)
+      rescue => e
+        warn "  ⚠️  Could not write deploy_task_id to #{binding_file}: #{e.message}"
+      end
+
+      # Read the most recent deploy_task_id from .clacky/openclacky.yml.
+      # Returns nil if the file doesn't exist or the key is absent.
+      def read_deploy_task_id
+        binding_file = ".clacky/openclacky.yml"
+        return nil unless File.exist?(binding_file)
+
+        data = YAML.safe_load(File.read(binding_file)) || {}
+        id = data["deploy_task_id"].to_s.strip
+        id.empty? ? nil : id
+      rescue => e
+        warn "  ⚠️  Could not read deploy_task_id from #{binding_file}: #{e.message}"
+        nil
+      end
+
       def write_categorized_config(categorized_config)
         return if categorized_config.nil? || categorized_config.empty?
 
@@ -377,35 +510,30 @@ module Clacky
         puts "\n❌ Deployment blocked: Clacky subscription required."
         puts "   Project : #{project_name} (#{project_id})"
         puts "   Status  : #{project.dig("subscription", "status") || "none"}"
-        puts "\n   Please subscribe to continue deployment."
+        puts "\n   A subscription is needed before deployment can proceed."
 
         payment_url = "#{@dashboard_base_url}/#{project_id}"
         open_browser(payment_url)
         puts "\n🌐 Payment page opened:"
         puts "   #{payment_url}"
-        puts "\n⏳ Waiting for payment confirmation (3 minutes)...\n\n"
+        puts "\n⏳ Polling for payment status (up to 3 minutes)...\n\n"
 
-        # Poll payment status with live countdown
+        # Poll payment status every PAYMENT_POLL_INTERVAL seconds.
+        # Check immediately on the first iteration, then sleep between attempts.
         total_seconds = PAYMENT_POLL_INTERVAL * PAYMENT_POLL_MAX  # 180s
 
         PAYMENT_POLL_MAX.times do |i|
-          # Poll first, then sleep — so we check immediately after each interval
-          sleep PAYMENT_POLL_INTERVAL
-
           result = api_client.payment_status(project_id: project_id)
 
           if result[:success] && result[:is_paid]
-            puts "\r   ✅ Payment confirmed!                              "
+            puts "   ✅ Payment activated!"
             return { success: true }
           end
 
-          remaining = total_seconds - ((i + 1) * PAYMENT_POLL_INTERVAL)
-          if remaining > 0
-            print "\r   ⏳ Checking payment status... #{remaining}s remaining  "
-          else
-            print "\r   ⏰ Time's up.                                     "
-          end
-          $stdout.flush
+          remaining = total_seconds - (i * PAYMENT_POLL_INTERVAL)
+          puts "   ⏳ Checking payment status... #{remaining}s remaining"
+
+          sleep PAYMENT_POLL_INTERVAL
         end
 
         # Timeout — exit with clear guidance, no further prompting
@@ -425,11 +553,12 @@ module Clacky
       # to input a region manually; entering nothing skips region selection entirely.
       #
       # @param api_client [DeployApiClient]
+      # @param project_id [String]
       # @return [Hash] { success: true, region: String | nil }
-      def step0b_select_region(api_client)
+      def step0b_select_region(api_client, project_id)
         puts "\n[Step 0b] Selecting deployment region..."
 
-        result = api_client.regions
+        result = api_client.regions(project_id: project_id)
 
         regions = if result[:success] && result[:regions].any?
                     result[:regions]
@@ -438,10 +567,26 @@ module Clacky
                     []
                   end
 
+        # Non-interactive mode: skip stdin prompts entirely when not running in a real TTY
+        # (e.g. called from agent subshell). This prevents indefinite blocking on $stdin.gets.
+        unless $stdin.isatty
+          if regions.any?
+            selected = regions.first
+            region   = selected["id"] || selected["name"] || selected.to_s
+            label    = selected["label"] || selected["name"] || region
+            puts "  ℹ️  Non-interactive mode — auto-selecting first region: #{label} [#{region}]"
+            return { success: true, region: region }
+          else
+            puts "  ℹ️  Non-interactive mode — using platform default region"
+            return { success: true, region: nil }
+          end
+        end
+
         if regions.empty?
-          # Manual fallback
-          print "  Enter a region slug (leave blank to skip): "
-          input = $stdin.gets.to_s.strip
+          # Manual fallback with 20s timeout to prevent indefinite blocking
+          print "  Enter a region slug (leave blank to skip, auto-skip in 20s): "
+          $stdout.flush
+          input = timed_gets(20).to_s.strip
           region = input.empty? ? nil : input
           puts region ? "  ✅ Region set to: #{region}" : "  ℹ️  No region specified, using platform default"
           return { success: true, region: region }
@@ -455,9 +600,10 @@ module Clacky
           puts "    #{idx + 1}) #{label}  [#{id}]"
         end
 
-        # Prompt for selection
-        print "  Select region (1-#{regions.size}, or press Enter to use default): "
-        input = $stdin.gets.to_s.strip
+        # Prompt for selection with 20s timeout to prevent indefinite blocking
+        print "  Enter region number (1-#{regions.size}, or press Enter/wait 20s for default): "
+        $stdout.flush
+        input = timed_gets(20).to_s.strip
 
         if input.empty?
           puts "  ℹ️  No region selected, using platform default"
@@ -479,6 +625,17 @@ module Clacky
       rescue Interrupt
         puts "\n  ℹ️  Region selection cancelled, using platform default"
         { success: true, region: nil }
+      end
+
+      # Read a line from stdin with a timeout. Returns nil (treated as empty) if the
+      # timeout fires or stdin is not a TTY.  Uses IO.select so it works on both
+      # MRI and JRuby without spawning an extra thread.
+      def timed_gets(seconds)
+        ready = IO.select([$stdin], nil, nil, seconds)
+        return nil unless ready
+        $stdin.gets
+      rescue
+        nil
       end
 
       def step0_prepare_linux_platform
@@ -600,6 +757,10 @@ module Clacky
         unless result[:success]
           return hard_fail("Failed to create deploy task: #{result[:error]}")
         end
+
+        # Persist deploy_task_id to .clacky/openclacky.yml so other tools can
+        # query the most recent deployment without needing to call the API.
+        write_deploy_task_id(result[:deploy_task_id])
 
         puts "✅ Deploy task created: #{result[:deploy_task_id]}"
         result
@@ -751,7 +912,7 @@ module Clacky
                 db_svc_name = result[:db_service]["service_name"]
                 db_ref      = "${{#{db_svc_name}.DATABASE_PUBLIC_URL}}"
 
-                puts "\r  🗄️  Database ready (#{db_svc_name}), injecting DATABASE_URL...        "
+                puts "  🗄️  Database ready (#{db_svc_name}), injecting DATABASE_URL..."
                 DeployTools::SetDeployVariables.execute(
                   service_name:   service_name,
                   variables:      { "DATABASE_URL" => db_ref },
@@ -770,32 +931,40 @@ module Clacky
 
               break if db_injected && !domain_name.nil?
             else
-              print "\r  ⚠️  services poll failed: #{result[:error]} (attempt #{i + 1}/#{DB_POLL_MAX})  "
-              $stdout.flush
+              puts "  ⚠️  services poll failed: #{result[:error]} (attempt #{i + 1}/#{DB_POLL_MAX})"
             end
 
             # Sleep before next iteration (skip sleep on last attempt)
             unless i == DB_POLL_MAX - 1
               sleep DB_POLL_INTERVAL
               elapsed += DB_POLL_INTERVAL
-              print "\r  ⏳ Waiting for services... #{elapsed}s elapsed (#{i + 1}/#{DB_POLL_MAX})  "
-              $stdout.flush
+              puts "  ⏳ Waiting for services... #{elapsed}s elapsed (#{i + 1}/#{DB_POLL_MAX})"
             end
           end
         end
 
-        puts "" # newline after \r spinner
+        # (removed blank puts — no longer needed after removing \r spinner)
 
-        # Bind domain if not returned by services API
-        if domain_name.nil?
-          print "  🌐 Binding domain via API..."
-          bind = api_client.bind_domain(deploy_task_id: deploy_task_id)
-          if bind[:success]
-            domain_name = bind[:domain]
-            puts " ✅ #{domain_name}"
-          else
-            puts " ⚠️  domain not available yet"
-          end
+        # Always call bind_domain — services API only pre-allocates the name,
+        # actual Railway-side binding requires an explicit bind_domain call.
+        print "  🌐 Binding domain via API..."
+        bind = api_client.bind_domain(deploy_task_id: deploy_task_id)
+        if bind[:success]
+          domain_name = bind[:domain] if bind[:domain] && !bind[:domain].to_s.empty?
+          puts " ✅ #{domain_name}"
+        else
+          puts " ⚠️  bind_domain failed: #{bind[:error]}"
+          puts "  ℹ️  Using pre-allocated domain: #{domain_name}" if domain_name
+        end
+
+        # Persist domain to .clacky/deploy.yml for future reference
+        if domain_name
+          deploy_config_path = ".clacky/deploy.yml"
+          existing = File.exist?(deploy_config_path) ? YAML.load_file(deploy_config_path) || {} : {}
+          updated  = existing.merge("domain" => domain_name, "deployed_at" => Time.now.strftime("%Y-%m-%d %H:%M:%S"))
+          FileUtils.mkdir_p(".clacky")
+          File.write(deploy_config_path, YAML.dump(updated))
+          puts "  💾 Domain saved to #{deploy_config_path}"
         end
 
         puts "✅ Step 4 complete. Domain: #{domain_name || "(not available yet)"}"
@@ -831,35 +1000,31 @@ module Clacky
         puts "\n[Step 6] Monitoring deployment status..."
 
         elapsed = 0
-        dots    = 0
 
         DEPLOY_POLL_MAX.times do |i|
           sleep DEPLOY_POLL_INTERVAL
           elapsed += DEPLOY_POLL_INTERVAL
-          dots    += 1
 
           result = api_client.deploy_status(deploy_task_id: deploy_task_id)
 
           unless result[:success]
-            print "\r  ⏳ Deploying#{"." * (dots % 4 + 1)}   #{elapsed}s elapsed (polling...)       "
-            $stdout.flush
+            puts "  ⏳ Deploying... #{elapsed}s elapsed (polling...)"
             next
           end
 
           case result[:status]
           when "SUCCESS"
-            puts "\r  ✅ Deployment succeeded! (#{elapsed}s)                              "
+            puts "  ✅ Deployment succeeded! (#{elapsed}s)"
             return { success: true, url: result[:url] }
           when "FAILED", "CRASHED", "ERROR"
-            puts "\r  ❌ Deployment #{result[:status]} (#{elapsed}s)                      "
+            puts "  ❌ Deployment #{result[:status]} (#{elapsed}s)"
             show_build_logs(service_name, platform_token)
             api_client.notify(project_id: project_id, deploy_task_id: deploy_task_id,
                               status: "failed", message: "Deploy status: #{result[:status]}")
             return hard_fail("Deployment failed with status: #{result[:status]}")
           else
             current_status = result[:status].to_s.empty? ? "building" : result[:status].downcase
-            print "\r  ⏳ Deploying#{". " * (dots % 4 + 1)}  #{elapsed}s elapsed [#{current_status}]       "
-            $stdout.flush
+            puts "  ⏳ Deploying... #{elapsed}s elapsed [#{current_status}]"
           end
         end
 
@@ -912,11 +1077,16 @@ module Clacky
         { success: true }
       end
 
-      def step8_finish(domain_name, project_id, deploy_task_id, deploy_service_id, api_client)
+      def step8_finish(domain_name, project_id, deploy_task_id, deploy_service_id, api_client,
+                       started_at: nil)
         puts "\n[Step 8] Finalising deployment..."
 
         app_url  = domain_name ? "https://#{domain_name.sub(/\Ahttps?:\/\//, "")}" : nil
         dash_url = "#{@dashboard_base_url}/#{project_id}"
+
+        # Detect app port from project config — only sent on success notify
+        app_port = detect_app_port
+        puts "  🔌 Detected app port: #{app_port}"
 
         # Notify success immediately — don't block on health check
         api_client.notify(
@@ -924,8 +1094,12 @@ module Clacky
           deploy_task_id:    deploy_task_id,
           deploy_service_id: deploy_service_id,
           status:            "success",
-          target_port:       3000
+          target_port:       app_port
         )
+
+        # Calculate total elapsed time
+        total_seconds  = started_at ? (Time.now - started_at).round : nil
+        duration_str   = total_seconds ? format_duration(total_seconds) : nil
 
         # Print success banner right away so user sees the URL without waiting
         puts "\n" + "=" * 60
@@ -933,6 +1107,7 @@ module Clacky
         puts "=" * 60
         puts "🌐 URL       : #{app_url || "(not available)"}"
         puts "📊 Dashboard : #{dash_url}"
+        puts "⏱️  Total time : #{duration_str || "n/a"}"
         puts "=" * 60
 
         # Health check runs after banner — non-fatal, purely informational
@@ -977,6 +1152,39 @@ module Clacky
           return true if in_platforms && line.strip == platform
         end
         false
+      end
+
+      # Detect the app's HTTP port from project config files.
+      # Checks (in order): config/puma.rb → Procfile → defaults to 3000.
+      # Format seconds into a human-readable duration string (e.g. "2m 34s", "45s").
+      def format_duration(seconds)
+        return "#{seconds}s" if seconds < 60
+        m = seconds / 60
+        s = seconds % 60
+        s > 0 ? "#{m}m #{s}s" : "#{m}m"
+      end
+
+      def detect_app_port
+        # config/puma.rb: port ENV.fetch("PORT", 3000)  or  port 3000
+        if File.exist?("config/puma.rb")
+          content = File.read("config/puma.rb")
+          if content =~ /port\s+ENV\.fetch\(["']PORT["']\s*,\s*(\d+)\s*\)/
+            return $1.to_i
+          end
+          if content =~ /port\s+(\d+)/
+            return $1.to_i
+          end
+        end
+
+        # Procfile: web: bundle exec puma -p 3000  or  -p $PORT
+        if File.exist?("Procfile")
+          content = File.read("Procfile")
+          if content =~ /web:.*-p\s+(\d+)/
+            return $1.to_i
+          end
+        end
+
+        3000
       end
 
       def railway_cli_available?
@@ -1054,12 +1262,21 @@ module Clacky
       end
 
       def generate_secret_key_base
-        out, _err, status = Open3.capture3("bundle exec rails secret")
-        return out.strip if status.success? && !out.strip.empty?
+        # Use a 30s timeout so a slow Rails boot doesn't silently hang the deploy.
+        # Open3.capture3 blocks indefinitely; Timeout::Error is raised if it exceeds the limit.
+        require "timeout"
+        begin
+          out = nil
+          Timeout.timeout(30) do
+            out, _err, status = Open3.capture3("bundle exec rails secret")
+            return out.strip if status.success? && !out.strip.empty?
+          end
+        rescue Timeout::Error
+          warn "  ⚠️  `bundle exec rails secret` timed out (>30s) — using SecureRandom fallback"
+        rescue => e
+          warn "  ⚠️  `bundle exec rails secret` failed (#{e.message}) — using SecureRandom fallback"
+        end
         # Fallback: generate a cryptographically secure key using SecureRandom
-        require "securerandom"
-        SecureRandom.hex(64)
-      rescue
         require "securerandom"
         SecureRandom.hex(64)
       end
@@ -1069,10 +1286,23 @@ module Clacky
         return {} unless File.exist?(app_yml)
 
         require "erb"
-        # Must ERB-render first: application.yml typically contains <%= ENV.fetch(...) %>
-        raw      = File.read(app_yml)
-        rendered = ERB.new(raw).result
-        data     = YAML.safe_load(rendered) || {}
+        require "timeout"
+
+        raw = File.read(app_yml)
+
+        # ERB.new(raw).result can hang if it calls ENV.fetch on a missing key
+        # (raises KeyError before YAML parse) — wrap in a 10s timeout.
+        rendered = begin
+          Timeout.timeout(10) { ERB.new(raw).result }
+        rescue Timeout::Error
+          warn "  ⚠️  ERB render of config/application.yml timed out (>10s) — skipping figaro vars"
+          return {}
+        rescue => e
+          warn "  ⚠️  ERB render error in config/application.yml: #{e.message} — skipping figaro vars"
+          return {}
+        end
+
+        data = YAML.safe_load(rendered) || {}
 
         # Figaro stores all vars at the top level (no "production:" block).
         # Skip blank values — those are placeholders to be filled by the user.
@@ -1102,16 +1332,35 @@ module Clacky
       end
 
       def first_deployment?(service_name, env)
-        # Check 1: can we connect to the DB at all?
+        require "timeout"
+
+        run_with_timeout = lambda do |cmd, limit|
+          out = nil
+          status = nil
+          Timeout.timeout(limit) do
+            out, _err, status = Open3.capture3(env, cmd)
+          end
+          [out, status]
+        rescue Timeout::Error
+          warn "  ⚠️  Command timed out (>#{limit}s): #{cmd.split.first(4).join(" ")}..."
+          [nil, nil]
+        rescue => e
+          warn "  ⚠️  Command error: #{e.message}"
+          [nil, nil]
+        end
+
+        # Check 1: can we connect to the DB at all? (60s timeout)
         check1_cmd = "railway run --service #{shell_escape(service_name)} " \
                      "bundle exec rails runner \"ActiveRecord::Base.connection; puts 'connected'\""
-        _out, _err, status1 = Open3.capture3(env, check1_cmd)
-        return true unless status1.success?
+        _out1, status1 = run_with_timeout.call(check1_cmd, 60)
+        return true if status1.nil? || !status1.success?
 
-        # Check 2: any migrations recorded?
+        # Check 2: any migrations recorded? (60s timeout)
         check2_cmd = "railway run --service #{shell_escape(service_name)} " \
                      "bundle exec rails db:migrate:status 2>&1"
-        out2, _err2, _status2 = Open3.capture3(env, check2_cmd)
+        out2, _status2 = run_with_timeout.call(check2_cmd, 60)
+
+        return false if out2.nil?
 
         # If no schema_migrations entries exist, output mentions "up" lines
         !out2.match?(/^\s*(up|down)\s+\d{14}/)

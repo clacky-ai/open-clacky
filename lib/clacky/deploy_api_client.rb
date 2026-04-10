@@ -76,12 +76,15 @@ module Clacky
 
     # Fetch the list of supported deployment regions.
     #
+    # @param project_id [String] Required by the backend to scope region availability.
     # @return [Hash] {
     #   success: true,
     #   regions: Array<Hash>  # e.g. [{ "id" => "us-west", "name" => "US West", "label" => "US West (Oregon)" }, ...]
     # } or { success: false, error: String }
-    def regions
-      response = connection.get("#{BASE_PATH}/deploy/regions")
+    def regions(project_id:)
+      response = connection.get("#{BASE_PATH}/deploy/regions") do |req|
+        req.params["project_id"] = project_id
+      end
 
       return http_error(response) unless response.status == 200
 
@@ -282,15 +285,15 @@ module Clacky
     # @param target_port       [Integer] default 3000
     # @return [Hash] { success: true } or { success: false, error: String }
     def notify(project_id:, deploy_task_id:, status:,
-               deploy_service_id: nil, message: nil, target_port: 3000)
+               deploy_service_id: nil, message: nil, target_port: nil)
       payload = {
         project_id:     project_id,
         deploy_task_id: deploy_task_id,
-        status:         status,
-        target_port:    target_port
+        status:         status
       }
       payload[:deploy_service_id] = deploy_service_id if deploy_service_id
       payload[:message]           = message           if message
+      payload[:target_port]       = target_port       if target_port
 
       response = connection.post("#{BASE_PATH}/deploy/notify") do |req|
         req.headers["Content-Type"] = "application/json"

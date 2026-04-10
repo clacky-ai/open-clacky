@@ -119,15 +119,59 @@ module Clacky
 
     # === Progress ===
 
+    # Interval (seconds) between shell output streaming ticks.
+    SHELL_OUTPUT_INTERVAL = 5
+
     def show_progress(message = nil, prefix_newline: true, output_buffer: nil)
       @progress_start_time = Time.now
       emit("progress", message: message, status: "start")
+
+      # If a shell output_buffer is provided, start a background thread that
+      # streams new stdout lines every SHELL_OUTPUT_INTERVAL seconds via a
+      # "shell_output" event.  Gives users real-time visibility for long commands.
+      start_shell_output_thread(output_buffer) if output_buffer
     end
 
-    def clear_progress
+    def clear_progress(force: false)
+      stop_shell_output_thread
       elapsed = @progress_start_time ? (Time.now - @progress_start_time).round(1) : 0
       @progress_start_time = nil
       emit("progress", status: "stop", elapsed: elapsed)
+    end
+
+    # Start a background thread that polls output_buffer and emits new lines.
+    private def start_shell_output_thread(output_buffer)
+      @shell_output_stop   = false
+      @shell_output_sent   = 0   # number of stdout lines already emitted
+      @shell_output_thread = Thread.new do
+        until @shell_output_stop
+          sleep SHELL_OUTPUT_INTERVAL
+          next if @shell_output_stop
+
+          begin
+            lines = output_buffer[:stdout_lines]&.to_a || []
+            new_lines = lines[@shell_output_sent..]
+            next if new_lines.nil? || new_lines.empty?
+
+            @shell_output_sent += new_lines.size
+            text = new_lines.map(&:chomp).join("\n")
+            emit("shell_output", text: text)
+          rescue StandardError
+            # Never let streaming errors crash the agent thread
+          end
+        end
+      rescue StandardError
+        # Thread-level safety net
+      end
+    end
+
+    # Stop the shell output background thread gracefully.
+    private def stop_shell_output_thread
+      return unless @shell_output_thread
+
+      @shell_output_stop = true
+      @shell_output_thread.join(2)
+      @shell_output_thread = nil
     end
 
     # === State updates ===

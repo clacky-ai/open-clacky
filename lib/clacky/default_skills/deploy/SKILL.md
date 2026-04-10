@@ -19,19 +19,53 @@ Trigger this skill when the user says:
 
 ## How to run
 
-Execute the deployment script directly via the shell tool.
-Do **not** add any AI reasoning steps between phases — the script handles all
-logic internally and is fully automated.
+### Step 1 — Tell the user deployment has started
 
-### Step 1 — Run the deploy script
+**Before running the script**, output a message to the user so they know work is underway:
+
+```
+🚀 Starting deployment... This usually takes 2-4 minutes.
+Checking project binding → subscription → building → migrating → health check
+```
+
+This is important because `safe_shell` does not stream output — the user sees
+nothing until the command finishes. The pre-run message reassures them.
+
+### Step 2 — Run the deploy script
 
 ```bash
 bundle exec ruby <absolute-path-to-this-skill>/scripts/rails_deploy.rb
 ```
 
-The script path is shown in the Supporting Files section below.
+**Timeout**: set to at least 600 seconds (10 minutes).
 
-The script runs three phases automatically:
+The script prints each step as it runs. When it finishes it prints one of:
+
+```
+[DEPLOY] RESULT: SUCCESS (2m 34s)
+[DEPLOY] RESULT: FAILED (45s) — <error message>
+```
+
+### Step 3 — Show the full output to the user
+
+After the script exits, **always show the complete stdout output** to the user
+in a code block or verbatim. The output contains step-by-step logs they need
+to see. Do NOT summarise silently — show everything, then add your summary.
+
+### On success
+After showing the output, report the deployed URL and any useful links.
+
+### On failure
+After showing the output, show the error message and summarise the most
+likely cause in one sentence. Suggest next steps (e.g. fix the error shown,
+then re-run `/deploy`).
+
+---
+
+## What the script does internally
+
+The script runs three phases automatically. Do **not** add any AI reasoning
+steps between phases — the script handles all logic internally.
 
 **Phase 0 — Cloud project binding**
 1. Reads `.clacky/openclacky.yml` for `project_id`
@@ -51,10 +85,10 @@ The script runs three phases automatically:
 | `PAID` | ✅ Continue |
 | `FREEZE` | ⚠️ Warn, continue |
 | `SUSPENDED` | ❌ Hard-fail |
-| `null` / `OFF` / `CANCELLED` | Open payment page, poll for confirmation |
+| `null` / `OFF` / `CANCELLED` | Open payment page, poll for activation |
 
 Payment polling: open `https://app.clacky.ai/dashboard/openclacky-project/<id>`
-in browser, poll `GET /openclacky/v1/deploy/payment` every 10 s for up to 60 s.
+in browser, poll `GET /openclacky/v1/deploy/payment` every 10 s for up to 180 s.
 
 **Phase 2 — Deployment (8 steps)**
 
@@ -71,17 +105,6 @@ in browser, poll `GET /openclacky/v1/deploy/payment` every 10 s for up to 60 s.
 
 All `railway` commands receive `RAILWAY_TOKEN` via Ruby `ENV` hash — no
 `clackycli` wrapper is needed.
-
-### Step 2 — Report result
-
-After the script exits:
-
-**On success** — print the final URL and dashboard link from script output.
-Do not add extra commentary beyond what the script already printed.
-
-**On failure** — show the error message from the script.
-If build logs were printed, summarise the most likely cause in one sentence.
-Suggest next steps (e.g. fix the error shown, then re-run `/deploy`).
 
 ---
 
