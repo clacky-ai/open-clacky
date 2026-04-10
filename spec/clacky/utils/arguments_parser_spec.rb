@@ -137,6 +137,22 @@ RSpec.describe Clacky::Utils::ArgumentsParser do
         expect(result[:path]).to eq("test.rb")
         expect(result[:start_line]).to eq(10)
       end
+
+      it "handles literal backslash-n instead of real newline (session JSON format)" do
+        # Real-world case from session 2026-04-10-11-45-34-b8099a0e.json line 821
+        # When session JSON is saved/loaded, newlines become literal \n (backslash+n)
+        # AND successfully parsed JSON may have malformed keys containing XML tags
+        call = {
+          name: "file_reader",
+          arguments: '{"end_line\":550</parameter>\n<parameter name=\"path":"openclacky/lib/clacky/web/index.html","start_line":400}'
+        }
+        
+        result = described_class.parse_and_validate(call, tool_registry)
+        
+        expect(result[:end_line]).to eq(550)
+        expect(result[:path]).to eq("openclacky/lib/clacky/web/index.html")
+        expect(result[:start_line]).to eq(400)
+      end
     end
 
     context "with missing required parameters" do

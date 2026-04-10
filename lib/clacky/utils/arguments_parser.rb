@@ -10,6 +10,16 @@ module Clacky
         # 1. Try standard parsing
         begin
           args = JSON.parse(call[:arguments], symbolize_names: true)
+          
+          # Check if any key contains XML tags (< or >) indicating contamination
+          # Even though JSON.parse succeeded, the keys might be malformed
+          has_xml_contamination = args.keys.any? { |k| k.to_s.include?('<') || k.to_s.include?('>') }
+          
+          if has_xml_contamination
+            # Force repair even though JSON.parse succeeded
+            raise JSON::ParserError.new("Keys contain XML contamination")
+          end
+          
           return validate_required_params(call, args, tool_registry)
         rescue JSON::ParserError => e
           # Continue to repair
@@ -30,24 +40,31 @@ module Clacky
 
       # Simple JSON repair: complete brackets and quotes, and remove XML contamination
       def self.repair_json(json_str)
-        result = json_str.strip
 
+        result = json_str.strip
+        # Step 0: Convert literal \n (backslash+n) to real newlines
+        result = result.gsub(/\\n/, "\n")
+        # Step 0.5: Unescape quotes in JSON keys and values (\" -> ")
+        # This handles cases like {"end_line\":550 or name=\"path\"
+        result = result.gsub(/\\"/, '"')
         # Step 1: Remove XML-style parameter tags that Claude might mix in
         # Pattern 1: </parameter> closing tags - remove completely
         result = result.gsub(/<\/parameter>/, '')
-        
+
         # Pattern 2: <parameter name="key"> or <parameter name="key": opening tags -> convert to JSON key
         # Example: \n<parameter name="end_line"> 330 -> , "end_line": 330
         # Also handles: \n<parameter name="end_line": 330 -> , "end_line": 330
-        result = result.gsub(/<parameter\s+name="([^"]+)":\s*/) { |match| ", \"#{$1}\": " }
-        result = result.gsub(/<parameter\s+name="([^"]+)">/) { |match| ", \"#{$1}\":" }
-        
+        # result = result.gsub(/<parameter\s+name="([^"\\]+)":\s*/) { |match| ", \"#{$1}\": " }
+        # result = result.gsub(/<parameter\s+name="([^"\\]+)">/) { |match| ", \"#{$1}\":" }
+        result = result.gsub(/<parameter\s+name=\\?"([^"\\]+)\\?"[>:]?\s*/) { |match| ", \"#{$1}\": " }
+
         # Pattern 3: Remove any remaining XML-like tags
         result = result.gsub(/<[^>]+>/, '')
 
         # Step 2: Clean up newlines with commas
         # Example: 315\n, "end_line" -> 315, "end_line"
         result = result.gsub(/\n\s*,/, ',')
+        result = result.gsub(/\n,/, ',')
         result = result.gsub(/,\s*\n/, ',')
 
         # Step 3: Clean up formatting issues

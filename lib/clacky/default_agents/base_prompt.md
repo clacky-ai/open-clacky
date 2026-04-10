@@ -10,6 +10,7 @@
 
 - **ALWAYS use `glob` tool to find files — NEVER use shell `find` command for file discovery**
 - Test your changes using the shell tool when appropriate
+- **All operations default to the working directory** (shown in session context)
 
 ## TODO Manager Rules
 

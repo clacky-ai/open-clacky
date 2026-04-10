@@ -130,7 +130,8 @@ module Clacky
             end
           rescue EOFError, IOError, Errno::ECONNRESET, Errno::EPIPE,
                  Errno::ETIMEDOUT, OpenSSL::SSL::SSLError => e
-            Clacky::Logger.warn("[feishu-ws] Connection lost (#{e.class}: #{e.message}), reconnecting in #{RECONNECT_DELAY}s...")
+            # Let the exception bubble up to start() where it will log and sleep before retry
+            raise
           ensure
             @ws_open = false
             @ws_socket = nil

@@ -100,10 +100,24 @@ ruby "SKILL_DIR/feishu_setup.rb"
 - Tell the user: "✅ Feishu channel configured automatically! The channel is ready."
 - **Stop here — do not proceed to manual steps.**
 
-**If exit code is non-0 (or script not found):**
-- Note the failure reason from stdout (the last `❌` line).
-- Tell the user: "Automated setup encountered an issue: `<reason>`. Switching to guided setup..."
-- Continue to Step 2 (manual flow) below.
+**If exit code is non-0:**
+- Check stdout for the error message.
+- **If the error contains "Browser not configured" or "browser tool":**
+  - Tell the user: "The browser tool is not configured yet. Let me help you set it up first..."
+  - Invoke the `browser-setup` skill: `invoke_skill("browser-setup", "setup")`.
+  - After browser-setup completes, tell the user: "Browser is ready! Let me retry the Feishu setup..."
+  - **Retry the script** (same command, same timeout). If it succeeds this time, stop. If it fails again, check the new error and proceed accordingly.
+- **If the error contains "No cookies found" or "Please log in":**
+  - Open Feishu login page using browser tool:
+    ```
+    browser(action="navigate", url="https://open.feishu.cn/app")
+    ```
+  - Tell the user: "I've opened Feishu in your browser. Please log in, then reply 'done'."
+  - Wait for "done".
+  - **Retry the script** (same command, same timeout). If it succeeds this time, stop. If it fails again with a different error, continue to Step 2.
+- **Otherwise (non-login, non-browser error):**
+  - Tell the user: "Automated setup encountered an issue: `<error message>`. Switching to guided setup..."
+  - Continue to Step 2 (manual flow) below.
 
 ---
 
