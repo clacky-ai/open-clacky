@@ -85,6 +85,35 @@ clone_template() {
     print_success "Git repository initialized"
 }
 
+# Add x86_64-linux platform to Gemfile.lock for Railway deployment
+# Railway always builds on x86_64-linux; local dev (macOS/Windows) may not include it.
+prepare_linux_platform() {
+    print_step "Preparing Gemfile.lock for Linux deployment (Railway)..."
+
+    if [ ! -f "Gemfile.lock" ]; then
+        print_warning "Gemfile.lock not found yet — skipping platform prep (will be handled at deploy time)"
+        return 0
+    fi
+
+    # Idempotent: skip if already present
+    if grep -q "x86_64-linux" Gemfile.lock; then
+        print_success "x86_64-linux platform already present in Gemfile.lock"
+        return 0
+    fi
+
+    if command -v bundle > /dev/null 2>&1; then
+        if bundle lock --add-platform x86_64-linux > /dev/null 2>&1; then
+            git add Gemfile.lock > /dev/null 2>&1
+            git commit -m "chore: add x86_64-linux platform for Railway deployment" > /dev/null 2>&1
+            print_success "Added x86_64-linux platform to Gemfile.lock"
+        else
+            print_warning "Could not add Linux platform to Gemfile.lock (will be handled at deploy time)"
+        fi
+    else
+        print_warning "bundler not found — skipping platform prep (will be handled at deploy time)"
+    fi
+}
+
 # Check and install environment dependencies
 check_environment() {
     print_step "Checking environment dependencies..."
@@ -156,6 +185,9 @@ main() {
         print_error "Setup failed. You can try running './bin/setup' manually"
         exit 1
     fi
+
+    # Prepare Gemfile.lock for Railway Linux deployment (idempotent)
+    prepare_linux_platform
 
     # Project is ready
     echo ""

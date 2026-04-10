@@ -681,7 +681,7 @@ module Clacky
               progress_timer.kill
               progress_timer.join
             end
-            @ui&.clear_progress if progress_shown
+            @ui&.clear_progress(force: true) if progress_shown
           end
 
           # Track modified files for Time Machine snapshots

@@ -79,6 +79,11 @@ module Clacky
 
     }.freeze
 
+    # Special sentinel provider ID for Clacky workspace-key import flow.
+    # This is NOT a regular preset – it triggers a dedicated import wizard
+    # instead of the normal model-edit form.
+    CLACKY_IMPORT_PROVIDER_ID = "clacky_import"
+
     class << self
       # Check if a provider preset exists
       # @param provider_id [String] The provider identifier (e.g., "anthropic", "openrouter")

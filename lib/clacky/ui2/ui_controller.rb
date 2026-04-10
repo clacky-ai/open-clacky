@@ -468,6 +468,15 @@ module Clacky
       # @param prefix_newline [Boolean] Whether to add a blank line before progress (default: true)
       # @param output_buffer [Hash, nil] Shared output buffer for real-time command output (optional)
       def show_progress(message = nil, prefix_newline: true, output_buffer: nil)
+        # If a shell command is currently streaming output (output_buffer active),
+        # do NOT interrupt it with a generic LLM-thinking progress. The shell progress
+        # already shows elapsed time and live output — overwriting it would destroy
+        # visibility. Only override when the caller explicitly provides its own buffer
+        # or when no shell buffer is active.
+        if output_buffer.nil? && @progress_output_buffer
+          return
+        end
+
         # Stop any existing progress thread
         stop_progress_thread
 
@@ -477,6 +486,9 @@ module Clacky
         @progress_message = message || Clacky::THINKING_VERBS.sample
         @progress_start_time = Time.now
         @progress_output_buffer = output_buffer
+        # Track how many output lines we've already streamed to the terminal,
+        # so we only print *new* lines each tick.
+        @progress_streamed_line_count = 0
         # Flag used by the progress thread to know when to stop gracefully.
         # Using a flag + join is safe because Thread#kill can interrupt a thread
         # while it holds @render_mutex, causing a permanent deadlock.
@@ -489,8 +501,7 @@ module Clacky
         output = @renderer.render_working("#{@progress_message}… (Ctrl+C to interrupt)")
         append_output(output)
 
-        # Start background thread to update elapsed time.
-        # Also dynamically adds "Ctrl+O to view output" hint once @stdout_lines is populated.
+        # Start background thread to update elapsed time and stream shell output
         @progress_thread = Thread.new do
           until @progress_thread_stop
             sleep 0.5
@@ -500,14 +511,26 @@ module Clacky
             next unless start
 
             elapsed = (Time.now - start).to_i
-            has_output = @stdout_lines && !@stdout_lines.empty?
-            hint = has_output ?
-              "(Ctrl+C to interrupt · Ctrl+O to view output · #{elapsed}s)" :
-              "(Ctrl+C to interrupt · #{elapsed}s)"
-            update_progress_line(@renderer.render_working("#{@progress_message}… #{hint}"))
+            buf = @progress_output_buffer
+            hint = buf ? "(Ctrl+C to interrupt · Ctrl+O to view output · #{elapsed}s)" : "(Ctrl+C to interrupt · #{elapsed}s)"
+            spinner_line = @renderer.render_working("#{@progress_message}… #{hint}")
+
+            # Stream new output lines from the shared command buffer inline
+            if buf
+              new_lines = collect_new_output_lines(buf)
+              unless new_lines.empty?
+                # Insert output lines above the spinner, then fall through to
+                # update_progress_line so the spinner always shows the latest elapsed time.
+                @layout.insert_lines_before_last(new_lines, spinner_line)
+              end
+            end
+
+            update_progress_line(spinner_line)
           end
-        rescue StandardError
-          # Silently handle thread errors
+        rescue StandardError => e
+          # Swallow thread errors silently — the progress thread is best-effort;
+          # a crash here should not bubble up and kill the main agent loop.
+          nil
         end
       end
 
@@ -519,11 +542,18 @@ module Clacky
       end
 
       # Clear progress indicator
-      def clear_progress
+      # @param force [Boolean] If true, clear even if a shell output_buffer is active.
+      #   Use force: true only from agent.rb's ensure block after a shell tool completes.
+      def clear_progress(force: false)
         # Guard: if no progress is active, do nothing.
         # This makes clear_progress idempotent — safe to call multiple times
         # (e.g. once from handle_submit and again from handle_agent_exception).
         return unless progress_active?
+
+        # Guard: if a shell command is actively streaming output (has output_buffer),
+        # do NOT clear it from a generic LLM call. The shell progress will be
+        # cleared by agent.rb's ensure block (with force: true) once the shell tool completes.
+        return if @progress_output_buffer && !force
 
         # Calculate elapsed time before stopping
         elapsed_time = @progress_start_time ? (Time.now - @progress_start_time).to_i : 0
@@ -563,7 +593,8 @@ module Clacky
         # Signal thread to stop without joining — it will exit on next loop tick
         @progress_start_time = nil
         @progress_output_buffer = nil
-        @stdout_lines = nil
+        @progress_output_buffer = nil
+        @progress_streamed_line_count = 0
         @progress_thread_stop = true
         # Detach: let the thread die on its own; we do NOT join here
         @progress_thread = nil
@@ -595,6 +626,7 @@ module Clacky
       def stop_progress_thread
         @progress_start_time = nil
         @progress_output_buffer = nil
+        @progress_streamed_line_count = 0
         @progress_thread_stop = true
         if @progress_thread&.alive?
           # Join with a short timeout; fall back to kill only as a last resort
@@ -839,6 +871,71 @@ module Clacky
       private def build_command_output_lines
         lines = @stdout_lines&.dup || []
         lines.empty? ? ["(No output yet)"] : lines
+      end
+
+      # Collect new shell output lines since the last time we streamed them.
+      # Returns an array of rendered (styled) lines ready to be passed to
+      # `@layout.insert_lines_before_last`.  Updates @progress_streamed_line_count
+      # so the next call only picks up truly-new content.
+      #
+      # We combine stdout and stderr into a flat list (same order as they arrive)
+      # and style each line as dim gray so they look different from agent messages.
+      #
+      # @param buffer [Hash] The shared output_buffer ({stdout_lines:, stderr_lines:})
+      # @return [Array<String>] Rendered lines (may be empty)
+      # Patterns that indicate a line contains sensitive credential data.
+      # These lines are suppressed from the live streaming output shown inline.
+      SENSITIVE_LINE_PATTERNS = [
+        /ACCESS_KEY/i,
+        /SECRET_KEY/i,
+        /SECRET_ACCESS/i,
+        /PASSWORD/i,
+        /API_TOKEN/i,
+        /RAILWAY_TOKEN/i,
+        /clacky_ak_/i,
+        /clacky_dk_/i,
+        /tid_[A-Za-z0-9]{10}/,   # Tencent COS-style access key IDs
+      ].freeze
+
+      private def collect_new_output_lines(buffer)
+        return [] unless buffer
+
+        stdout_lines = buffer[:stdout_lines]&.to_a || []
+        stderr_lines = buffer[:stderr_lines]&.to_a || []
+
+        # Shell output arrives as ASCII-8BIT (binary pipe read).
+        # The actual bytes are valid UTF-8 (scripts use puts with UTF-8 source encoding).
+        # Use force_encoding to re-label the string as UTF-8 without replacing any bytes.
+        # Fall back to replacing invalid bytes only if force_encoding still produces an
+        # invalid string (e.g. genuinely binary data from a subprocess).
+        encode_safe = lambda do |s|
+          utf = s.dup.force_encoding("UTF-8")
+          utf.valid_encoding? ? utf : utf.encode("UTF-8", invalid: :replace, undef: :replace, replace: "?")
+        end
+
+        # Build a combined flat list: stdout lines first, then stderr lines if any
+        all_lines = stdout_lines.map { |l| encode_safe.call(l.chomp) }
+        all_lines += stderr_lines.map { |l| "  [err] #{encode_safe.call(l.chomp)}" } unless stderr_lines.empty?
+
+        already_shown = @progress_streamed_line_count || 0
+        # Guard: if already_shown >= current size, nothing new
+        return [] if already_shown >= all_lines.size
+
+        new_raw = all_lines[already_shown..]
+        return [] if new_raw.nil? || new_raw.empty?
+
+        # Update counter before rendering (prevents double-printing on re-entry)
+        @progress_streamed_line_count = all_lines.size
+
+        # Render each new line with a leading dim marker so users know it's live output
+        pastel = Pastel.new
+        new_raw.filter_map do |line|
+          # Skip blank lines to reduce noise
+          next nil if line.strip.empty?
+          # Suppress lines containing sensitive credentials (tokens, keys, passwords)
+          next nil if SENSITIVE_LINE_PATTERNS.any? { |pat| line.match?(pat) }
+          pastel.dim("  │ #{line}")
+        end
       end
 
       # Format tool call for display
@@ -1141,6 +1238,15 @@ module Clacky
           # Add action buttons
           choices << { name: "─" * 50, disabled: true }
           choices << { name: "[+] Add New Model", value: { action: :add } }
+          # Show platform key status on the Import button
+          _platform_cfg = Clacky::PlatformConfig.load
+          _import_label = if _platform_cfg.configured?
+            _masked = "#{_platform_cfg.workspace_key[0..15]}..."
+            "[>] Import Model from Clacky  (workspace key: #{_masked})"
+          else
+            "[>] Import Model from Clacky"
+          end
+          choices << { name: _import_label, value: { action: :import_clacky } }
           choices << { name: "[*] Edit Current Model", value: { action: :edit } }
           choices << { name: "[-] Delete Model", value: { action: :delete } } if current_config.models.length > 1
           choices << { name: "[X] Close", value: { action: :close } }
@@ -1161,6 +1267,21 @@ module Clacky
             current_config.save
             # Return to indicate config changed (need to update client)
             return { action: :switch }
+          when :import_clacky
+            # Show Clacky workspace import wizard
+            imported = show_clacky_import_form(test_callback: test_callback)
+            if imported
+              current_config.add_model(
+                model:            imported[:model_name],
+                api_key:          imported[:llm_key],
+                base_url:         imported[:base_url],
+                anthropic_format: imported[:anthropic_format]
+              )
+              current_config.save
+              current_config.switch_model(current_config.models.length - 1)
+              current_config.save
+              return { action: :switch }
+            end
           when :add
             new_model = show_model_edit_form(nil, test_callback: test_callback)
             if new_model
@@ -1255,6 +1376,109 @@ module Clacky
         result # Return selected task_id or nil
       end
       
+      # ── Clacky workspace-key import wizard ──────────────────────────────────
+      #
+      # Collects a Workspace API key and a Clacky backend URL, calls the
+      # /openclacky/v1/workspace/keys endpoint to obtain the LLM key, then
+      # runs an optional connection test before returning the final config hash.
+      #
+      # @param test_callback [Proc, nil]  Same test_callback as show_model_edit_form
+      # @return [Hash, nil]
+      #   On success: { llm_key:, model_name:, base_url:, anthropic_format: true }
+      #   On cancel / failure: nil
+      private def show_clacky_import_form(test_callback: nil)
+        modal = Components::ModalComponent.new
+
+        # Pre-fill from persisted platform config
+        platform_cfg = Clacky::PlatformConfig.load
+
+        fields = [
+          {
+            name:    :workspace_key,
+            label:   "Workspace API Key (clacky_ak_...):",
+            default: platform_cfg.workspace_key || "",
+            mask:    true
+          },
+          {
+            name:    :clacky_base_url,
+            label:   "Clacky Backend URL (e.g. https://api.clacky.ai):",
+            default: platform_cfg.base_url
+          }
+        ]
+
+        # Validator: fetch LLM key from the workspace endpoint, then test it
+        validator = lambda do |values|
+          workspace_key   = values[:workspace_key].to_s.strip
+          clacky_base_url = values[:clacky_base_url].to_s.strip
+
+          if workspace_key.empty?
+            return { success: false, error: "Workspace API Key is required" }
+          end
+
+          unless workspace_key.start_with?("clacky_ak_")
+            return { success: false, error: "Key must start with clacky_ak_" }
+          end
+
+          if clacky_base_url.empty?
+            return { success: false, error: "Clacky Backend URL is required" }
+          end
+
+          # Step 1: fetch workspace LLM key
+          auth_client  = Clacky::ClackyAuthClient.new(workspace_key, base_url: clacky_base_url)
+          fetch_result = auth_client.fetch_workspace_keys
+
+          unless fetch_result[:success]
+            return { success: false, error: "Fetch failed: #{fetch_result[:error]}" }
+          end
+
+          # Stash the result so we can return it after the modal closes
+          @_clacky_import_result         = fetch_result
+          @_clacky_import_platform_input = { workspace_key: workspace_key, base_url: clacky_base_url }
+
+          # Step 2: test the LLM key (optional)
+          if test_callback
+            test_config_hash = {
+              "api_key"          => fetch_result[:llm_key],
+              "model"            => fetch_result[:model_name],
+              "base_url"         => fetch_result[:base_url],
+              "anthropic_format" => fetch_result[:anthropic_format]
+            }
+            temp_config = Clacky::AgentConfig.new(models: [test_config_hash], current_model_index: 0)
+            test_result = test_callback.call(temp_config)
+
+            unless test_result[:success]
+              @_clacky_import_result         = nil
+              @_clacky_import_platform_input = nil
+              return { success: false, error: "LLM key test failed: #{test_result[:error]}" }
+            end
+          end
+
+          { success: true }
+        end
+
+        result = modal.show(
+          title:     "Import from Clacky Workspace",
+          fields:    fields,
+          validator: validator,
+          on_close:  -> { @layout.rerender_all }
+        )
+
+        return nil if result.nil?
+
+        # Persist the platform credentials so the user doesn't have to re-enter next time
+        if @_clacky_import_platform_input
+          platform_cfg.workspace_key = @_clacky_import_platform_input[:workspace_key]
+          platform_cfg.base_url      = @_clacky_import_platform_input[:base_url]
+          platform_cfg.save
+          @_clacky_import_platform_input = nil
+        end
+
+        # Return the stashed import result (set inside the validator)
+        imported = @_clacky_import_result
+        @_clacky_import_result = nil
+        imported
+      end
+
       # Show form for editing a model
       # @param model [Hash, nil] Existing model hash or nil for new model
       # @return [Hash, nil] Updated model hash or nil if cancelled
