@@ -9,7 +9,7 @@ module Clacky
   # Handles creating projects, fetching project details (including subscription
   # status and categorized_config), and listing projects in a workspace.
   #
-  # All API calls use the Workspace API Key (clacky_ak_*) from PlatformConfig.
+  # All API calls use the Workspace API Key (clacky_ak_*) from ClackyCloudConfig.
   #
   # Usage:
   #   client = CloudProjectClient.new("clacky_ak_xxx", base_url: "https://api.clacky.ai")

@@ -31,7 +31,7 @@ module Clacky
 
     # === Progress ===
     def show_progress(message = nil, prefix_newline: true, output_buffer: nil); end
-    def clear_progress(force: false); end
+    def clear_progress; end
 
     # === State updates ===
     def update_sessionbar(tasks: nil, cost: nil, status: nil); end

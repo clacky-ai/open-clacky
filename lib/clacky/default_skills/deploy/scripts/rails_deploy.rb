@@ -16,7 +16,7 @@ GEM_LIB_DIR       = File.expand_path("../../../../..", DEPLOY_SCRIPT_DIR)
 
 $LOAD_PATH.unshift(GEM_LIB_DIR) unless $LOAD_PATH.include?(GEM_LIB_DIR)
 
-require "clacky/platform_config"
+require "clacky/clacky_cloud_config"
 require "clacky/cloud_project_client"
 require "clacky/deploy_api_client"
 
@@ -42,7 +42,7 @@ module Clacky
       DEPLOY_POLL_INTERVAL  = 5    # seconds between deploy status checks
       DEPLOY_POLL_MAX       = 60   # max attempts (300 seconds total)
 
-      # DASHBOARD_BASE_URL is resolved dynamically from PlatformConfig#dashboard_url
+      # DASHBOARD_BASE_URL is resolved dynamically from ClackyCloudConfig#dashboard_url
       # so it automatically tracks the environment (prod / staging / local).
       DASHBOARD_PATH = "/dashboard/openclacky-project"
 
@@ -119,7 +119,7 @@ module Clacky
             return result
           end
 
-          # @dashboard_base_url is set by load_platform_config during Phase 0
+          # @dashboard_base_url is set by load_clacky_cloud_config during Phase 0
           project       = phase0[:project]
           project_id    = phase0[:project_id]
           api_client    = phase0[:api_client]
@@ -178,7 +178,7 @@ module Clacky
 
         # 0.2 Load platform config (workspace_key)
         print "  🔑 Loading platform config..."
-        cfg_result = load_platform_config
+        cfg_result = load_clacky_cloud_config
         return cfg_result unless cfg_result[:success]
         workspace_key = cfg_result[:workspace_key]
         base_url      = cfg_result[:base_url]
@@ -342,12 +342,12 @@ module Clacky
         hard_fail("Failed to read .clacky/openclacky.yml: #{e.message}")
       end
 
-      def load_platform_config
-        cfg = PlatformConfig.load
+      def load_clacky_cloud_config
+        cfg = ClackyCloudConfig.load
 
         if cfg.workspace_key.nil? || cfg.workspace_key.empty?
           return hard_fail(
-            "No Clacky workspace key configured (~/.clacky/platform.yml).\n" \
+            "No Clacky workspace key configured (~/.clacky/clacky_cloud.yml).\n" \
             "  Obtain a workspace key offline, then run:\n" \
             "    clacky config set workspace_key <clacky_ak_xxx>"
           )

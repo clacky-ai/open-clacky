@@ -208,9 +208,6 @@ module Clacky
 
       # === Progress ===
 
-      # Interval (seconds) between shell output streaming ticks.
-      SHELL_OUTPUT_INTERVAL = 5
-
       def show_progress(message = nil, prefix_newline: true, output_buffer: nil)
         @progress_start_time = Time.now
         @live_progress_message = message
@@ -218,13 +215,6 @@ module Clacky
         @live_stdout_buffer = []
         emit("progress", message: message, status: "start")
         forward_to_subscribers { |sub| sub.show_progress(message) }
-
-        # If a shell output_buffer is provided, start a background thread that
-        # streams new stdout lines to the browser every SHELL_OUTPUT_INTERVAL
-        # seconds via a "shell_output" event.  This gives users real-time
-        # visibility into long-running commands (e.g. deployments) without
-        # waiting for the command to finish.
-        start_shell_output_thread(output_buffer) if output_buffer
       end
 
       # Stream shell stdout/stderr lines to the browser while a command is running.
@@ -239,8 +229,7 @@ module Clacky
         # Not forwarded to IM subscribers — too noisy
       end
 
-      def clear_progress(force: false)
-        stop_shell_output_thread
+      def clear_progress
         elapsed = @progress_start_time ? (Time.now - @progress_start_time).round(1) : 0
         @progress_start_time = nil
         @live_progress_message = nil
@@ -273,41 +262,6 @@ module Clacky
 
         buf = @live_stdout_buffer
         emit("tool_stdout", lines: buf) if buf && !buf.empty?
-      end
-
-      # Start a background thread that polls output_buffer and emits new lines.
-      private def start_shell_output_thread(output_buffer)
-        @shell_output_stop   = false
-        @shell_output_sent   = 0   # number of stdout lines already emitted
-        @shell_output_thread = Thread.new do
-          until @shell_output_stop
-            sleep SHELL_OUTPUT_INTERVAL
-            next if @shell_output_stop
-
-            begin
-              lines = output_buffer[:stdout_lines]&.to_a || []
-              new_lines = lines[@shell_output_sent..]
-              next if new_lines.nil? || new_lines.empty?
-
-              @shell_output_sent += new_lines.size
-              text = new_lines.map(&:chomp).join("\n")
-              emit("shell_output", text: text)
-            rescue StandardError
-              # Never let streaming errors crash the agent thread
-            end
-          end
-        rescue StandardError
-          # Thread-level safety net
-        end
-      end
-
-      # Stop the shell output background thread gracefully.
-      private def stop_shell_output_thread
-        return unless @shell_output_thread
-
-        @shell_output_stop = true
-        @shell_output_thread.join(2)
-        @shell_output_thread = nil
       end
 
       # === State updates ===

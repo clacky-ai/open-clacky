@@ -72,7 +72,7 @@ steps between phases — the script handles all logic internally.
    - If file is missing → runs inline cloud project creation flow
      (reuses `new/scripts/cloud_project_init.sh`), writes the file, continues
    - If `project_id` is blank → hard-fail (corrupted file)
-2. Reads `~/.clacky/platform.yml` for `workspace_key`
+2. Reads `~/.clacky/clacky_cloud.yml` for `workspace_key`
    - If missing/empty → hard-fail with guidance to obtain key offline
 3. Calls `GET /openclacky/v1/projects/:id` to verify the project exists
    - 404 → runs inline cloud project creation flow, continues

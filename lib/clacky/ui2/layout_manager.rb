@@ -271,8 +271,6 @@ module Clacky
           # Fullscreen owns the alternate screen; skip main-screen updates
           return if @fullscreen_mode
 
-          File.open("/tmp/clacky_progress_debug.log", "a") { |f| f.puts "[#{Time.now}] update_last_line: output_row=#{@output_row} fullscreen=#{@fullscreen_mode} start_row=#{@output_row - old_line_count} content_snip=#{content.gsub(/\e\[[0-9;]*m/, '')[0..60]}" }
-
           return if @output_row == 0  # No output yet
 
           lines = content.split("\n", -1)
@@ -383,49 +381,6 @@ module Clacky
           # Skip buffer re-render: lines were removed both from screen and buffer above,
           # re-rendering would push stale content back into the terminal scrollback.
           render_fixed_areas(skip_buffer_rerender: true)
-          screen.flush
-        end
-      end
-
-      # Atomically insert new content lines before the current last line (e.g. a spinner).
-      # This is used to stream real-time shell output into the terminal while keeping
-      # the progress/spinner line at the very bottom.
-      #
-      # Algorithm:
-      #   1. Erase the last line (spinner) from screen + buffer
-      #   2. Append each new_lines entry using write_output_line (so they enter the buffer)
-      #   3. Re-append the spinner as the new last line
-      #
-      # All steps run inside a single @render_mutex lock so there's no visible flicker.
-      #
-      # @param new_lines [Array<String>] Rendered lines to insert (already styled/colored)
-      # @param last_line  [String]       The current last line to re-append after insertion
-      def insert_lines_before_last(new_lines, last_line)
-        return if new_lines.empty?
-
-        @render_mutex.synchronize do
-          return if @fullscreen_mode
-
-          # 1. Erase last line (spinner) from screen and buffer
-          if @output_row > 0
-            spinner_row = @output_row - 1
-            screen.move_cursor(spinner_row, 0)
-            screen.clear_line
-            @output_buffer.pop if @output_buffer.size > 0
-            @output_row = spinner_row
-          end
-
-          # 2. Write each new output line
-          new_lines.each do |line|
-            wrapped = wrap_long_line(line)
-            wrapped.each { |l| write_output_line(l) }
-          end
-
-          # 3. Re-append the spinner line
-          wrapped_spinner = wrap_long_line(last_line)
-          wrapped_spinner.each { |l| write_output_line(l) }
-
-          render_fixed_areas
           screen.flush
         end
       end
