@@ -4,7 +4,7 @@
 #
 # Usage: cloud_project_init.sh [project_name] [workspace_key] [base_url]
 #   - project_name:  defaults to current directory name
-#   - workspace_key: defaults to value in ~/.clacky/platform.yml
+#   - workspace_key: defaults to value in ~/.clacky/clacky_cloud.yml
 #   - base_url:      defaults to https://api.clacky.ai
 #
 # Outputs a JSON result on stdout:
@@ -20,16 +20,16 @@ PROJECT_NAME="${1:-$(basename "$PWD")}"
 WORKSPACE_KEY="${2:-}"
 BASE_URL="${3:-}"
 
-# --- Load workspace_key from platform.yml if not provided ---
+# --- Load workspace_key from clacky_cloud.yml if not provided ---
 if [ -z "$WORKSPACE_KEY" ]; then
-  PLATFORM_YML="$HOME/.clacky/platform.yml"
+  PLATFORM_YML="$HOME/.clacky/clacky_cloud.yml"
   if [ -f "$PLATFORM_YML" ]; then
     WORKSPACE_KEY=$(ruby -e "require 'yaml'; y = YAML.safe_load(File.read('$PLATFORM_YML')); print y['workspace_key'].to_s.strip" 2>/dev/null || true)
   fi
 fi
 
 if [ -z "$BASE_URL" ]; then
-  PLATFORM_YML="$HOME/.clacky/platform.yml"
+  PLATFORM_YML="$HOME/.clacky/clacky_cloud.yml"
   if [ -f "$PLATFORM_YML" ]; then
     BASE_URL=$(ruby -e "require 'yaml'; y = YAML.safe_load(File.read('$PLATFORM_YML')); print y['base_url'].to_s.strip" 2>/dev/null || true)
   fi
@@ -37,7 +37,7 @@ if [ -z "$BASE_URL" ]; then
 fi
 
 if [ -z "$WORKSPACE_KEY" ]; then
-  echo '{"success":false,"error":"No workspace_key found. Please set it in ~/.clacky/platform.yml or pass as argument."}'
+  echo '{"success":false,"error":"No workspace_key found. Please set it in ~/.clacky/clacky_cloud.yml or pass as argument."}'
   exit 0
 fi
 
