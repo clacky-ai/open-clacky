@@ -1530,24 +1530,6 @@ body {
 .tool-name     { color: var(--color-warning); font-weight: 600; }
 .progress-msg  { color: var(--color-accent-primary); font-size: 12px; align-self: center; animation: pulse 1.2s infinite; }
 
-/* ── Shell output live stream block ─────────────────────────────────────── */
-.shell-output-block {
-  align-self: stretch;
-  background: var(--color-bg-primary);
-  border: 1px solid var(--color-border-primary);
-  border-radius: 6px;
-  color: var(--color-text-secondary);
-  font-family: monospace;
-  font-size: 11px;
-  line-height: 1.5;
-  margin: 4px 0;
-  max-height: 240px;
-  overflow-y: auto;
-  padding: 8px 10px;
-  white-space: pre-wrap;
-  word-break: break-all;
-}
-
 /* ── Token usage line ────────────────────────────────────────────────────── */
 .token-usage-line {
   align-self: flex-start;

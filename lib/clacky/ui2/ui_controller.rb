@@ -1141,15 +1141,6 @@ module Clacky
           # Add action buttons
           choices << { name: "─" * 50, disabled: true }
           choices << { name: "[+] Add New Model", value: { action: :add } }
-          # Show platform key status on the Import button
-          _platform_cfg = Clacky::ClackyCloudConfig.load
-          _import_label = if _platform_cfg.configured?
-            _masked = "#{_platform_cfg.workspace_key[0..15]}..."
-            "[>] Import Model from Clacky  (workspace key: #{_masked})"
-          else
-            "[>] Import Model from Clacky"
-          end
-          choices << { name: _import_label, value: { action: :import_clacky } }
           choices << { name: "[*] Edit Current Model", value: { action: :edit } }
           choices << { name: "[-] Delete Model", value: { action: :delete } } if current_config.models.length > 1
           choices << { name: "[X] Close", value: { action: :close } }
@@ -1170,21 +1161,6 @@ module Clacky
             current_config.save
             # Return to indicate config changed (need to update client)
             return { action: :switch }
-          when :import_clacky
-            # Show Clacky workspace import wizard
-            imported = show_clacky_import_form(test_callback: test_callback)
-            if imported
-              current_config.add_model(
-                model:            imported[:model_name],
-                api_key:          imported[:llm_key],
-                base_url:         imported[:base_url],
-                anthropic_format: imported[:anthropic_format]
-              )
-              current_config.save
-              current_config.switch_model(current_config.models.length - 1)
-              current_config.save
-              return { action: :switch }
-            end
           when :add
             new_model = show_model_edit_form(nil, test_callback: test_callback)
             if new_model
@@ -1279,97 +1255,6 @@ module Clacky
         result # Return selected task_id or nil
       end
       
-      # ── Clacky workspace-key import wizard ──────────────────────────────────
-      #
-      # Collects a Workspace API key and a Clacky backend URL, calls the
-      # /openclacky/v1/workspace/keys endpoint to obtain the LLM key, then
-      # runs an optional connection test before returning the final config hash.
-      #
-      # @param test_callback [Proc, nil]  Same test_callback as show_model_edit_form
-      # @return [Hash, nil]
-      #   On success: { llm_key:, model_name:, base_url:, anthropic_format: true }
-      #   On cancel / failure: nil
-      private def show_clacky_import_form(test_callback: nil)
-        modal = Components::ModalComponent.new
-
-        # Pre-fill from persisted platform config
-        platform_cfg = Clacky::ClackyCloudConfig.load
-
-        fields = [
-          {
-            name:    :workspace_key,
-            label:   "Workspace API Key (clacky_ak_...):",
-            default: platform_cfg.workspace_key || "",
-            mask:    true
-          },
-          {
-            name:    :clacky_base_url,
-            label:   "Clacky Backend URL (e.g. https://api.clacky.ai):",
-            default: platform_cfg.base_url
-          }
-        ]
-
-        # Validator: fetch LLM key from the workspace endpoint, then test it
-        validator = lambda do |values|
-          workspace_key   = values[:workspace_key].to_s.strip
-          clacky_base_url = values[:clacky_base_url].to_s.strip
-
-          if workspace_key.empty?
-            return { success: false, error: "Workspace API Key is required" }
-          end
-
-          unless workspace_key.start_with?("clacky_ak_")
-            return { success: false, error: "Key must start with clacky_ak_" }
-          end
-
-          if clacky_base_url.empty?
-            return { success: false, error: "Clacky Backend URL is required" }
-          end
-
-          # Step 1: fetch workspace LLM key
-          auth_client  = Clacky::ClackyAuthClient.new(workspace_key, base_url: clacky_base_url)
-          fetch_result = auth_client.fetch_workspace_keys
-
-          unless fetch_result[:success]
-            return { success: false, error: "Fetch failed: #{fetch_result[:error]}" }
-          end
-
-          # Stash the result so we can return it after the modal closes
-          @_clacky_import_result         = fetch_result
-          @_clacky_import_platform_input = { workspace_key: workspace_key, base_url: clacky_base_url }
-
-          # Step 2: LLM key test is intentionally skipped for workspace import.
-          # The workspace API already validated the key server-side; running a
-          # client-side test_connection here would require knowing the exact
-          # endpoint format (OpenAI / Bedrock / Anthropic) before the config is
-          # fully saved, which can result in false-positive 404 errors.
-
-          { success: true }
-        end
-
-        result = modal.show(
-          title:     "Import from Clacky Workspace",
-          fields:    fields,
-          validator: validator,
-          on_close:  -> { @layout.rerender_all }
-        )
-
-        return nil if result.nil?
-
-        # Persist the platform credentials so the user doesn't have to re-enter next time
-        if @_clacky_import_platform_input
-          platform_cfg.workspace_key = @_clacky_import_platform_input[:workspace_key]
-          platform_cfg.base_url      = @_clacky_import_platform_input[:base_url]
-          platform_cfg.save
-          @_clacky_import_platform_input = nil
-        end
-
-        # Return the stashed import result (set inside the validator)
-        imported = @_clacky_import_result
-        @_clacky_import_result = nil
-        imported
-      end
-
       # Show form for editing a model
       # @param model [Hash, nil] Existing model hash or nil for new model
       # @return [Hash, nil] Updated model hash or nil if cancelled
