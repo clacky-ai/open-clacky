@@ -43,6 +43,15 @@ node --version 2>/dev/null
 
 Parse the version. If Node.js is missing or version < 20:
 
+Run the bundled installer to automatically install Node.js:
+```bash
+bash ~/.clacky/scripts/install_browser.sh
+```
+
+If the script exits 0 → Node.js is now installed. Proceed to Step 2.
+
+If the script exits non-zero or doesn't exist:
+
 > ❌ Node.js 20+ is required for browser automation.
 >
 > Please install Node.js from: https://nodejs.org
