@@ -333,7 +333,13 @@ module Clacky
         # hosts with OPEN_TIMEOUT=8s per attempt × 2 attempts = up to ~16s on the
         # primary alone, before failing over to the fallback domain.  Give them a
         # generous 90s so retry + failover can complete without being cut short.
-        timeout_sec = path.start_with?("/api/brand") ? 90 : 10
+        timeout_sec = if path.start_with?("/api/brand")
+          90
+        elsif path == "/api/tool/browser"
+          30
+        else
+          10
+        end
         Timeout.timeout(timeout_sec) do
           _dispatch_rest(req, res)
         end
