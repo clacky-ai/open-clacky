@@ -114,7 +114,10 @@ ruby "SKILL_DIR/feishu_setup.rb"
     ```
   - Tell the user: "I've opened Feishu in your browser. Please log in, then reply 'done'."
   - Wait for "done".
-  - **Retry the script** (same command, same timeout). If it succeeds this time, stop. If it fails again with a different error, continue to Step 2.
+  - **Retry the script** (same command, same timeout). Repeat this login-wait-retry loop up to **3 times total**.
+    - If any attempt succeeds (exit code 0), stop — setup is complete.
+    - If an attempt fails with a **different** error (not a login error), break out of the loop and continue to Step 2.
+    - If all 3 attempts fail with login errors, tell the user: "Automated setup was unable to detect a Feishu login after 3 attempts. Switching to guided setup..." and continue to Step 2.
 - **Otherwise (non-login, non-browser error):**
   - Tell the user: "Automated setup encountered an issue: `<error message>`. Switching to guided setup..."
   - Continue to Step 2 (manual flow) below.
