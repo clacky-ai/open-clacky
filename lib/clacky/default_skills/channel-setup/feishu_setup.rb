@@ -130,6 +130,12 @@ class BrowserSession
     snapshot
   end
 
+  def open(url)
+    @client.call("open", url: url)
+    sleep 2
+    snapshot
+  end
+
   def snapshot(interactive: true, compact: true)
     result = @client.call("snapshot", interactive: interactive, compact: compact)
     result["output"].to_s
@@ -394,7 +400,7 @@ def run_setup(browser, api)
 
   # ── Phase 1: Verify login ────────────────────────────────────────────────
   step "Phase 1 — Verifying Feishu login..."
-  snap = browser.navigate("https://open.feishu.cn/app")
+  snap = browser.open("https://open.feishu.cn/app")
   unless snap.include?("创建企业自建") || snap.include?("Create Custom App") || snap.include?("Create Enterprise")
     fail! "Not logged in to Feishu Open Platform. Please log in to open.feishu.cn in Chrome first, then re-run."
   end
@@ -554,7 +560,7 @@ browser     = BrowserSession.new(tool_client)
 
 # Navigate to Feishu to establish page context
 step "Initializing browser session..."
-browser.navigate("https://open.feishu.cn/app")
+browser.open("https://open.feishu.cn/app")
 sleep 1
 
 # Quick sanity check — verify we have cookies
