@@ -32,15 +32,15 @@ rescue Errno::ENOENT
   nil # textutil not available (non-macOS)
 end
 
-# Fallback: strings command — extracts printable ASCII sequences
-def try_strings(path)
-  stdout, _stderr, status = Open3.capture3("strings", path)
+# Use antiword to extract text from .doc files (Linux/WSL)
+def try_antiword(path)
+  stdout, _stderr, status = Open3.capture3("antiword", path)
   return nil unless status.success?
-  lines = stdout.lines.select { |l| l.strip.length >= 4 }
-  return nil if lines.size < 3
-  lines.join
+  text = stdout.strip
+  return nil if text.bytesize < MIN_CONTENT_BYTES
+  text
 rescue Errno::ENOENT
-  nil # strings not available
+  nil # antiword not installed
 end
 
 # --- main ---
@@ -57,13 +57,15 @@ unless File.exist?(path)
   exit 1
 end
 
-text = try_textutil(path) || try_strings(path)
+text = try_textutil(path) || try_antiword(path)
 
 if text
   print text
   exit 0
 else
   warn "Could not extract text from .doc file."
-  warn "Tip: on macOS textutil should work. On Linux try: apt install antiword"
+  warn "Tip: install antiword for best results:"
+  warn "  macOS:      brew install antiword"
+  warn "  Linux/WSL:  apt install antiword"
   exit 1
 end
