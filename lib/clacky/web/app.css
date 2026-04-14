@@ -793,12 +793,22 @@ body {
 .session-item .session-name {
   flex: 1;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 4px;
   color: var(--color-text-secondary);
   font-weight: 500;
   transition: color .2s ease, font-weight .2s ease;
+}
+.session-item .session-name .session-name__text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.session-item .session-name .session-badge {
+  flex-shrink: 0;
 }
 /* Hover: subtle background overlay */
 .session-item:hover {
@@ -863,8 +873,6 @@ body {
 .session-name {
   font-size: 12px;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 /* While renaming, lift overflow so the input is fully visible */
 .session-name.renaming {
