@@ -64,8 +64,6 @@ if text
   exit 0
 else
   warn "Could not extract text from .doc file."
-  warn "Tip: install antiword for best results:"
-  warn "  macOS:      brew install antiword"
-  warn "  Linux/WSL:  apt install antiword"
+  warn "Tip: on macOS textutil should work. On Linux/WSL try: apt install antiword"
   exit 1
 end
