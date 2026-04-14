@@ -246,7 +246,7 @@ module Clacky
       @bedrock_connection ||= Faraday.new(url: @base_url) do |conn|
         conn.headers["Content-Type"]  = "application/json"
         conn.headers["Authorization"] = "Bearer #{@api_key}"
-        conn.options.timeout      = 120
+        conn.options.timeout      = 300
         conn.options.open_timeout = 10
         conn.ssl.verify           = false
         conn.adapter Faraday.default_adapter
@@ -257,7 +257,7 @@ module Clacky
       @openai_connection ||= Faraday.new(url: @base_url) do |conn|
         conn.headers["Content-Type"]  = "application/json"
         conn.headers["Authorization"] = "Bearer #{@api_key}"
-        conn.options.timeout      = 120
+        conn.options.timeout      = 300
         conn.options.open_timeout = 10
         conn.ssl.verify           = false
         conn.adapter Faraday.default_adapter
@@ -270,7 +270,7 @@ module Clacky
         conn.headers["x-api-key"]      = @api_key
         conn.headers["anthropic-version"] = "2023-06-01"
         conn.headers["anthropic-dangerous-direct-browser-access"] = "true"
-        conn.options.timeout      = 120
+        conn.options.timeout      = 300
         conn.options.open_timeout = 10
         conn.ssl.verify           = false
         conn.adapter Faraday.default_adapter
