@@ -361,7 +361,9 @@ module Clacky
 
             send_frame(cmd: cmd, req_id: req_id, body: body)
 
-            result = queue.pop(timeout: 30)
+            timeout_thread = Thread.new { sleep 30; queue.push(nil) }
+            result = queue.pop
+            timeout_thread.kill
             raise "Timeout waiting for ack (req_id=#{req_id}, cmd=#{cmd})" if result.nil?
 
             errcode = result["errcode"] || result.dig("body", "errcode")
