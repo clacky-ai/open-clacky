@@ -324,8 +324,16 @@ function Test-VirtualisationSupported {
     # Probe WSL2 with a minimal tar (512 zero bytes = valid tar EOF block)
     # Called only after WSL feature is confirmed enabled (Main already checked).
     Write-Info "Probing WSL2 availability..."
-    $probeTar = "$env:TEMP\wsl_probe.tar"
-    $probeDir = "$env:TEMP\wsl_probe"
+    
+    # WSL commands don't support non-ASCII characters in paths.
+    # Use C:\Temp for probe to avoid issues with usernames containing Chinese/special chars.
+    $safeTemp = "C:\Temp"
+    if (-not (Test-Path $safeTemp)) {
+        New-Item -ItemType Directory -Force -Path $safeTemp | Out-Null
+    }
+    
+    $probeTar = "$safeTemp\wsl_probe.tar"
+    $probeDir = "$safeTemp\wsl_probe"
     $ok = $false
     try {
         $bytes = New-Object byte[] 512
