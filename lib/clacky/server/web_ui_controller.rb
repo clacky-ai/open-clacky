@@ -193,13 +193,6 @@ module Clacky
         forward_to_subscribers { |sub| sub.show_info(message) }
       end
 
-      # Emit a two-phase idle compression status update.
-      # The frontend uses the same DOM element for both phases so it renders as one line.
-      # phase: :start → show spinner message; phase: :end → update in-place with final result
-      def show_idle_status(phase:, message:)
-        emit("idle_status", phase: phase.to_s, message: message)
-      end
-
       def show_warning(message)
         emit("warning", message: message)
         forward_to_subscribers { |sub| sub.show_warning(message) }

@@ -494,7 +494,24 @@ module Clacky
       # Show progress indicator with dynamic elapsed time
       # @param message [String] Progress message (optional, will use random thinking verb if nil)
       # @param prefix_newline [Boolean] Whether to add a blank line before progress (default: true)
+      # @param progress_type [String] "thinking" | "idle_compress" | "retrying" | custom
+      # @param phase [String] "active" (start spinner) | "done" (stop spinner, show final message)
+      # @param metadata [Hash] Extensible metadata (unused in UI2 for now)
       def show_progress(message = nil, prefix_newline: true, progress_type: "thinking", phase: "active", metadata: {})
+        # phase: "done" → stop any active spinner and render the final message as a system message
+        if phase.to_s == "done"
+          stop_progress_thread
+          @stdout_lines = nil
+          @progress_start_time = nil
+          if message && !message.to_s.strip.empty?
+            output = @renderer.render_system_message(message.to_s, prefix_newline: false)
+            update_progress_line(output)
+          else
+            clear_progress_line
+          end
+          return
+        end
+
         # Stop any existing progress thread
         stop_progress_thread
 
@@ -634,14 +651,6 @@ module Clacky
       # @param prefix_newline [Boolean] Whether to add newline before message (default: true)
       def show_info(message, prefix_newline: true)
         output = @renderer.render_system_message(message, prefix_newline: prefix_newline)
-        append_output(output)
-      end
-
-      # Show idle compression status (two-phase: start → end).
-      # In terminal mode, only the final state is printed.
-      def show_idle_status(phase:, message:)
-        return unless phase.to_s == "end"
-        output = @renderer.render_system_message(message)
         append_output(output)
       end
 
