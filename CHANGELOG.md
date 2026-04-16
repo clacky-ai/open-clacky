@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.30] - 2026-04-16
+
+### Added
+- **OpenClacky provider support**: new built-in provider preset for OpenClacky API (https://api.openclacky.com) with Claude Opus 4.6, Sonnet 4.6/4.5, and Haiku 4.5 models
+- **Session chunk index system**: compressed conversation chunks now include a searchable index with topics and turn counts — the agent can selectively load only relevant historical context instead of re-reading all compressed messages, dramatically reducing token usage in long sessions
+- **Provider availability indicator**: Web UI now shows a real-time status badge (Available/Unavailable) next to each provider in the settings modal, helping users quickly identify which services are reachable
+
+### Improved
+- **Progress streaming UX**: API call progress messages (e.g., "Agent is thinking...", compression updates) are now streamed incrementally to the Web UI with better visual feedback and reduced latency
+- **Brand name localization**: brand skill metadata now includes configurable Chinese names (`name_zh`) for better display in localized UIs
+- **Idle timer reliability**: fixed a race condition where old idle timers from previous CLI sessions could continue running after restarting, causing premature auto-saves
+
+### Fixed
+- **Prompt caching in subagents**: subagent tool calls (e.g., skills invoked via `invoke_skill`) now correctly inherit and propagate prompt caching behavior from the parent agent, reducing redundant API costs
+- **WeChat Work Ruby 3.1 compatibility**: fixed `Queue.empty?` crash on Ruby < 3.2 in WeCom channel WebSocket client (method was added in Ruby 3.2.0)
+- **WeChat markdown stripping**: incoming messages from WeChat (Weixin) now preserve original text content when stripping markdown decorators, fixing message corruption where text was accidentally removed
+
 ## [0.9.29] - 2026-04-15
 
 ### Added
