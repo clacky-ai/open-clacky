@@ -203,9 +203,21 @@ module Clacky
         end
       end
 
+      # Resolve provider once — used for both system prompt injection and image downgrade below.
+      provider_id = Clacky::Providers.find_by_base_url(@config.base_url)
+
       # Add system prompt as the first message if this is the first run
       if @history.empty?
         system_prompt = build_system_prompt
+        # Inform text-only models that they cannot process images so they don't
+        # attempt to read image files via tools (which would send base64 data and
+        # consume tokens abnormally).
+        unless Clacky::Providers.vision?(provider_id)
+          system_prompt += "\n\nIMPORTANT: You are a text-only model and do not support vision input. " \
+                           "If the user sends an image or you encounter an image file, do NOT attempt " \
+                           "to read or analyze it. Instead, inform the user that you cannot process " \
+                           "images and suggest they use a vision-capable model."
+        end
         @history.append({ role: "system", content: system_prompt })
       end
 
@@ -217,6 +229,15 @@ module Clacky
 
       # Split files into vision images and disk files; downgrade oversized images to disk
       image_files, disk_files = partition_files(Array(files))
+
+      # If the current provider does not support vision, downgrade all images to disk files
+      # to avoid sending base64 data to a model that cannot process it,
+      # which would cause abnormal token consumption.
+      unless Clacky::Providers.vision?(provider_id)
+        disk_files  = disk_files + image_files.map { |f| f.merge(type: "image") }
+        image_files = []
+      end
+
       vision_images, downgraded = resolve_vision_images(image_files)
       all_disk_files = disk_files + downgraded
 

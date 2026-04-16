@@ -28,6 +28,7 @@ module Clacky
         "api" => "openai-completions",
         "default_model" => "MiniMax-M2.7",
         "models" => ["MiniMax-M2.5", "MiniMax-M2.7"],
+        "vision" => false,  # text-only model, does not support image input
         "website_url" => "https://www.minimaxi.com/user-center/basic-information/interface-key"
       }.freeze,
 
@@ -154,6 +155,18 @@ module Clacky
       def fallback_model(provider_id, model)
         preset = PRESETS[provider_id]
         preset&.dig("fallback_models", model)
+      end
+
+      # Check if a provider supports vision (image) input.
+      # Unknown providers (no preset) default to true to avoid breaking existing behaviour.
+      # Providers without a "vision" key also default to true.
+      # Only providers explicitly set with "vision" => false are blocked.
+      # @param provider_id [String, nil] The provider identifier
+      # @return [Boolean] True if the provider supports vision input
+      def vision?(provider_id)
+        preset = PRESETS[provider_id]
+        return true if preset.nil?       # unknown provider — allow by default
+        preset.fetch("vision", true)     # no "vision" key — allow by default
       end
 
       # Find provider ID by base URL.
