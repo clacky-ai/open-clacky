@@ -96,6 +96,15 @@ module Clacky
         "default_model" => "mimo-v2-pro",
         "models" => ["mimo-v2-pro", "mimo-v2-omni"],
         "website_url" => "https://platform.xiaomimimo.com/"
+      }.freeze,
+
+      "glm" => {
+        "name" => "GLM (ZhipuAI)",
+        "base_url" => "https://open.bigmodel.cn/api/paas/v4",
+        "api" => "openai-completions",
+        "default_model" => "glm-5.1",
+        "models" => ["glm-5.1", "glm-5", "glm-5-turbo", "glm-5v-turbo", "glm-4.7"],
+        "website_url" => "https://open.bigmodel.cn/usercenter/apikeys"
       }.freeze
 
     }.freeze

@@ -216,10 +216,21 @@ module Clacky
       # === Progress ===
 
       def show_progress(message = nil, prefix_newline: true, progress_type: "thinking", phase: "active", metadata: {})
-        @progress_start_time = Time.now if phase == "active"
-        @live_progress_message = message
-        # Reset stdout buffer for each new command so re-subscribe only replays current run
-        @live_stdout_buffer = [] if phase == "active"
+        if phase == "active"
+          @progress_start_time = Time.now
+          # Store complete progress state for replay when user switches back to this session
+          @live_progress_state = {
+            message: message,
+            progress_type: progress_type,
+            metadata: metadata
+          }
+          # Reset stdout buffer for each new command so re-subscribe only replays current run
+          @live_stdout_buffer = []
+        elsif phase == "done"
+          # Clear progress state when done
+          @live_progress_state = nil
+          @progress_start_time = nil
+        end
         
         data = {
           message: message,
@@ -232,8 +243,6 @@ module Clacky
         
         emit("progress", **data)
         forward_to_subscribers { |sub| sub.show_progress(message) }
-        
-        @progress_start_time = nil if phase == "done"
       end
 
       # Stream shell stdout/stderr lines to the browser while a command is running.
@@ -271,9 +280,17 @@ module Clacky
       # The frontend's appendToolStdout will attach to the last visible .tool-item
       # even when _liveLastToolItem is null (after the tab re-loaded).
       def replay_live_state
-        return unless @live_progress_message
+        return unless @live_progress_state
 
-        emit("progress", message: @live_progress_message, status: "start")
+        # Replay complete progress state (not just message)
+        state = @live_progress_state
+        emit("progress",
+          message: state[:message],
+          progress_type: state[:progress_type],
+          phase: "active",
+          status: "start",
+          metadata: state[:metadata] || {}
+        )
 
         buf = @live_stdout_buffer
         emit("tool_stdout", lines: buf) if buf && !buf.empty?
