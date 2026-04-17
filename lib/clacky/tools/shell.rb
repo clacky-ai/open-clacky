@@ -397,15 +397,18 @@ module Clacky
       end
 
       def format_waiting_input_result(command, stdout, stderr, interaction, max_output_lines)
+        truncated_stdout = truncate_output(stdout, max_output_lines)
+        truncated_stderr = truncate_output(stderr, max_output_lines)
         {
           command: command,
-          stdout: truncate_output(stdout, max_output_lines),
-          stderr: truncate_output(stderr, max_output_lines),
+          stdout: truncated_stdout,
+          stderr: truncated_stderr,
           exit_code: -2,
           success: false,
           state: 'WAITING_INPUT',
           interaction_type: interaction[:type],
-          message: format_waiting_message(truncate_output(stdout, max_output_lines), interaction),
+          interaction: interaction,
+          message: format_waiting_message(truncated_stdout, interaction),
           output_truncated: output_truncated?(stdout, stderr, max_output_lines)
         }
       end
@@ -439,6 +442,11 @@ module Clacky
           • Provide answer: run shell with your response
           • Cancel: send Ctrl+C (\x03)
         MSG
+      end
+
+      def extract_last_line(output)
+        return "" if output.nil? || output.empty?
+        output.lines.last&.strip.to_s[0..200]
       end
 
       def format_timeout_result(command, stdout, stderr, elapsed, type, timeout, max_output_lines)
@@ -506,32 +514,43 @@ module Clacky
       MAX_LINE_CHARS = 500
 
       def format_result_for_llm(result)
-        return result if result[:error] || result[:state] == 'TIMEOUT' || result[:state] == 'WAITING_INPUT'
+        return result if result[:error]
 
         enc = Clacky::Utils::Encoding
+        command_name = extract_command_name(enc.to_utf8(result[:command].to_s))
+
+        # Apply truncate_and_save to all states including WAITING_INPUT and TIMEOUT
         stdout = enc.to_utf8(result[:stdout] || "")
         stderr = enc.to_utf8(result[:stderr] || "")
-        exit_code = result[:exit_code] || 0
+
+        stdout_info = truncate_and_save(stdout, MAX_LLM_OUTPUT_CHARS, "stdout", command_name)
+        stderr_info = truncate_and_save(stderr, MAX_LLM_OUTPUT_CHARS, "stderr", command_name)
 
         compact = {
           command: enc.to_utf8(result[:command].to_s),
-          exit_code: exit_code,
-          success: result[:success]
+          exit_code: result[:exit_code] || 0,
+          success: result[:success],
+          stdout: stdout_info[:content],
+          stderr: stderr_info[:content]
         }
 
+        compact[:stdout_full] = stdout_info[:temp_file] if stdout_info[:temp_file]
+        compact[:stderr_full] = stderr_info[:temp_file] if stderr_info[:temp_file]
+        compact[:output_truncated] = true if result[:output_truncated]
         compact[:elapsed] = result[:elapsed] if result[:elapsed]
 
-        command_name = extract_command_name(compact[:command])
+        # Preserve WAITING_INPUT state fields
+        if result[:state] == 'WAITING_INPUT'
+          compact[:state] = 'WAITING_INPUT'
+          compact[:interaction_type] = result[:interaction_type]
+          compact[:message] = format_waiting_message(stdout_info[:content], result[:interaction_type] ? { type: result[:interaction_type], line: result.dig(:interaction, :line) || extract_last_line(stdout_info[:content]) } : { type: 'question', line: extract_last_line(stdout_info[:content]) })
+        end
 
-        stdout_info = truncate_and_save(stdout, MAX_LLM_OUTPUT_CHARS, "stdout", command_name)
-        compact[:stdout] = stdout_info[:content]
-        compact[:stdout_full] = stdout_info[:temp_file] if stdout_info[:temp_file]
-
-        stderr_info = truncate_and_save(stderr, MAX_LLM_OUTPUT_CHARS, "stderr", command_name)
-        compact[:stderr] = stderr_info[:content]
-        compact[:stderr_full] = stderr_info[:temp_file] if stderr_info[:temp_file]
-
-        compact[:output_truncated] = true if result[:output_truncated]
+        # Preserve TIMEOUT state fields
+        if result[:state] == 'TIMEOUT'
+          compact[:state] = 'TIMEOUT'
+          compact[:timeout_type] = result[:timeout_type]
+        end
 
         compact
       end

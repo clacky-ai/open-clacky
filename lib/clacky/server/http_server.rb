@@ -281,7 +281,7 @@ module Clacky
 
         server.mount_proc("/") do |req, res|
           if req.path == "/" || req.path == "/index.html"
-            product_name = Clacky::BrandConfig.load.product_name || "Clacky"
+            product_name = Clacky::BrandConfig.load.product_name || "OpenClacky"
             html = File.read(index_html_path).gsub("{{BRAND_NAME}}", product_name)
             res.status                = 200
             res["Content-Type"]       = "text/html; charset=utf-8"
@@ -375,6 +375,7 @@ module Clacky
         when ["GET",    "/api/store/skills"]          then api_store_skills(res)
         when ["GET",    "/api/brand/status"]      then api_brand_status(res)
         when ["POST",   "/api/brand/activate"]    then api_brand_activate(req, res)
+        when ["DELETE", "/api/brand/license"]     then api_brand_deactivate(res)
         when ["GET",    "/api/brand/skills"]      then api_brand_skills(res)
         when ["GET",    "/api/brand"]             then api_brand_info(res)
         when ["GET",    "/api/creator/skills"]    then api_creator_skills(res)
@@ -678,6 +679,17 @@ module Clacky
         else
           json_response(res, 422, { ok: false, error: result[:message] })
         end
+      end
+
+      # DELETE /api/brand/license
+      # Deactivates (unbinds) the current brand license and clears all brand state.
+      # Brand skills are removed from disk. Returns 200 on success.
+      private def api_brand_deactivate(res)
+        brand  = Clacky::BrandConfig.load
+        result = brand.deactivate!
+        # Reload skill_loader without brand config so brand skills are no longer visible.
+        @skill_loader = Clacky::SkillLoader.new(working_dir: nil, brand_config: Clacky::BrandConfig.new({}))
+        json_response(res, 200, { ok: true })
       end
 
       # GET /api/brand/skills

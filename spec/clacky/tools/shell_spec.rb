@@ -346,14 +346,29 @@ RSpec.describe Clacky::Tools::Shell do
   # format_result_for_llm
   # ---------------------------------------------------------------------------
   describe "#format_result_for_llm" do
-    it "passes through TIMEOUT results unchanged" do
-      result = { state: "TIMEOUT", command: "sleep 100", stdout: "", stderr: "", exit_code: -1, success: false }
-      expect(tool.format_result_for_llm(result)).to eq(result)
+    it "applies truncation to TIMEOUT results" do
+      result = { state: "TIMEOUT", command: "sleep 100", stdout: "", stderr: "", exit_code: -1, success: false, timeout_type: :execution }
+      compact = tool.format_result_for_llm(result)
+      expect(compact[:state]).to eq("TIMEOUT")
+      expect(compact[:timeout_type]).to eq(:execution)
+      expect(compact[:stdout]).to eq("")
     end
 
-    it "passes through WAITING_INPUT results unchanged" do
-      result = { state: "WAITING_INPUT", command: "cat", stdout: "", stderr: "", exit_code: -2, success: false }
-      expect(tool.format_result_for_llm(result)).to eq(result)
+    it "applies truncation to WAITING_INPUT results and includes message" do
+      result = { state: "WAITING_INPUT", command: "cat", stdout: "hello\n", stderr: "", exit_code: -2, success: false, interaction_type: "question", interaction: { type: "question", line: "hello" } }
+      compact = tool.format_result_for_llm(result)
+      expect(compact[:state]).to eq("WAITING_INPUT")
+      expect(compact[:interaction_type]).to eq("question")
+      expect(compact[:message]).to include("WAITING_INPUT")
+      expect(compact[:stdout]).to eq("hello\n")
+    end
+
+    it "truncates large WAITING_INPUT output to MAX_LLM_OUTPUT_CHARS" do
+      long_out = "x\n" * 3000
+      result = { state: "WAITING_INPUT", command: "cat", stdout: long_out, stderr: "", exit_code: -2, success: false, interaction_type: "question", interaction: { type: "question", line: "x" } }
+      compact = tool.format_result_for_llm(result)
+      expect(compact[:stdout].length).to be < long_out.length
+      expect(compact[:message].length).to be < long_out.length
     end
 
     it "truncates long stdout for LLM" do

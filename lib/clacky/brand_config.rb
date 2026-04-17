@@ -135,6 +135,29 @@ module Clacky
       FileUtils.chmod(0o600, BRAND_FILE)
     end
 
+    # Remove the local license binding and wipe all brand-related fields from disk.
+    # Brand skills installed from this license are also cleared.
+    # Returns { success: true }.
+    def deactivate!
+      clear_brand_skills!
+      FileUtils.rm_f(BRAND_FILE)
+      # Reset all in-memory state so this instance is clean after the call.
+      @product_name           = nil
+      @package_name           = nil
+      @logo_url               = nil
+      @support_contact        = nil
+      @support_qr_url         = nil
+      @theme_color            = nil
+      @homepage_url           = nil
+      @license_key            = nil
+      @license_activated_at   = nil
+      @license_expires_at     = nil
+      @license_last_heartbeat = nil
+      @license_user_id        = nil
+      @device_id              = nil
+      { success: true }
+    end
+
     # Activate the license against the OpenClacky Cloud API using HMAC proof.
     # Returns a result hash: { success: bool, message: String, data: Hash }
     def activate!(license_key)
