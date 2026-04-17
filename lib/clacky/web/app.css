@@ -313,7 +313,7 @@ body {
   min-height: 0;
   padding-bottom: 10px;
 }
-#session-list { padding: 4px 8px 8px; min-height: 108px; }
+#session-list { padding: 6px 8px 8px; min-height: 108px; }
 
 /* ── Sidebar divider (Section Labels) ───────────────────────────────────── */
 .sidebar-divider {
@@ -5903,6 +5903,61 @@ body.setup-mode[data-theme="dark"] {
   border: 1px solid var(--color-border-muted, var(--color-border-primary));
   opacity: 0.55;
   white-space: nowrap;
+}
+
+/* ── Promo banner (non-licensed users) ─────────────────────────────────── */
+#creator-promo-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border-primary);
+  border-radius: 8px;
+  font-size: 12.5px;
+  color: var(--color-text-secondary);
+}
+#creator-promo-banner svg {
+  flex-shrink: 0;
+  color: var(--color-accent-primary);
+  opacity: 0.8;
+}
+#creator-promo-banner a {
+  margin-left: auto;
+  white-space: nowrap;
+  color: var(--color-accent-primary);
+  text-decoration: none;
+  font-weight: 500;
+}
+#creator-promo-banner a:hover {
+  text-decoration: underline;
+}
+
+/* ── Cloud skills lock (non-licensed users) ─────────────────────────────── */
+#creator-cloud-lock {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px dashed var(--color-border-primary);
+  border-radius: 8px;
+  font-size: 12.5px;
+  color: var(--color-text-muted);
+}
+#creator-cloud-lock svg {
+  flex-shrink: 0;
+  opacity: 0.5;
+}
+#creator-cloud-lock a {
+  margin-left: auto;
+  white-space: nowrap;
+  color: var(--color-accent-primary);
+  text-decoration: none;
+  font-weight: 500;
+  opacity: 0.85;
+}
+#creator-cloud-lock a:hover {
+  text-decoration: underline;
 }
 
 /* ── Create New Skill entry card ───────────────────────────────────────── */

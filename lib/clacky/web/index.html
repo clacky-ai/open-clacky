@@ -334,6 +334,15 @@
           <p class="skills-page-subtitle" data-i18n="creator.subtitle">Manage and publish your skills to the platform</p>
         </div>
 
+        <!-- Promo banner: shown only to non-licensed users -->
+        <div id="creator-promo-banner" style="display:none">
+          <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
+          </svg>
+          <span data-i18n="creator.promo.text">Publish your skills &amp; build your own brand on OpenClacky.</span>
+          <a href="https://www.openclacky.com" target="_blank" data-i18n="creator.promo.link">Learn more →</a>
+        </div>
+
         <!-- Section 1: Cloud skills (published) -->
         <div class="creator-section-block" id="creator-cloud-block">
           <div class="creator-section-header">
@@ -341,6 +350,13 @@
             <span class="creator-section-hint" data-i18n="creator.section.cloudHint">Published to the platform</span>
           </div>
           <div id="creator-cloud-list" class="creator-list"></div>
+          <!-- Lock overlay: shown only to non-licensed users -->
+          <div id="creator-cloud-lock" style="display:none">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+            </svg>
+            <span data-i18n="creator.cloud.locked">Brand license required to publish cloud skills.</span>
+          </div>
         </div>
 
         <!-- Section 2: Local skills (ready to publish) -->
