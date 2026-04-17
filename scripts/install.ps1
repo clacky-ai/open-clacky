@@ -326,8 +326,8 @@ function Test-VirtualisationSupported {
     Write-Info "Probing WSL2 availability..."
     
     # WSL commands don't support non-ASCII characters in paths.
-    # Use C:\Temp for probe to avoid issues with usernames containing Chinese/special chars.
-    $safeTemp = "C:\Temp"
+    # Use $env:SystemDrive\Temp for probe to avoid issues with usernames containing Chinese/special chars.
+    $safeTemp = "$env:SystemDrive\Temp"
     if (-not (Test-Path $safeTemp)) {
         New-Item -ItemType Directory -Force -Path $safeTemp | Out-Null
     }
