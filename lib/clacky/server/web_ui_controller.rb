@@ -239,6 +239,11 @@ module Clacky
           status: phase == "active" ? "start" : "stop"  # backward compat
         }
         data[:metadata] = metadata unless metadata.empty?
+        # Always include started_at for "active" phase so the frontend can set the
+        # correct timer origin even on the very first event (not just replay).
+        if phase == "active" && @progress_start_time
+          data[:started_at] = (@progress_start_time.to_f * 1000).round
+        end
         data[:elapsed] = (Time.now - @progress_start_time).round(1) if phase == "done" && @progress_start_time
         
         emit("progress", **data)
@@ -282,14 +287,19 @@ module Clacky
       def replay_live_state
         return unless @live_progress_state
 
-        # Replay complete progress state (not just message)
+        # Replay complete progress state (not just message).
+        # Include started_at (ms since epoch) so the frontend can resume the
+        # elapsed-time counter from the correct origin instead of resetting to 0.
         state = @live_progress_state
+        started_at_ms = @progress_start_time ? (@progress_start_time.to_f * 1000).round : nil
+
         emit("progress",
           message: state[:message],
           progress_type: state[:progress_type],
           phase: "active",
           status: "start",
-          metadata: state[:metadata] || {}
+          metadata: state[:metadata] || {},
+          started_at: started_at_ms
         )
 
         buf = @live_stdout_buffer
