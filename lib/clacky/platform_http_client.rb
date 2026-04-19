@@ -9,8 +9,6 @@ module Clacky
   # OpenClacky platform API (www.openclacky.com and its fallback domain).
   #
   # Features:
-  #   - Primary domain:  https://www.openclacky.com  (EdgeOne CDN-accelerated)
-  #   - Fallback domain: https://openclacky-platform.clackyai.app  (direct, no CDN)
   #   - Automatic retry with exponential back-off on transient failures
   #   - Transparent domain failover: if the primary domain times out or returns a
   #     5xx error, the request is automatically retried against the fallback domain
@@ -23,9 +21,9 @@ module Clacky
   #   #        or { success: false, error: "...", data: {} }
   class PlatformHttpClient
     # Primary CDN-accelerated endpoint
-    PRIMARY_HOST   = "https://www.openclacky.com"
+    PRIMARY_HOST  = "https://www.openclacky.com"
     # Direct fallback — bypasses EdgeOne, used when the primary times out
-    FALLBACK_HOST  = "https://openclacky-platform.clackyai.app"
+    FALLBACK_HOST = "https://openclacky.up.railway.app"
 
     # Number of attempts per domain (1 = no retry within the same domain)
     ATTEMPTS_PER_HOST = 2

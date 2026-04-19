@@ -25,7 +25,7 @@ require "fileutils"
 # Primary CDN-accelerated endpoint.
 # Fallback bypasses EdgeOne and is used when the primary times out or errors.
 PRIMARY_HOST  = ENV.fetch("CLACKY_LICENSE_SERVER", "https://www.openclacky.com")
-FALLBACK_HOST = "https://openclacky-platform.clackyai.app"
+FALLBACK_HOST = "https://openclacky.up.railway.app"
 # When the env override is set we use only that host (dev/test mode).
 API_HOSTS     = ENV["CLACKY_LICENSE_SERVER"] ? [PRIMARY_HOST] : [PRIMARY_HOST, FALLBACK_HOST]
 
