@@ -227,7 +227,9 @@ module Clacky
           # Reset stdout buffer for each new command so re-subscribe only replays current run
           @live_stdout_buffer = []
         elsif phase == "done"
-          # Clear progress state when done
+          @live_tool_call = nil   # command finished — nothing left to replay
+          # Keep @live_stdout_buffer intact — it will be reset on the next show_progress call.
+          # This allows a brief replay window even after the command finishes.
           @live_progress_state = nil
           @progress_start_time = nil
         end
@@ -262,17 +264,7 @@ module Clacky
         # Not forwarded to IM subscribers — too noisy
       end
 
-      def clear_progress
-        @live_tool_call = nil   # command finished — nothing left to replay
-        # Keep @live_stdout_buffer intact — it will be reset on the next show_progress call.
-        # This allows a brief replay window even after the command finishes.
-        show_progress(progress_type: "thinking", phase: "done")
-      end
-
       # Replay in-progress command state to a newly (re-)subscribing browser tab.
-      # Called by http_server.rb after the subscribe handshake when the session
-      # is still running a shell command.  Without this, switching sessions and
-      # switching back results in a blank progress area — the progress event and
       # all tool_stdout lines that fired while the user was away are lost.
       # Replay live state when a client re-subscribes (e.g. after switching sessions).
       #

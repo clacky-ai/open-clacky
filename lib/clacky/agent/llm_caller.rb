@@ -68,7 +68,7 @@ module Clacky
           handle_probe_success if @config.probing?
 
         rescue Faraday::ConnectionFailed, Faraday::TimeoutError, Faraday::SSLError, Errno::ECONNREFUSED, Errno::ETIMEDOUT => e
-          @ui&.clear_progress
+          @ui&.show_progress(phase: "done")
           retries += 1
 
           # Probing failure: primary still down — renew cooling-off and retry with fallback.
@@ -90,13 +90,13 @@ module Clacky
             sleep retry_delay
             retry
           else
-            @ui&.show_progress(progress_type: "retrying", phase: "done")
+            @ui&.show_progress(phase: "done")
             @ui&.show_error("Network failed after #{max_retries} retries: #{e.message}")
             raise AgentError, "Network connection failed after #{max_retries} retries: #{e.message}"
           end
 
         rescue RetryableError => e
-          @ui&.clear_progress
+          @ui&.show_progress(phase: "done")
           retries += 1
 
           # Probing failure: primary still down — renew cooling-off and retry with fallback.
@@ -127,13 +127,13 @@ module Clacky
             sleep retry_delay
             retry
           else
-            @ui&.show_progress(progress_type: "retrying", phase: "done")
+            @ui&.show_progress(phase: "done")
             @ui&.show_error("LLM service unavailable after #{current_max} retries. Please try again later.")
             raise AgentError, "LLM service unavailable after #{current_max} retries"
           end
 
         ensure
-          @ui&.clear_progress
+          @ui&.show_progress(phase: "done")
         end
 
         # Track cost and collect token usage data.

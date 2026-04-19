@@ -132,10 +132,6 @@ module Clacky
       @progress_start_time = nil if phase == "done"
     end
 
-    def clear_progress
-      show_progress(progress_type: "thinking", phase: "done")
-    end
-
     # === State updates ===
 
     def update_sessionbar(tasks: nil, cost: nil, status: nil)

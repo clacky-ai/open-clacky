@@ -62,7 +62,7 @@ module Clacky
         @history.delete_where { |m| m[:memory_update] }
         @memory_prompt_injected = false
         @memory_updating = false
-        @ui&.clear_progress
+        @ui&.show_progress(phase: "done")
       end
 
       private def memory_update_enabled?

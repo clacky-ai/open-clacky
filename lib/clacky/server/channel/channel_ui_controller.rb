@@ -142,8 +142,6 @@ module Clacky
         # Suppress — progress spinner has no IM equivalent
       end
 
-      def clear_progress; end
-
       # === State updates (no-ops for IM) ===
 
       def update_sessionbar(tasks: nil, cost: nil, status: nil); end

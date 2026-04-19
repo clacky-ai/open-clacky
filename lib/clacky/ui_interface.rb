@@ -35,7 +35,6 @@ module Clacky
     # phase: "active" | "done"
     # metadata: extensible hash (e.g., {attempt: 3, total: 10} for retries)
     def show_progress(message = nil, prefix_newline: true, progress_type: "thinking", phase: "active", metadata: {}); end
-    def clear_progress; end
 
     # === State updates ===
     def update_sessionbar(tasks: nil, cost: nil, status: nil); end

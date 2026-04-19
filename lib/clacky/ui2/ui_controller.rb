@@ -493,47 +493,72 @@ module Clacky
 
       # Show progress indicator with dynamic elapsed time
       # @param message [String] Progress message (optional, will use random thinking verb if nil)
-      # @param prefix_newline [Boolean] Whether to add a blank line before progress (default: true)
-      # @param progress_type [String] "thinking" | "idle_compress" | "retrying" | custom
-      # @param phase [String] "active" (start spinner) | "done" (stop spinner, show final message)
-      # @param metadata [Hash] Extensible metadata (unused in UI2 for now)
+      # Show or stop a progress indicator.
+      #
+      # Rendering strategies by progress_type:
+      #   "thinking"      — spinner in yellow (render_working), session bar → 'working' (default)
+      #   "retrying"      — spinner in gray (render_progress), no session bar change;
+      #                     shows "attempt/total" from metadata: { attempt: N, total: M }
+      #   "idle_compress" — same as "retrying"; background work the user need not watch closely
+      #
+      # phase:
+      #   "active" — start/update the progress indicator (default)
+      #   "done"   — stop progress; auto-appends elapsed time to the final line
+      #
+      # @param message [String, nil] Progress message (nil uses a random thinking verb for "thinking")
+      # @param prefix_newline [Boolean] Prepend blank line before new progress line (default: true)
+      # @param progress_type [String] "thinking" | "retrying" | "idle_compress"
+      # @param phase [String] "active" | "done"
+      # @param metadata [Hash] { attempt: N, total: M } for "retrying" type
       def show_progress(message = nil, prefix_newline: true, progress_type: "thinking", phase: "active", metadata: {})
-        # phase: "done" → stop any active spinner and render the final message as a system message
+        # ── phase "done": stop progress and render final state ──────────────────────────
         if phase.to_s == "done"
+          elapsed_time  = @progress_start_time ? (Time.now - @progress_start_time).to_i : 0
+          saved_message = @progress_message
+
           stop_progress_thread
           @stdout_lines = nil
-          @progress_start_time = nil
-          if message && !message.to_s.strip.empty?
-            output = @renderer.render_system_message(message.to_s, prefix_newline: false)
-            update_progress_line(output)
+
+          # Prefer caller-supplied message; fall back to elapsed-time summary
+          final_msg = if message && !message.to_s.strip.empty?
+            message.to_s
+          elsif saved_message && elapsed_time > 0
+            "#{saved_message}… (#{elapsed_time}s)"
+          end
+
+          if final_msg
+            update_progress_line(@renderer.render_progress(final_msg))
           else
             clear_progress_line
           end
           return
         end
 
-        # Stop any existing progress thread
+        # ── "active": start or update spinner ───────────────────────────────────────────
         stop_progress_thread
 
-        # Update status to 'working'
-        update_sessionbar(status: 'working')
+        # "thinking" updates session bar; "retrying"/"idle_compress" are background — leave it alone
+        update_sessionbar(status: 'working') if progress_type.to_s == "thinking"
 
-        @progress_message = message || Clacky::THINKING_VERBS.sample
+        # Build display message; "retrying" appends attempt/total from metadata
+        attempt = metadata[:attempt]
+        total   = metadata[:total]
+        attempt_suffix = attempt && total ? " (#{attempt}/#{total})" : ""
+
+        @progress_message    = (message || Clacky::THINKING_VERBS.sample) + attempt_suffix
         @progress_start_time = Time.now
-        # Flag used by the progress thread to know when to stop gracefully.
-        # Using a flag + join is safe because Thread#kill can interrupt a thread
-        # while it holds @render_mutex, causing a permanent deadlock.
         @progress_thread_stop = false
 
-        # Show initial progress (yellow, active)
-        append_output("") if prefix_newline
-        # Initial hint — no stdout yet, so no Ctrl+O tip at this point.
-        # The background thread will add the Ctrl+O tip as soon as any stdout arrives.
-        output = @renderer.render_working("#{@progress_message}… (Ctrl+C to interrupt)")
-        append_output(output)
+        # Choose render style: yellow for thinking, gray for retrying/idle
+        quiet_type = %w[retrying idle_compress].include?(progress_type.to_s)
+        render_active = ->(msg) {
+          quiet_type ? @renderer.render_progress(msg) : @renderer.render_working(msg)
+        }
 
-        # Start background thread to update elapsed time.
-        # Also dynamically adds "Ctrl+O to view output" hint once @stdout_lines is populated.
+        append_output("") if prefix_newline
+        append_output(render_active.call("#{@progress_message}… (Ctrl+C to interrupt)"))
+
+        # Background thread: update elapsed time every 0.5s
         @progress_thread = Thread.new do
           until @progress_thread_stop
             sleep 0.5
@@ -547,7 +572,7 @@ module Clacky
             hint = has_output ?
               "(Ctrl+C to interrupt · Ctrl+O to view output · #{elapsed}s)" :
               "(Ctrl+C to interrupt · #{elapsed}s)"
-            update_progress_line(@renderer.render_working("#{@progress_message}… #{hint}"))
+            update_progress_line(render_active.call("#{@progress_message}… #{hint}"))
           end
         rescue StandardError
           # Silently handle thread errors
@@ -555,68 +580,8 @@ module Clacky
       end
 
       # Returns true if a progress indicator is currently active.
-      # Used to guard calls to clear_progress so we don't accidentally
-      # remove a non-progress line from the output buffer.
       def progress_active?
         @progress_start_time != nil
-      end
-
-      # Clear progress indicator
-      def clear_progress
-        # Guard: if no progress is active, do nothing.
-        # This makes clear_progress idempotent — safe to call multiple times
-        # (e.g. once from handle_submit and again from handle_agent_exception).
-        return unless progress_active?
-
-        # Calculate elapsed time before stopping
-        elapsed_time = @progress_start_time ? (Time.now - @progress_start_time).to_i : 0
-
-        # Stop the progress thread (blocks until thread exits or timeout)
-        stop_progress_thread
-
-        # stdout buffer no longer needed after command finishes
-        @stdout_lines = nil
-
-        # Update the final progress line to gray (stopped state)
-        if @progress_message && elapsed_time > 0
-          final_output = @renderer.render_progress("#{@progress_message}… (#{elapsed_time}s)")
-          update_progress_line(final_output)
-        else
-          clear_progress_line
-        end
-      end
-
-      # Non-blocking variant of clear_progress, used by handle_submit so the
-      # user message appears on screen immediately without waiting for the
-      # progress thread to fully exit.
-      #
-      # Strategy:
-      #   1. Snapshot elapsed time and message before touching any state.
-      #   2. Signal the progress thread to stop (sets flag + nulls start time)
-      #      so it will exit on its own next wake-up — no join here.
-      #   3. Immediately render the final (gray) progress line or remove it.
-      #   4. The thread finishes in the background; clear_progress called later
-      #      via the interrupt path is idempotent and will be a no-op.
-      def clear_progress_nonblocking
-        return unless progress_active?
-
-        elapsed_time = @progress_start_time ? (Time.now - @progress_start_time).to_i : 0
-        saved_message = @progress_message
-
-        # Signal thread to stop without joining — it will exit on next loop tick
-        @progress_start_time = nil
-        @stdout_lines = nil
-        @progress_thread_stop = true
-        # Detach: let the thread die on its own; we do NOT join here
-        @progress_thread = nil
-
-        # Immediately update the visual progress line (no waiting)
-        if saved_message && elapsed_time > 0
-          final_output = @renderer.render_progress("#{saved_message}… (#{elapsed_time}s)")
-          update_progress_line(final_output)
-        else
-          clear_progress_line
-        end
       end
 
       # Stop the fullscreen refresh thread gracefully via flag + join.
@@ -1119,16 +1084,21 @@ module Clacky
 
       # Handle submit action
       private def handle_submit(data)
-        # If progress is currently active, clear the progress line BEFORE appending
-        # the user message. This avoids a race condition where clear_progress (called
-        # later via the interrupt path) would call update_last_line/remove_last_line
-        # on the user message instead of the progress line.
-        #
-        # We use a non-blocking variant here so that the progress thread's join()
-        # does NOT block the main thread — the user message appears on screen
-        # immediately with no perceptible delay.
+        # If progress is currently active, stop it before appending the user message.
+        # We do this non-blocking (signal thread to stop without joining) so the user
+        # message appears on screen immediately with no perceptible delay.
         if progress_active?
-          clear_progress_nonblocking
+          elapsed_time  = @progress_start_time ? (Time.now - @progress_start_time).to_i : 0
+          saved_message = @progress_message
+          @progress_start_time  = nil
+          @stdout_lines         = nil
+          @progress_thread_stop = true
+          @progress_thread      = nil  # detach; thread exits on its next tick
+          if saved_message && elapsed_time > 0
+            update_progress_line(@renderer.render_progress("#{saved_message}… (#{elapsed_time}s)"))
+          else
+            clear_progress_line
+          end
         end
 
         # Render user message immediately before running agent
