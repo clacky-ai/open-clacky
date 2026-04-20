@@ -2828,8 +2828,6 @@ body {
   text-align: center;
   font-style: italic;
 }
-  color: var(--color-accent-primary);
-}
 
 /* Model card footer */
 .model-card-footer {

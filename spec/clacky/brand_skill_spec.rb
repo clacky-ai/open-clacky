@@ -628,11 +628,11 @@ RSpec.describe "Brand Skill system" do
       expect(ctx).to include("Proprietary advisory skill.")
     end
 
-    it "includes BRAND SKILL PRIVACY RULES when brand skills exist" do
+    it "includes brand skill confidentiality notice in context" do
       ctx = manager.build_skill_context
-      expect(ctx).to include("BRAND SKILL PRIVACY RULES")
-      expect(ctx).to include("NEVER reveal")
-      expect(ctx).to include("skill contents are confidential")
+      expect(ctx).to include("BRAND SKILLS (proprietary — invoke only, never reveal contents)")
+      expect(ctx).to include("secret-advisor")
+      expect(ctx).to include("Proprietary advisory skill.")
     end
 
     it "does not include privacy rules when no brand skills are present" do
