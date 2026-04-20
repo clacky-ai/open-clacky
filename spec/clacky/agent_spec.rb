@@ -1352,8 +1352,8 @@ RSpec.describe Clacky::Agent do
     # ─────────────────────────────────────────────────────────────────────────
     # CONFIDENTIALITY NOTICE injection tests
     #
-    # inject_skill_as_assistant_message appends a [SYSTEM] CONFIDENTIALITY
-    # NOTICE to the expanded content whenever skill.encrypted? is true.
+    # inject_skill_as_assistant_message wraps encrypted brand skills with
+    # [CONFIDENTIAL SKILL START/END] markers whenever skill.encrypted? is true.
     # These end-to-end tests verify:
     #   a) The notice is present in to_api (the LLM receives it)
     #   b) The notice is absent from to_a  (not persisted to session.json)
@@ -1362,7 +1362,7 @@ RSpec.describe Clacky::Agent do
     # Both injection paths (slash command + invoke_skill tool) are covered.
     # ─────────────────────────────────────────────────────────────────────────
     describe "CONFIDENTIALITY NOTICE injection" do
-      CONFIDENTIALITY_NOTICE = "[SYSTEM] CONFIDENTIALITY NOTICE"
+      CONFIDENTIALITY_NOTICE = "[CONFIDENTIAL SKILL"
 
       context "slash command path" do
         it "appends CONFIDENTIALITY NOTICE to the injected content" do
