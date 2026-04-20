@@ -204,6 +204,7 @@ module Clacky
             updated_at:    s[:updated_at],
             total_tasks:   ls&.dig(:total_tasks) || s.dig(:stats, :total_tasks) || 0,
             total_cost:    ls&.dig(:total_cost)  || s.dig(:stats, :total_cost_usd) || 0.0,
+            pinned:        s[:pinned] || false,
           }
         end
       end
@@ -263,6 +264,11 @@ module Clacky
         return nil unless agent
 
         model_info = agent.current_model_info
+        
+        # Load pinned status from disk session file
+        disk_session = @session_manager.load(session_id)
+        pinned = disk_session ? (disk_session[:pinned] || false) : false
+        
         {
           id:              session[:id],
           name:            agent.name,
@@ -277,6 +283,7 @@ module Clacky
           permission_mode: agent.permission_mode,
           source:          agent.source.to_s,
           agent_profile:   agent.agent_profile.name,
+          pinned:          pinned,
         }
       end
     end

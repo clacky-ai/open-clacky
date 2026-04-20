@@ -741,6 +741,82 @@ body {
   border-radius: 0 2px 2px 0;
 }
 
+/* Actions button (⋯) on session list items — visible only on hover */
+.session-actions-btn {
+  flex-shrink: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  background: transparent;
+  border: none;
+  border-radius: 3px;
+  color: var(--color-text-muted);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+  margin-top: -3px;
+  transition: background .15s, color .15s;
+  font-weight: bold;
+  letter-spacing: -1px;
+}
+.session-item:hover .session-actions-btn { display: flex; }
+.session-actions-btn:hover { 
+  background: var(--color-bg-hover); 
+  color: var(--color-text-primary); 
+}
+
+/* Pin icon in session name */
+.session-pin-icon {
+  flex-shrink: 0;
+  font-size: 11px;
+  opacity: 0.7;
+  margin-left: 2px;
+}
+.session-item.active .session-pin-icon {
+  opacity: 1;
+}
+
+/* Actions menu dropdown */
+.session-actions-menu {
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border-primary);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  padding: 3px;
+  min-width: 120px;
+  z-index: 1000;
+  animation: fadeIn 0.15s ease;
+}
+[data-theme="dark"] .session-actions-menu {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+.session-actions-menu-item {
+  padding: 6px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--color-text-primary);
+  font-size: 12px;
+  transition: background .15s;
+  user-select: none;
+}
+.session-actions-menu-item:hover {
+  background: var(--color-bg-hover);
+}
+.session-actions-menu-item--danger {
+  color: var(--color-error);
+}
+.session-actions-menu-item--danger:hover {
+  background: var(--color-error-bg);
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
 /* Delete button on session list items — visible only on hover */
 .session-delete-btn {
   flex-shrink: 0;

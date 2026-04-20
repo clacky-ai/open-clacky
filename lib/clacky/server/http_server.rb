@@ -1818,17 +1818,39 @@ module Clacky
 
       def api_rename_session(session_id, req, res)
         body = parse_json_body(req)
-        new_name = body["name"].to_s.strip
+        new_name = body["name"]&.to_s&.strip
+        pinned = body["pinned"]
 
-        return json_response(res, 400, { error: "name is required" }) if new_name.empty?
         return json_response(res, 404, { error: "Session not found" }) unless @registry.ensure(session_id)
 
         agent = nil
         @registry.with_session(session_id) { |s| agent = s[:agent] }
-        agent.rename(new_name)
-        @session_manager.save(agent.to_session_data)
-        broadcast(session_id, { type: "session_renamed", session_id: session_id, name: new_name })
-        json_response(res, 200, { ok: true, name: new_name })
+        
+        # Update name if provided
+        if new_name && !new_name.empty?
+          agent.rename(new_name)
+        end
+        
+        # Save session data
+        session_data = agent.to_session_data
+        
+        # Update pinned field if provided (not stored in agent, only in session file)
+        if !pinned.nil?
+          session_data[:pinned] = pinned
+        end
+        
+        @session_manager.save(session_data)
+        
+        # Broadcast update event
+        update_data = { type: "session_updated", session_id: session_id }
+        update_data[:name] = new_name if new_name && !new_name.empty?
+        update_data[:pinned] = pinned unless pinned.nil?
+        broadcast(session_id, update_data)
+        
+        response_data = { ok: true }
+        response_data[:name] = new_name if new_name && !new_name.empty?
+        response_data[:pinned] = pinned unless pinned.nil?
+        json_response(res, 200, response_data)
       rescue => e
         json_response(res, 500, { error: e.message })
       end
