@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.33] - 2026-04-20
+
+### Fixed
+- **Skill evolution targets only user skills**: auto-evolution (skill auto-creation and skill reflection) now skips default and brand skills — only user-created skills in `~/.clacky/skills/` or `.clacky/skills/` are eligible for improvement
+- **Skill auto-creation and reflection run in isolated subagents**: these background analysis tasks no longer inject messages into the main conversation history; they now fork a dedicated subagent that runs fully independently, preventing any interference with the current session
+- **User feedback prompt no longer interrupts agent flow**: removed stray `STOP.` prefix from the in-conversation user-feedback message, allowing the agent to handle feedback naturally without halting unexpectedly
+
 ## [0.9.32] - 2026-04-20
 
 ### Added
