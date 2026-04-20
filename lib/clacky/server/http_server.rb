@@ -385,6 +385,8 @@ module Clacky
         when ["GET",    "/api/version"]           then api_get_version(res)
         when ["POST",   "/api/version/upgrade"]   then api_upgrade_version(req, res)
         when ["POST",   "/api/restart"]           then api_restart(req, res)
+        when ["PATCH",  "/api/sessions/:id/model"] then api_switch_session_model(req, res)
+        when ["PATCH",  "/api/sessions/:id/working_dir"] then api_change_session_working_dir(req, res)
         else
           if method == "POST" && path.match?(%r{^/api/channels/[^/]+/test$})
             platform = path.sub("/api/channels/", "").sub("/test", "")
@@ -404,6 +406,12 @@ module Clacky
           elsif method == "PATCH" && path.match?(%r{^/api/sessions/[^/]+$})
             session_id = path.sub("/api/sessions/", "")
             api_rename_session(session_id, req, res)
+          elsif method == "PATCH" && path.match?(%r{^/api/sessions/[^/]+/model$})
+            session_id = path.sub("/api/sessions/", "").sub("/model", "")
+            api_switch_session_model(session_id, req, res)
+          elsif method == "PATCH" && path.match?(%r{^/api/sessions/[^/]+/working_dir$})
+            session_id = path.sub("/api/sessions/", "").sub("/working_dir", "")
+            api_change_session_working_dir(session_id, req, res)
           elsif method == "DELETE" && path.start_with?("/api/sessions/")
             session_id = path.sub("/api/sessions/", "")
             api_delete_session(session_id, res)
@@ -467,15 +475,15 @@ module Clacky
         raw_dir = body["working_dir"].to_s.strip
         working_dir = raw_dir.empty? ? default_working_dir : File.expand_path(raw_dir)
 
-        # If a custom working_dir was requested and the directory already exists and is non-empty,
-        # refuse to create the session to prevent accidentally clobbering an existing project.
-        if !raw_dir.empty? && Dir.exist?(working_dir) && Dir.children(working_dir).any?
-          return json_response(res, 409, { error: "Directory already exists and is not empty: #{working_dir}" })
-        end
+        # Optional model override
+        model_override = body["model"].to_s.strip
+        model_override = nil if model_override.empty?
 
+        # Create working directory if it doesn't exist
+        # Allow multiple sessions in the same directory
         FileUtils.mkdir_p(working_dir)
 
-        session_id = build_session(name: name, working_dir: working_dir, profile: profile, source: source)
+        session_id = build_session(name: name, working_dir: working_dir, profile: profile, source: source, model_override: model_override)
         broadcast_session_update(session_id)
         json_response(res, 201, { session: @registry.session_summary(session_id) })
       end
@@ -1825,6 +1833,74 @@ module Clacky
         json_response(res, 500, { error: e.message })
       end
 
+      def api_switch_session_model(session_id, req, res)
+        body = parse_json_body(req)
+        new_model_name = body["model"].to_s.strip
+
+        return json_response(res, 400, { error: "model is required" }) if new_model_name.empty?
+        return json_response(res, 404, { error: "Session not found" }) unless @registry.ensure(session_id)
+
+        agent = nil
+        @registry.with_session(session_id) { |s| agent = s[:agent] }
+        
+        # Find the model configuration index by model name (use global config)
+        model_index = @agent_config.models.find_index { |m| m["model"] == new_model_name }
+        
+        if model_index.nil?
+          return json_response(res, 400, { error: "Model '#{new_model_name}' not found in configuration" })
+        end
+        
+        # Switch to the model by index (unified interface with CLI)
+        # This handles: config.switch_model + client rebuild + message_compressor rebuild
+        success = agent.switch_model(model_index)
+        
+        unless success
+          return json_response(res, 500, { error: "Failed to switch model" })
+        end
+        
+        # Persist the change (saves to session file, NOT global config.yml)
+        @session_manager.save(agent.to_session_data)
+        
+        # Broadcast update to all clients
+        broadcast_session_update(session_id)
+        
+        json_response(res, 200, { ok: true, model: new_model_name })
+      rescue => e
+        json_response(res, 500, { error: e.message })
+      end
+
+      def api_change_session_working_dir(session_id, req, res)
+        body = parse_json_body(req)
+        new_dir = body["working_dir"].to_s.strip
+
+        return json_response(res, 400, { error: "working_dir is required" }) if new_dir.empty?
+        return json_response(res, 404, { error: "Session not found" }) unless @registry.ensure(session_id)
+
+        # Expand ~ to home directory
+        expanded_dir = File.expand_path(new_dir)
+        
+        # Validate directory exists
+        unless Dir.exist?(expanded_dir)
+          return json_response(res, 400, { error: "Directory does not exist: #{expanded_dir}" })
+        end
+
+        agent = nil
+        @registry.with_session(session_id) { |s| agent = s[:agent] }
+        
+        # Change the agent's working directory
+        agent.change_working_dir(expanded_dir)
+        
+        # Persist the change
+        @session_manager.save(agent.to_session_data)
+        
+        # Broadcast update to all clients
+        broadcast_session_update(session_id)
+        
+        json_response(res, 200, { ok: true, working_dir: expanded_dir })
+      rescue => e
+        json_response(res, 500, { error: e.message })
+      end
+
       def api_delete_session(session_id, res)
         if @registry.delete(session_id)
           # Also remove the persisted session file from disk
@@ -2156,13 +2232,19 @@ module Clacky
       # @param working_dir [String] working directory for the agent
       # @param permission_mode [Symbol] :confirm_all (default, human present) or
       #   :auto_approve (unattended — suppresses request_user_feedback waits)
-      def build_session(name:, working_dir:, permission_mode: :confirm_all, profile: "general", source: :manual)
+      def build_session(name:, working_dir:, permission_mode: :confirm_all, profile: "general", source: :manual, model_override: nil)
         session_id = Clacky::SessionManager.generate_id
         @registry.create(session_id: session_id)
 
         client = @client_factory.call
         config = @agent_config.deep_copy
         config.permission_mode = permission_mode
+        
+        # Apply model override if provided
+        if model_override && config.current_model
+          config.current_model["model"] = model_override
+        end
+        
         broadcaster = method(:broadcast)
         ui = WebUIController.new(session_id, broadcaster)
         agent = Clacky::Agent.new(client, config, working_dir: working_dir, ui: ui, profile: profile,

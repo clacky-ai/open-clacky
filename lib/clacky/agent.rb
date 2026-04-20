@@ -129,23 +129,35 @@ module Clacky
       @hooks.add(event, &block)
     end
 
-    # Switch to a different model by name
-    # Returns true if switched, false if model not found
-    def switch_model(model_name)
-      if @config.switch_model(model_name)
-        # Re-create client for new model
-        @client = Clacky::Client.new(
-          @config.api_key,
-          base_url: @config.base_url,
-          model: @config.model_name,
-          anthropic_format: @config.anthropic_format?
-        )
-        # Update message compressor with new client and model
-        @message_compressor = MessageCompressor.new(@client, model: current_model)
-        true
-      else
-        false
-      end
+    # Switch to a different model by index
+    # @param index [Integer] Model index (0-based)
+    # @return [Boolean] true if switched successfully, false otherwise
+    def switch_model(index)
+      # Switch config to the model by index
+      return false unless @config.switch_model(index)
+      
+      # Re-create client for new model
+      @client = Clacky::Client.new(
+        @config.api_key,
+        base_url: @config.base_url,
+        model: @config.model_name,
+        anthropic_format: @config.anthropic_format?
+      )
+      # Update message compressor with new client and model
+      @message_compressor = MessageCompressor.new(@client, model: current_model)
+      
+      # Inject a new session context to notify the AI of the model switch
+      inject_session_context
+      
+      true
+    end
+
+    # Change the working directory for this session
+    # Injects a new session context to notify the AI of the directory change
+    def change_working_dir(new_dir)
+      @working_dir = new_dir
+      inject_session_context
+      true
     end
 
     # Get list of available model names
@@ -1199,6 +1211,14 @@ module Clacky
       # Skip if we already have a context for today
       return if @history.last_session_context_date == today
 
+      inject_session_context
+    end
+
+    # Core method to inject session context (date, model, OS, paths).
+    # Called by inject_session_context_if_needed (with date check)
+    # and by switch_model (without date check, to force update).
+    private def inject_session_context
+      today   = Time.now.strftime("%Y-%m-%d")
       os      = Clacky::Utils::EnvironmentDetector.os_type
       desktop = Clacky::Utils::EnvironmentDetector.desktop_path
       parts   = [

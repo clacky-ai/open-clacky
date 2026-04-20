@@ -68,13 +68,15 @@
             </button>
             <div class="btn-split-wrap">
               <button id="btn-new-session-inline" class="btn-split-main" title="New Session" data-i18n="sessions.newSession">+ New Session</button>
-              <button id="btn-new-session-arrow" class="btn-split-arrow" title="Choose agent">▾</button>
+              <button id="btn-new-session-arrow" class="btn-split-arrow" title="Options">▾</button>
               <!-- Dropdown -->
               <div id="new-session-dropdown" class="new-session-dropdown" hidden>
-                <div class="dropdown-item" data-profile="general">✦ General</div>
-                <div class="dropdown-item" data-profile="coding">👨‍💻 Coding</div>
-                <div class="dropdown-divider"></div>
-                <div class="dropdown-item" id="btn-new-project-entry">🚀 New Project</div>
+                <div class="dropdown-item" id="btn-new-session-modal" data-i18n="sessions.newSessionAdvanced">
+                  <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor" style="vertical-align: -1px; margin-right: 5px; opacity: 0.6;">
+                    <path d="M8 0a.5.5 0 01.5.5v2a.5.5 0 01-1 0v-2A.5.5 0 018 0zm0 13a.5.5 0 01.5.5v2a.5.5 0 01-1 0v-2A.5.5 0 018 13zm8-5a.5.5 0 01-.5.5h-2a.5.5 0 010-1h2a.5.5 0 01.5.5zM3 8a.5.5 0 01-.5.5h-2a.5.5 0 010-1h2A.5.5 0 013 8zm10.657-5.657a.5.5 0 010 .707l-1.414 1.415a.5.5 0 11-.707-.708l1.414-1.414a.5.5 0 01.707 0zm-9.193 9.193a.5.5 0 010 .707L3.05 13.657a.5.5 0 01-.707-.707l1.414-1.414a.5.5 0 01.707 0zm9.193 2.121a.5.5 0 01-.707 0l-1.414-1.414a.5.5 0 01.707-.707l1.414 1.414a.5.5 0 010 .707zM4.464 4.465a.5.5 0 01-.707 0L2.343 3.05a.5.5 0 11.707-.707l1.414 1.414a.5.5 0 010 .708z"/>
+                  </svg>
+                  <span data-i18n="sessions.newSessionAdvanced">More Options</span>
+                </div>
               </div>
             </div>
           </div>
@@ -105,23 +107,6 @@
                 <input id="session-search-date" type="date" class="search-date" />
               </div>
               <button id="btn-search-clear-all" class="btn-search-clear-all" aria-label="Clear filters" hidden>✕</button>
-            </div>
-          </div>
-        </div>
-
-        <!-- New Project inline form (hidden by default, toggled by "New Project" dropdown item) -->
-        <div id="new-project-form" class="new-project-panel" hidden>
-          <div class="new-project-card">
-            <div class="new-project-title">🚀 New Project</div>
-            <div class="new-project-field">
-              <label class="new-project-label" for="new-project-dir">Working Directory</label>
-              <input id="new-project-dir" type="text" class="new-project-input"
-                     placeholder="~/clacky_projects/my-project"
-                     autocomplete="off" spellcheck="false" />
-            </div>
-            <div class="new-project-actions">
-              <button id="btn-new-project-cancel" class="btn-new-project-cancel">Cancel</button>
-              <button id="btn-new-project-create" class="btn-new-project-create">Create →</button>
             </div>
           </div>
         </div>
@@ -271,20 +256,26 @@
       </div>
       <!-- Session info bar — mirrors CLI bottom status bar -->
       <div id="session-info-bar" style="display:none">
-        <!-- Always visible: status | id | model | cost -->
+        <!-- Order: status | id | dir | model | mode | tasks | cost -->
+        <!-- Pattern: element + separator-after-element (except last) -->
         <span id="sib-status"></span>
-        <span class="sib-sep sib-sep-before-id">│</span>
+        <span class="sib-sep sib-sep-after-status">│</span>
         <span id="sib-id"></span>
-        <span id="sib-model-wrap"><span class="sib-sep">│</span><span id="sib-model"></span></span>
-        <span class="sib-sep">│</span>
-        <span id="sib-cost"></span>
-        <!-- Detail fields: hidden by default, revealed on hover -->
+        <span class="sib-sep sib-sep-after-id">│</span>
+        <span id="sib-dir" title="Click to change directory"></span>
+        <span class="sib-sep sib-sep-after-dir">│</span>
+        <span id="sib-model-wrap">
+          <span id="sib-model" class="sib-model-clickable" title="Click to switch model"></span>
+          <div id="sib-model-dropdown" class="sib-model-dropdown" style="display:none"></div>
+        </span>
+        <span class="sib-sep sib-sep-after-model">│</span>
+        <!-- Detail fields: mode, tasks, cost -->
         <span class="sib-detail">
-          <span class="sib-sep">│</span>
-          <span id="sib-dir"></span>
-          <span id="sib-mode-wrap"><span class="sib-sep">│</span><span id="sib-mode"></span></span>
-          <span class="sib-sep sib-sep-before-tasks">│</span>
+          <span id="sib-mode"></span>
+          <span class="sib-sep sib-sep-after-mode">│</span>
           <span id="sib-tasks"></span>
+          <span class="sib-sep sib-sep-after-tasks">│</span>
+          <span id="sib-cost"></span>
         </span>
       </div>
 
@@ -718,6 +709,57 @@
   </div>
 </div>
 
+<!-- ── NEW SESSION MODAL ─────────────────────────────────────────────────── -->
+<div id="new-session-modal" class="modal-overlay" style="display:none">
+  <div class="modal-box new-session-modal">
+    <div class="modal-header">
+      <h3 class="modal-title" data-i18n="sessions.modal.title">Create New Session</h3>
+      <button id="new-session-modal-close" class="modal-close-btn" title="Close">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="modal-field">
+        <label class="modal-label" data-i18n="sessions.modal.agent">Agent</label>
+        <select id="new-session-agent" class="modal-select">
+          <option value="general" data-i18n="sessions.modal.agent.general">General</option>
+          <option value="coding" data-i18n="sessions.modal.agent.coding">Coding</option>
+        </select>
+      </div>
+
+      <div class="modal-field">
+        <label class="modal-label" data-i18n="sessions.modal.name">Session Name</label>
+        <input id="new-session-name" type="text" class="modal-input" 
+               data-i18n-placeholder="sessions.modal.name.placeholder" 
+               placeholder="Leave empty to auto-generate">
+      </div>
+
+      <div class="modal-field">
+        <label class="modal-label" data-i18n="sessions.modal.model">Model</label>
+        <select id="new-session-model" class="modal-select">
+          <!-- Populated dynamically from configured models -->
+        </select>
+      </div>
+
+      <div class="modal-field">
+        <label class="modal-label" data-i18n="sessions.modal.directory">Working Directory</label>
+        <input id="new-session-directory" type="text" class="modal-input" 
+               data-i18n-placeholder="sessions.modal.directory.placeholder"
+               placeholder="~/workspace/my-project">
+      </div>
+
+      <div id="new-session-init-project-field" class="modal-field-checkbox" style="display:none">
+        <label class="modal-checkbox-label">
+          <input id="new-session-init-project" type="checkbox" class="modal-checkbox">
+          <span data-i18n="sessions.modal.initProject">Initialize full-stack project (/new)</span>
+        </label>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button id="new-session-create" class="btn-primary" data-i18n="sessions.modal.create">Create Session</button>
+      <button id="new-session-cancel" class="btn-secondary" data-i18n="modal.cancel">Cancel</button>
+    </div>
+  </div>
+</div>
+
 <!-- ── CONFIRMATION MODAL ────────────────────────────────────────────────── -->
 <div id="modal-overlay" class="modal-overlay" style="display:none">
   <div class="modal-box sm">
@@ -725,6 +767,18 @@
     <div class="modal-actions">
       <button id="modal-yes" class="btn-primary" data-i18n="modal.yes">Yes</button>
       <button id="modal-no"  class="btn-secondary" data-i18n="modal.no">No</button>
+    </div>
+  </div>
+</div>
+
+<!-- Prompt modal for text input -->
+<div id="prompt-modal-overlay" class="modal-overlay" style="display:none">
+  <div class="modal-box sm">
+    <div id="prompt-modal-message" style="font-size:14px;line-height:1.6;margin-bottom:12px"></div>
+    <input type="text" id="prompt-modal-input" class="prompt-modal-input" autocomplete="off" spellcheck="false">
+    <div class="modal-actions">
+      <button id="prompt-modal-ok" class="btn-primary" data-i18n="modal.ok">OK</button>
+      <button id="prompt-modal-cancel" class="btn-secondary" data-i18n="modal.cancel">Cancel</button>
     </div>
   </div>
 </div>

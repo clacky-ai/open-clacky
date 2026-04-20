@@ -320,6 +320,12 @@ module Clacky
       end
 
       def set_idle_status
+        # Clear any in-progress state when transitioning to idle
+        if @live_progress_state
+          emit("progress", phase: "done", status: "stop")
+          @live_progress_state = nil
+          @progress_start_time = nil
+        end
         emit("session_update", status: "idle")
         forward_to_subscribers { |sub| sub.set_idle_status }
       end
