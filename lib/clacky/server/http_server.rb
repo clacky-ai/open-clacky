@@ -1519,8 +1519,16 @@ module Clacky
         # Build local map: name → entry
         local_map = local_skill_objects.each_with_object({}) do |skill, h|
           meta = upload_meta[skill.identifier] || {}
-          skill_md_path = File.join(skill.directory.to_s, "SKILL.md")
-          local_modified_at = File.exist?(skill_md_path) ? File.mtime(skill_md_path).utc.iso8601 : nil
+          # Check the latest mtime of any file in the skill directory
+          skill_dir = skill.directory.to_s
+          local_modified_at = if Dir.exist?(skill_dir)
+            Dir.glob("**/*", base: skill_dir)
+              .map { |rel| File.join(skill_dir, rel) }
+              .select { |f| File.file?(f) }
+              .map { |f| File.mtime(f) }
+              .max
+              &.utc&.iso8601
+          end
           h[skill.identifier] = {
             name:              skill.identifier,
             description:       skill.context_description,
@@ -1542,9 +1550,14 @@ module Clacky
         cloud_skills = platform_skills.map do |ps|
           name  = ps["name"].to_s
           local = local_map[name]
-          # Has local changes if local SKILL.md mtime is newer than uploaded_at
-          has_local_changes = if local && local[:local_modified_at] && local[:uploaded_at]
-            Time.parse(local[:local_modified_at]) > Time.parse(local[:uploaded_at]) rescue false
+          # Has local changes if local mtime is newer than last upload (or platform update)
+          has_local_changes = if local && local[:local_modified_at]
+            ref_time = local[:uploaded_at] || ps["updated_at"]
+            if ref_time
+              Time.parse(local[:local_modified_at]) > Time.parse(ref_time) rescue false
+            else
+              false
+            end
           else
             false
           end
