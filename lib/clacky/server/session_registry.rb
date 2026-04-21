@@ -265,10 +265,6 @@ module Clacky
 
         model_info = agent.current_model_info
         
-        # Load pinned status from disk session file
-        disk_session = @session_manager.load(session_id)
-        pinned = disk_session ? (disk_session[:pinned] || false) : false
-        
         {
           id:              session[:id],
           name:            agent.name,
@@ -283,7 +279,7 @@ module Clacky
           permission_mode: agent.permission_mode,
           source:          agent.source.to_s,
           agent_profile:   agent.agent_profile.name,
-          pinned:          pinned,
+          pinned:          agent.pinned || false,
         }
       end
     end

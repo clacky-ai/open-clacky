@@ -10,6 +10,7 @@ module Clacky
       def restore_session(session_data)
         @session_id = session_data[:session_id]
         @name = session_data[:name] || ""
+        @pinned = session_data[:pinned] || false
         @history = MessageHistory.new(session_data[:messages] || [])
         @todos = session_data[:todos] || []  # Restore todos from session
         @iterations = session_data.dig(:stats, :total_iterations) || 0
@@ -77,6 +78,7 @@ module Clacky
         {
           session_id: @session_id,
           name: @name,
+          pinned: @pinned,
           created_at: @created_at,
           updated_at: Time.now.iso8601,
           working_dir: @working_dir,
