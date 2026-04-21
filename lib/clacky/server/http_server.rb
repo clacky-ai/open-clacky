@@ -1831,15 +1831,13 @@ module Clacky
           agent.rename(new_name)
         end
         
-        # Save session data
-        session_data = agent.to_session_data
-        
-        # Update pinned field if provided (not stored in agent, only in session file)
+        # Update pinned status if provided
         if !pinned.nil?
-          session_data[:pinned] = pinned
+          agent.pinned = pinned
         end
         
-        @session_manager.save(session_data)
+        # Save session data
+        @session_manager.save(agent.to_session_data)
         
         # Broadcast update event
         update_data = { type: "session_updated", session_id: session_id }

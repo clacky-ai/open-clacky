@@ -43,6 +43,7 @@ module Clacky
     attr_reader :session_id, :name, :history, :iterations, :total_cost, :working_dir, :created_at, :total_tasks, :todos,
                 :cache_stats, :cost_source, :ui, :skill_loader, :agent_profile,
                 :status, :error, :updated_at, :source
+    attr_accessor :pinned
 
     def permission_mode
       @config&.permission_mode&.to_s || ""
@@ -57,6 +58,7 @@ module Clacky
       @hooks = HookManager.new
       @session_id = session_id
       @name = ""
+      @pinned = false
       @history = MessageHistory.new
       @todos = []  # Store todos in memory
       @iterations = 0
