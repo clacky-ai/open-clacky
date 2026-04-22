@@ -87,22 +87,7 @@ module Clacky
       def show_assistant_message(content, files:)
         return if (content.nil? || content.to_s.strip.empty?) && files.empty?
 
-        # Re-append file:// links as markdown so the browser can render them.
-        # agent.rb strips them from content into `files` for IM channels that
-        # call send_file(); the web frontend only uses `content`, so we put
-        # them back here.
-        full_content = content.to_s.dup
-        unless files.empty?
-          links = files.map do |f|
-            prefix = f[:inline] ? "!" : ""
-            "#{prefix}[#{f[:name]}](file://#{f[:path]})"
-          end
-          full_content = full_content.strip
-          full_content += "\n\n" + links.join("\n") unless full_content.empty?
-          full_content = links.join("\n") if full_content.empty?
-        end
-
-        emit("assistant_message", content: full_content, files: files)
+        emit("assistant_message", content: content.to_s, files: files)
         forward_to_subscribers { |sub| sub.show_assistant_message(content, files: files) }
       end
 

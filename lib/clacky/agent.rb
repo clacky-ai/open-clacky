@@ -1252,13 +1252,13 @@ module Clacky
     #   [Download report](file:///path/to/file.pdf)
     #   ![chart](file:///path/to/chart.png)
     #
-    # Returns { text: String, files: Array<{name:, path:, inline:}> }
-    # File links are stripped from the returned text.
+    # Returns { text: String (original content, unmodified),
+    #           files: Array<{name:, path:, inline:}> }
     private def parse_file_links(content)
       return { text: content, files: [] } if content.nil? || content.empty?
 
       files = []
-      text = content.gsub(/(!?)\[([^\]]*)\]\(file:\/\/([^)]+)\)/) do
+      content.scan(/(!?)\[([^\]]*)\]\(file:\/\/([^)]+)\)/) do
         inline = $1 == "!"
         # URL-decode percent-encoded characters (e.g. Chinese filenames encoded by AI)
         raw_path = CGI.unescape($3)
@@ -1266,9 +1266,8 @@ module Clacky
         path   = File.expand_path(raw_path)
         Clacky::Logger.info("[parse_file_links] raw=#{$3.inspect} expanded=#{path.inspect} exist=#{File.exist?(path)}")
         files << { name: name, path: path, inline: inline }
-        ""
       end
-      { text: text.strip, files: files }
+      { text: content, files: files }
     end
 
     # Emit assistant message to UI, parsing any embedded file:// links first.

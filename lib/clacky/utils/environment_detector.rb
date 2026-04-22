@@ -20,6 +20,16 @@ module Clacky
         end
       end
 
+      # Return the OS-specific command for opening files/URLs.
+      # @return [String, nil] "open" (macOS), "xdg-open" (Linux), "explorer.exe" (WSL), or nil
+      def self.open_command
+        case os_type
+        when :macos then "open"
+        when :linux then "xdg-open"
+        when :wsl   then "explorer.exe"
+        end
+      end
+
       # Human-readable OS label for injection into session context.
       def self.os_label
         case os_type

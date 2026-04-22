@@ -1174,12 +1174,7 @@ module Clacky
 
         return json_response(res, 404, { error: "file not found" }) unless File.exist?(linux_path)
 
-        cmd = case os
-              when :macos then "open"
-              when :linux then "xdg-open"
-              when :wsl   then "explorer.exe"
-              else nil
-              end
+        cmd = Utils::EnvironmentDetector.open_command
         return json_response(res, 501, { error: "unsupported OS" }) unless cmd
 
         # explorer.exe only understands Windows-style paths.
