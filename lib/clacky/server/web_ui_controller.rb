@@ -87,7 +87,7 @@ module Clacky
       def show_assistant_message(content, files:)
         return if (content.nil? || content.to_s.strip.empty?) && files.empty?
 
-        emit("assistant_message", content: content, files: files)
+        emit("assistant_message", content: content.to_s, files: files)
         forward_to_subscribers { |sub| sub.show_assistant_message(content, files: files) }
       end
 
