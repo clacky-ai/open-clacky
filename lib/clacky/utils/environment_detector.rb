@@ -20,14 +20,47 @@ module Clacky
         end
       end
 
-      # Return the OS-specific command for opening files/URLs.
-      # @return [String, nil] "open" (macOS), "xdg-open" (Linux), "explorer.exe" (WSL), or nil
-      def self.open_command
+      # Open a file with the OS-default application.
+      # On WSL, uses "cmd.exe /c start" instead of explorer.exe so the opened
+      # window receives foreground focus even when called from a background
+      # thread (e.g. WEBrick request handler).
+      # @param path [String] Linux-side file path
+      # @return [Boolean, nil] true/false from system(), or nil on unsupported OS
+      def self.open_file(path)
         case os_type
-        when :macos then "open"
-        when :linux then "xdg-open"
-        when :wsl   then "explorer.exe"
+        when :macos then system("open", path)
+        when :linux then system("xdg-open", path)
+        when :wsl
+          win_path = linux_to_win_path(path)
+          system("cmd.exe", "/c", "start", "", win_path)
         end
+      end
+
+      # Convert a Windows-style path to a WSL/Linux-side path.
+      # e.g. "C:/Users/foo/file.txt" → "/mnt/c/Users/foo/file.txt"
+      # Returns the original path unchanged on non-WSL or if already a Linux path.
+      # @param path [String]
+      # @return [String]
+      def self.win_to_linux_path(path)
+        return path unless os_type == :wsl && path.match?(/\A[A-Za-z]:[\/\\]/)
+
+        drive = path[0].downcase
+        rest  = path[2..].gsub("\\", "/")
+        "/mnt/#{drive}#{rest}"
+      end
+
+      # Convert a Linux-side path to a Windows-style path via wslpath.
+      # e.g. "/mnt/c/Users/foo/file.txt" → "C:\Users\foo\file.txt"
+      # Returns the original path unchanged on non-WSL.
+      # @param path [String]
+      # @return [String]
+      def self.linux_to_win_path(path)
+        return path unless os_type == :wsl
+
+        Clacky::Utils::Encoding.cmd_to_utf8(
+          `wslpath -w '#{path.gsub("'", "'\''")}'`,
+          source_encoding: "UTF-8"
+        ).strip
       end
 
       # Human-readable OS label for injection into session context.

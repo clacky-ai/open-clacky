@@ -1160,32 +1160,14 @@ module Clacky
         path = parse_json_body(req)["path"]
         return json_response(res, 400, { error: "path is required" }) unless path && !path.empty?
 
-        os = Utils::EnvironmentDetector.os_type
-
         # On WSL the file may be specified as a Windows path (e.g. "C:/Users/…").
         # Convert it to the Linux-side path so File.exist? works.
-        linux_path = if os == :wsl && path.match?(/\A[A-Za-z]:[\/\\]/)
-                       drive = path[0].downcase
-                       rest  = path[2..].gsub("\\", "/")
-                       "/mnt/#{drive}#{rest}"
-                     else
-                       path
-                     end
+        linux_path = Utils::EnvironmentDetector.win_to_linux_path(path)
 
         return json_response(res, 404, { error: "file not found" }) unless File.exist?(linux_path)
 
-        cmd = Utils::EnvironmentDetector.open_command
-        return json_response(res, 501, { error: "unsupported OS" }) unless cmd
-
-        # explorer.exe only understands Windows-style paths.
-        # Convert Linux paths to Windows paths via wslpath.
-        open_path = if os == :wsl
-                      Clacky::Utils::Encoding.cmd_to_utf8(`wslpath -w '#{linux_path.gsub("'", "'\''")}'`, source_encoding: "UTF-8").strip
-                    else
-                      linux_path
-                    end
-
-        system(cmd, open_path)
+        result = Utils::EnvironmentDetector.open_file(linux_path)
+        return json_response(res, 501, { error: "unsupported OS" }) if result.nil?
         json_response(res, 200, { ok: true })
       rescue => e
         json_response(res, 500, { ok: false, error: e.message })
