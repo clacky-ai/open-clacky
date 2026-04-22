@@ -382,6 +382,7 @@ module Clacky
         when ["GET",    "/api/channels"]          then api_list_channels(res)
         when ["POST",   "/api/tool/browser"]      then api_tool_browser(req, res)
         when ["POST",   "/api/upload"]            then api_upload_file(req, res)
+        when ["POST",   "/api/open-file"]         then api_open_file(req, res)
         when ["GET",    "/api/version"]           then api_get_version(res)
         when ["POST",   "/api/version/upgrade"]   then api_upgrade_version(req, res)
         when ["POST",   "/api/restart"]           then api_restart(req, res)
@@ -1147,6 +1148,50 @@ module Clacky
         )
 
         json_response(res, 200, { ok: true, name: saved[:name], path: saved[:path] })
+      rescue => e
+        json_response(res, 500, { ok: false, error: e.message })
+      end
+
+      # POST /api/open-file
+      # Opens a local file or directory using the OS default handler.
+      # Used by the Web UI to handle file:// links — browsers block direct
+      # file:// navigation from http:// pages for security reasons.
+      def api_open_file(req, res)
+        path = parse_json_body(req)["path"]
+        return json_response(res, 400, { error: "path is required" }) unless path && !path.empty?
+
+        os = Utils::EnvironmentDetector.os_type
+
+        # On WSL the file may be specified as a Windows path (e.g. "C:/Users/…").
+        # Convert it to the Linux-side path so File.exist? works.
+        linux_path = if os == :wsl && path.match?(/\A[A-Za-z]:[\/\\]/)
+                       drive = path[0].downcase
+                       rest  = path[2..].gsub("\\", "/")
+                       "/mnt/#{drive}#{rest}"
+                     else
+                       path
+                     end
+
+        return json_response(res, 404, { error: "file not found" }) unless File.exist?(linux_path)
+
+        cmd = case os
+              when :macos then "open"
+              when :linux then "xdg-open"
+              when :wsl   then "explorer.exe"
+              else nil
+              end
+        return json_response(res, 501, { error: "unsupported OS" }) unless cmd
+
+        # explorer.exe only understands Windows-style paths.
+        # Convert Linux paths to Windows paths via wslpath.
+        open_path = if os == :wsl
+                      Clacky::Utils::Encoding.cmd_to_utf8(`wslpath -w '#{linux_path.gsub("'", "'\''")}'`, source_encoding: "UTF-8").strip
+                    else
+                      linux_path
+                    end
+
+        system(cmd, open_path)
+        json_response(res, 200, { ok: true })
       rescue => e
         json_response(res, 500, { ok: false, error: e.message })
       end
