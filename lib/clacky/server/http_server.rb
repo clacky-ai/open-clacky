@@ -168,7 +168,8 @@ module Clacky
         @version_mutex   = Mutex.new
         @scheduler       = Scheduler.new(
           session_registry: @registry,
-          session_builder:  method(:build_session)
+          session_builder:  method(:build_session),
+          task_runner:      method(:run_agent_task)
         )
         @channel_manager = Clacky::Channel::ChannelManager.new(
           session_registry:  @registry,
@@ -413,6 +414,9 @@ module Clacky
           elsif method == "GET" && path.match?(%r{^/api/sessions/[^/]+/skills$})
             session_id = path.sub("/api/sessions/", "").sub("/skills", "")
             api_session_skills(session_id, res)
+          elsif method == "GET" && path.match?(%r{^/api/sessions/[^/]+/export$})
+            session_id = path.sub("/api/sessions/", "").sub("/export", "")
+            api_export_session(session_id, res)
           elsif method == "GET" && path.match?(%r{^/api/sessions/[^/]+/messages$})
             session_id = path.sub("/api/sessions/", "").sub("/messages", "")
             api_session_messages(session_id, req, res)
@@ -2077,6 +2081,47 @@ module Clacky
         else
           json_response(res, 404, { error: "Session not found" })
         end
+      end
+
+      # Export a session bundle as a .zip download containing:
+      #   - session.json          (always)
+      #   - chunk-*.md            (0..N archived conversation chunks)
+      # Useful for debugging — user clicks "download" in the WebUI status bar
+      # and we can ask them to attach the zip to a bug report.
+      def api_export_session(session_id, res)
+        bundle = @session_manager.files_for(session_id)
+        unless bundle
+          return json_response(res, 404, { error: "Session not found" })
+        end
+
+        require "zip"
+
+        short_id = bundle[:session][:session_id].to_s[0..7]
+        # Build the zip entirely in memory — session files are small (< few MB).
+        buffer = Zip::OutputStream.write_buffer do |zos|
+          zos.put_next_entry("session.json")
+          zos.write(File.binread(bundle[:json_path]))
+
+          bundle[:chunks].each do |chunk_path|
+            # Preserve original chunk filename so the ordering (chunk-1.md, chunk-2.md, ...) is clear.
+            zos.put_next_entry(File.basename(chunk_path))
+            zos.write(File.binread(chunk_path))
+          end
+        end
+        buffer.rewind
+        data = buffer.read
+
+        filename = "clacky-session-#{short_id}.zip"
+        res.status = 200
+        res.content_type = "application/zip"
+        res["Content-Disposition"] = %(attachment; filename="#{filename}")
+        res["Access-Control-Allow-Origin"] = "*"
+        # Force a fresh copy each time — debugging sessions get new chunks over time.
+        res["Cache-Control"] = "no-store"
+        res.body = data
+      rescue => e
+        Clacky::Logger.error("Session export failed: #{e.message}") if defined?(Clacky::Logger)
+        json_response(res, 500, { error: "Export failed: #{e.message}" })
       end
 
       # ── WebSocket ─────────────────────────────────────────────────────────────

@@ -23,9 +23,13 @@ module Clacky
       SCHEDULES_FILE = File.expand_path("~/.clacky/schedules.yml")
       TASKS_DIR      = File.expand_path("~/.clacky/tasks")
 
-      def initialize(session_registry:, session_builder:)
+      def initialize(session_registry:, session_builder:, task_runner:)
         @registry        = session_registry
         @session_builder = session_builder  # callable: (name:, working_dir:) -> session_id
+        # Callable that runs a task on an agent with unified status/save/broadcast
+        # handling — signature: (session_id, agent, &block). Same contract as
+        # the one ChannelManager receives.
+        @task_runner     = task_runner
         @thread          = nil
         @running         = false
         @mutex           = Mutex.new
@@ -227,22 +231,19 @@ module Clacky
 
         Clacky::Logger.info("scheduler_task_fired", task: task_name, session: session_id)
 
-        # Run the agent in a background thread so the scheduler tick is non-blocking.
-        Thread.new do
-          session = @registry.get(session_id)
-          agent   = nil
-          @registry.with_session(session_id) { |s| agent = s[:agent] }
-          next unless agent
+        agent = nil
+        @registry.with_session(session_id) { |s| agent = s[:agent] }
+        return unless agent
 
-          @registry.update(session_id, status: :running)
-          agent.run(prompt)
-          @registry.update(session_id, status: :idle)
-          Clacky::Logger.info("scheduler_task_completed", task: task_name, session: session_id)
-        rescue => e
-          @registry.update(session_id, status: :error, error: e.message)
-          Clacky::Logger.error("scheduler_task_failed", task: task_name, session: session_id, error: e)
-        end
+        # Delegate to the unified task runner (same code path as manual runs and
+        # channel-triggered runs). It handles:
+        #   * status transitions (:running → :idle/:error)
+        #   * broadcasting session_update
+        #   * persisting the session JSON on success/interrupted/error   ← the bit we were missing
+        #   * idle-compression timer lifecycle
+        @task_runner.call(session_id, agent) { agent.run(prompt) }
 
+        Clacky::Logger.info("scheduler_task_dispatched", task: task_name, session: session_id)
       rescue => e
         Clacky::Logger.error("scheduler_fire_error", task: schedule["task"], error: e)
       end

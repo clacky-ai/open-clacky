@@ -1163,6 +1163,40 @@ body {
   font-family: inherit;
 }
 
+/* Paused task visual treatment: dim the schedule cron text and prepend
+   a small "Paused" pill so users can see at a glance which tasks are off. */
+.sched-paused-badge {
+  display: inline-block;
+  padding: 1px 8px;
+  margin-right: 6px;
+  border-radius: 10px;
+  background: var(--color-bg-primary);
+  border: 1px solid var(--color-border-primary);
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  font-family: inherit;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  vertical-align: middle;
+}
+.sched-paused-cron {
+  color: var(--color-text-tertiary, var(--color-text-secondary));
+  text-decoration: line-through;
+  opacity: 0.6;
+}
+/* Dim the whole row when paused (except the resume button, which stays clear). */
+.task-table-row.task-row-paused .task-col-name .task-name-text,
+.task-table-row.task-row-paused .task-col-content {
+  opacity: 0.6;
+}
+.task-table-row.task-row-paused .task-col-name .task-name-icon {
+  opacity: 0.5;
+}
+
+/* Shared style for the pause/resume toggle button. Reuses .task-btn base. */
+.task-btn-toggle { /* inherits from .task-btn */ }
+.task-btn-resume { color: var(--color-accent-primary); }
+
 .task-col-content {
   font-size: 12px;
   color: var(--color-text-secondary);
@@ -1386,26 +1420,86 @@ body {
   word-break: break-word;
   position: relative;
 }
+
 .msg-time {
+  /* Rendered as a footnote *below* the bubble, floating inside the #messages
+     flex gap (12px). Absolute-positioned so showing/hiding it on hover does
+     NOT reflow the message list — surrounding messages stay put. */
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  margin-top: 2px;
   display: block;
   font-size: 10px;
-  height: 0;
-  overflow: hidden;
+  line-height: 1;
   opacity: 0;
-  transition: height 0.15s, opacity 0.15s, margin-top 0.15s;
+  transform: translateY(-2px);
+  transition: opacity 0.15s, transform 0.15s;
   pointer-events: none;
   white-space: nowrap;
+  /* Sit above the next message in case text would otherwise clip beneath it. */
+  z-index: 1;
 }
 .msg:hover .msg-time {
-  height: 1.4em;
-  margin-top: 4px;
   opacity: 1;
+  transform: translateY(0);
 }
-.msg-user .msg-time      { color: rgba(255,255,255,0.7); text-align: right; }
-.msg-assistant .msg-time { color: var(--color-text-secondary); text-align: left; }
-.msg-user      { background: #3b82f6; color: #ffffff; align-self: flex-end; border-bottom-right-radius: 2px; }
+/* Time color / alignment: match the bubble's alignment in the column. */
+.msg-user .msg-time      { color: var(--color-text-secondary); text-align: right; padding-right: 4px; }
+.msg-assistant .msg-time { color: var(--color-text-secondary); text-align: left;  padding-left: 4px; }
+
+.msg-user      { background: #3b82f6; color: #ffffff; align-self: flex-end; }
 [data-theme="dark"] .msg-user { background: #2563eb; }
 .msg-assistant { background: var(--color-bg-secondary); border: 1px solid var(--color-border-primary); align-self: flex-start; }
+
+/* ── Copy button on assistant messages ────────────────────────────────────
+   Hidden by default, revealed on bubble hover (same pattern as .msg-time).
+   On touch devices (hover: none) we keep the button visible at low opacity
+   so it stays reachable without hover. */
+.msg-copy-btn {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--color-border-primary);
+  border-radius: 5px;
+  background: var(--color-bg-primary);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s ease, color 0.15s ease, background 0.15s ease, border-color 0.15s ease;
+}
+.msg-assistant:hover .msg-copy-btn,
+.msg-copy-btn:focus-visible { opacity: 1; }
+.msg-copy-btn:hover {
+  color: var(--color-text-primary);
+  background: var(--color-bg-tertiary);
+}
+.msg-copy-btn:active {
+  transform: translateY(1px);
+}
+.msg-copy-btn.is-copied {
+  opacity: 1;
+  color: #10b981;               /* success green — same across themes */
+  border-color: #10b981;
+  background: var(--color-bg-primary);
+}
+.msg-copy-btn .msg-copy-icon,
+.msg-copy-btn .msg-copy-icon-check { display: block; }
+.msg-copy-btn .msg-copy-icon-check { display: none; }
+.msg-copy-btn.is-copied .msg-copy-icon       { display: none; }
+.msg-copy-btn.is-copied .msg-copy-icon-check { display: block; }
+
+/* Keep the button reachable without hover on touch / narrow viewports. */
+@media (hover: none) {
+  .msg-copy-btn { opacity: 0.65; }
+}
 
 /* ── Markdown rendering inside assistant messages ────────────────────────── */
 .msg-assistant p          { margin: 0 0 0.6em; }
@@ -1888,6 +1982,72 @@ body {
   opacity: 0.5;
   font-size: 10px;
   letter-spacing: 0.03em;
+  flex-shrink: 0;
+}
+
+/* Session ID is the click-trigger for the session actions dropdown
+   (download, etc.). Give it affordance similar to #sib-dir / sib-model. */
+#sib-id-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+.sib-id-clickable {
+  cursor: pointer;
+  padding: 1px 4px;
+  border-radius: 3px;
+  transition: all 0.15s ease;
+}
+.sib-id-clickable:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-accent-primary);
+  opacity: 1 !important;
+}
+
+/* Dropdown menu anchored above the session ID — same fixed-positioning
+   pattern as .sib-model-dropdown. */
+.sib-actions-dropdown {
+  position: fixed;
+  min-width: 220px;
+  max-width: 320px;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border-primary);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  z-index: 1000;
+  padding: 4px;
+}
+.sib-actions-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  font-size: 12px;
+  color: var(--color-text-primary);
+  cursor: pointer;
+  border-radius: 5px;
+  transition: background-color 0.15s ease;
+}
+.sib-actions-item:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-accent-primary);
+}
+.sib-actions-item .sib-actions-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  opacity: 0.8;
+}
+.sib-actions-item .sib-actions-label {
+  flex: 1;
+  white-space: nowrap;
+}
+.sib-actions-item .sib-actions-hint {
+  font-size: 10px;
+  opacity: 0.5;
   flex-shrink: 0;
 }
 

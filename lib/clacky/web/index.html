@@ -260,7 +260,10 @@
         <!-- Pattern: element + separator-after-element (except last) -->
         <span id="sib-status"></span>
         <span class="sib-sep sib-sep-after-status">│</span>
-        <span id="sib-id"></span>
+        <span id="sib-id-wrap">
+          <span id="sib-id" class="sib-id-clickable" data-i18n-title="sessions.actions.tooltip" title="Click for session actions"></span>
+          <div id="sib-actions-dropdown" class="sib-actions-dropdown" style="display:none" role="menu"></div>
+        </span>
         <span class="sib-sep sib-sep-after-id">│</span>
         <span id="sib-dir" title="Click to change directory"></span>
         <span class="sib-sep sib-sep-after-dir">│</span>

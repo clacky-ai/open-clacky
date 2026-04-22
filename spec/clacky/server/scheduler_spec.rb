@@ -10,7 +10,11 @@ RSpec.describe Clacky::Server::Scheduler do
 
   # Build a scheduler that uses tmpdir instead of ~/.clacky
   subject(:scheduler) do
-    s = described_class.new(session_registry: nil, session_builder: ->(**_) {})
+    s = described_class.new(
+      session_registry: nil,
+      session_builder:  ->(**_) {},
+      task_runner:      ->(_sid, _agent, &_blk) {}
+    )
     stub_const("Clacky::Server::Scheduler::SCHEDULES_FILE", File.join(tmpdir, "schedules.yml"))
     stub_const("Clacky::Server::Scheduler::TASKS_DIR",      File.join(tmpdir, "tasks"))
     s
@@ -142,6 +146,69 @@ RSpec.describe Clacky::Server::Scheduler do
       scheduler.start
       expect { scheduler.start }.not_to raise_error
       scheduler.stop
+    end
+  end
+
+  # ── fire_task delegates to task_runner ──────────────────────────────────────
+  # Regression for: scheduled cron tasks didn't persist messages because the
+  # scheduler spawned its own Thread and never called @session_manager.save.
+  # Fix was to route all agent.run calls through the shared task_runner
+  # (run_agent_task) that owns status/broadcast/save/idle_timer.
+  describe "#fire_task" do
+    let(:fake_agent)    { Object.new }
+    let(:captured)      { {} }
+    let(:fake_registry) do
+      agent = fake_agent
+      Object.new.tap do |r|
+        r.define_singleton_method(:with_session) { |_sid, &blk| blk.call({ agent: agent }) }
+        r.define_singleton_method(:update)      { |*_args, **_kw| }
+      end
+    end
+    let(:session_builder) { ->(**_kw) { "session-abc" } }
+    let(:task_runner) do
+      ->(sid, agent, &blk) {
+        captured[:session_id] = sid
+        captured[:agent]      = agent
+        captured[:block]      = blk
+      }
+    end
+    let(:scheduler_with_runner) do
+      s = described_class.new(
+        session_registry: fake_registry,
+        session_builder:  session_builder,
+        task_runner:      task_runner
+      )
+      stub_const("Clacky::Server::Scheduler::SCHEDULES_FILE", File.join(tmpdir, "schedules.yml"))
+      stub_const("Clacky::Server::Scheduler::TASKS_DIR",      File.join(tmpdir, "tasks"))
+      s.write_task("my_task", "do the thing")
+      s
+    end
+
+    it "delegates execution to task_runner instead of running agent.run itself" do
+      scheduler_with_runner.send(:fire_task, { "name" => "Morning", "task" => "my_task", "cron" => "* * * * *" })
+
+      expect(captured[:session_id]).to eq("session-abc")
+      expect(captured[:agent]).to      eq(fake_agent)
+      expect(captured[:block]).to      be_a(Proc)
+    end
+
+    it "does nothing when no agent is registered for the new session" do
+      empty_registry = Object.new.tap do |r|
+        r.define_singleton_method(:with_session) { |_sid, &blk| blk.call({ agent: nil }) }
+        r.define_singleton_method(:update)      { |*_a, **_k| }
+      end
+
+      s = described_class.new(
+        session_registry: empty_registry,
+        session_builder:  session_builder,
+        task_runner:      task_runner
+      )
+      stub_const("Clacky::Server::Scheduler::SCHEDULES_FILE", File.join(tmpdir, "schedules.yml"))
+      stub_const("Clacky::Server::Scheduler::TASKS_DIR",      File.join(tmpdir, "tasks"))
+      s.write_task("my_task", "x")
+
+      s.send(:fire_task, { "name" => "M", "task" => "my_task", "cron" => "* * * * *" })
+      expect(captured).to be_empty
     end
   end
 end

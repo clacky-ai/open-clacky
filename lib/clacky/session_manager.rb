@@ -62,6 +62,28 @@ module Clacky
       true
     end
 
+    # Return the on-disk files associated with a session: the main JSON file
+    # and any "{base}-chunk-*.md" archive files. Used by the export / download
+    # endpoint so the UI can bundle everything a user may need for debugging.
+    # Returns nil if the session is not found, or a Hash:
+    #   {
+    #     session:   Hash,        # the loaded session metadata
+    #     json_path: String,      # absolute path to session.json
+    #     chunks:    [String]     # sorted absolute paths to chunk *.md files
+    #   }
+    def files_for(session_id)
+      session = all_sessions.find { |s| s[:session_id].to_s.start_with?(session_id.to_s) }
+      return nil unless session
+
+      json_path = File.join(@sessions_dir, generate_filename(session[:session_id], session[:created_at]))
+      return nil unless File.exist?(json_path)
+
+      base   = File.basename(json_path, ".json")
+      chunks = Dir.glob(File.join(@sessions_dir, "#{base}-chunk-*.md")).sort
+
+      { session: session, json_path: json_path, chunks: chunks }
+    end
+
     # All sessions from disk, newest-first (sorted by created_at).
     # Optional filters:
     #   current_dir: (String) if given, sessions matching working_dir come first
