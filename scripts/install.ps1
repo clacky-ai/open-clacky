@@ -58,10 +58,17 @@ function Test-IsAdmin {
 }
 
 # Returns a stable ASCII installer workspace.
-# $env:TEMP is avoided because it may contain non-ASCII characters (e.g. Chinese
-# usernames) which cause wsl.exe --import and related commands to fail.
-# Using C:\OpenClacky (same pattern as C:\WSL for the distro directory).
+# Prefer $env:TEMP, but fallback to C:\OpenClacky if it contains non-ASCII characters
+# (e.g. Chinese usernames) which cause wsl.exe --import and related commands to fail.
 function Get-SafeTempDir {
+    $tempDir = $env:TEMP
+    
+    # Check if path contains non-ASCII characters
+    if ($tempDir -notmatch '[^\x00-\x7F]') {
+        return $tempDir
+    }
+    
+    # Fallback to C:\OpenClacky if non-ASCII detected
     $dir = "$env:SystemDrive\OpenClacky"
     if (-not (Test-Path $dir)) {
         New-Item -ItemType Directory -Force -Path $dir | Out-Null
