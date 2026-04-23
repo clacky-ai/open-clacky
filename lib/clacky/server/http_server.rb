@@ -2135,16 +2135,34 @@ module Clacky
       end
 
       def api_delete_session(session_id, res)
-        if @registry.delete(session_id)
-          # Also remove the persisted session file from disk
-          @session_manager.delete(session_id)
-          # Notify connected clients the session is gone
-          broadcast(session_id, { type: "session_deleted", session_id: session_id })
-          unsubscribe_all(session_id)
-          json_response(res, 200, { ok: true })
-        else
-          json_response(res, 404, { error: "Session not found" })
+        # A session exists if it's either in the runtime registry OR on disk.
+        # Old sessions that were never restored into memory this server run
+        # (e.g. shown via "load more" in the WebUI list) are disk-only — we
+        # must still be able to delete them. Previously this endpoint only
+        # consulted @registry and returned 404 for disk-only sessions,
+        # causing the "can't delete old sessions" bug.
+        in_registry = @registry.exist?(session_id)
+        on_disk     = !@session_manager.load(session_id).nil?
+
+        unless in_registry || on_disk
+          return json_response(res, 404, { error: "Session not found" })
         end
+
+        # Registry delete is best-effort — only meaningful when the session
+        # is actually live (cancels idle timer, interrupts the agent thread).
+        # For disk-only sessions this is a no-op and returns false, which is
+        # fine and no longer blocks the disk cleanup below.
+        @registry.delete(session_id) if in_registry
+
+        # Always physically remove the persisted session file (+ chunks).
+        @session_manager.delete(session_id) if on_disk
+
+        # Notify any still-connected clients (mainly matters when the
+        # session was live, but harmless otherwise).
+        broadcast(session_id, { type: "session_deleted", session_id: session_id })
+        unsubscribe_all(session_id)
+
+        json_response(res, 200, { ok: true })
       end
 
       # Export a session bundle as a .zip download containing:
