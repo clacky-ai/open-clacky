@@ -234,33 +234,6 @@ RSpec.describe Clacky::AgentConfig do
     end
   end
 
-  describe "#switch_model" do
-    let(:config) do
-      described_class.new(
-        models: [
-          { "model" => "model-1" },
-          { "model" => "model-2" },
-          { "model" => "model-3" }
-        ]
-      )
-    end
-
-    it "switches to model by index" do
-      expect(config.switch_model(1)).to be true
-      expect(config.current_model["model"]).to eq("model-2")
-    end
-
-    it "returns false for out of range index" do
-      expect(config.switch_model(10)).to be false
-      expect(config.current_model["model"]).to eq("model-1")
-    end
-
-    it "returns false for negative index" do
-      expect(config.switch_model(-1)).to be false
-      expect(config.current_model["model"]).to eq("model-1")
-    end
-  end
-
   describe "#get_model" do
     let(:config) do
       described_class.new(
@@ -425,9 +398,10 @@ RSpec.describe Clacky::AgentConfig do
     end
 
     it "adjusts current_model_index when necessary" do
-      config.switch_model(2) # Switch to last model
+      last_id = config.models[2]["id"]
+      config.switch_model_by_id(last_id) # Switch to last model
       expect(config.current_model["model"]).to eq("model-3")
-      
+
       config.remove_model(2) # Remove last model
       expect(config.current_model["model"]).to eq("model-2")
     end
@@ -509,33 +483,140 @@ RSpec.describe Clacky::AgentConfig do
       end
     end
 
-    describe "#switch_model" do
-      it "sets type: default on selected model and removes from others" do
+    describe "#switch_model_by_id" do
+      it "switches the current session model without touching the global type: default marker" do
         models = [
           { "model" => "opus", "type" => "default" },
           { "model" => "sonnet" },
           { "model" => "haiku", "type" => "lite" }
         ]
         config = described_class.new(models: models)
-        
-        config.switch_model(1)
-        
-        expect(config.models[0]["type"]).to be_nil
-        expect(config.models[1]["type"]).to eq("default")
+        sonnet_id = config.models[1]["id"]
+
+        expect(config.switch_model_by_id(sonnet_id)).to be true
+
+        # Current session now points at sonnet
+        expect(config.current_model["model"]).to eq("sonnet")
+        expect(config.current_model_id).to eq(sonnet_id)
+        expect(config.current_model_index).to eq(1)
+
+        # Global type markers are UNCHANGED — "default" is a Settings-level
+        # concept, switching the session's current model must not mutate it.
+        expect(config.models[0]["type"]).to eq("default")
+        expect(config.models[1]["type"]).to be_nil
         expect(config.models[2]["type"]).to eq("lite")
       end
 
-      it "preserves lite type when switching" do
+      it "returns false for unknown id" do
         models = [
           { "model" => "opus", "type" => "default" },
+          { "model" => "sonnet" }
+        ]
+        config = described_class.new(models: models)
+
+        expect(config.switch_model_by_id("nonexistent")).to be false
+        expect(config.switch_model_by_id(nil)).to be false
+        expect(config.switch_model_by_id("")).to be false
+      end
+    end
+
+    describe "#set_default_model_by_id" do
+      it "moves the global type: default marker to the given model" do
+        models = [
+          { "model" => "opus", "type" => "default" },
+          { "model" => "sonnet" },
           { "model" => "haiku", "type" => "lite" }
         ]
         config = described_class.new(models: models)
-        
-        config.switch_model(1)
-        
+        sonnet_id = config.models[1]["id"]
+
+        expect(config.set_default_model_by_id(sonnet_id)).to be true
+
+        # Marker moved to sonnet
         expect(config.models[0]["type"]).to be_nil
         expect(config.models[1]["type"]).to eq("default")
+        # Other type markers (lite) untouched
+        expect(config.models[2]["type"]).to eq("lite")
+      end
+
+      it "does not change the current session's model (session vs global are separate)" do
+        models = [
+          { "model" => "opus", "type" => "default" },
+          { "model" => "sonnet" }
+        ]
+        config = described_class.new(models: models)
+        opus_id = config.models[0]["id"]
+        sonnet_id = config.models[1]["id"]
+
+        # Currently on opus (anchored via type: default)
+        expect(config.current_model_id).to eq(opus_id)
+
+        config.set_default_model_by_id(sonnet_id)
+
+        # Global default is now sonnet, but this session is still on opus
+        expect(config.models[1]["type"]).to eq("default")
+        expect(config.current_model_id).to eq(opus_id)
+        expect(config.current_model["model"]).to eq("opus")
+      end
+
+      it "handles the case when no model currently has type: default" do
+        models = [
+          { "model" => "opus" },
+          { "model" => "sonnet" }
+        ]
+        config = described_class.new(models: models)
+        sonnet_id = config.models[1]["id"]
+
+        expect(config.set_default_model_by_id(sonnet_id)).to be true
+        expect(config.models[0]["type"]).to be_nil
+        expect(config.models[1]["type"]).to eq("default")
+      end
+
+      it "is idempotent when called on the already-default model" do
+        models = [
+          { "model" => "opus", "type" => "default" },
+          { "model" => "sonnet" }
+        ]
+        config = described_class.new(models: models)
+        opus_id = config.models[0]["id"]
+
+        expect(config.set_default_model_by_id(opus_id)).to be true
+        expect(config.models[0]["type"]).to eq("default")
+        expect(config.models[1]["type"]).to be_nil
+      end
+
+      it "clears any stale duplicate default markers" do
+        # Defensive: config.yml could in theory have two `type: default`
+        # entries if hand-edited. Setting default on a third model should
+        # clean all of them.
+        models = [
+          { "model" => "opus", "type" => "default" },
+          { "model" => "sonnet", "type" => "default" },
+          { "model" => "haiku" }
+        ]
+        config = described_class.new(models: models)
+        haiku_id = config.models[2]["id"]
+
+        config.set_default_model_by_id(haiku_id)
+
+        expect(config.models[0]["type"]).to be_nil
+        expect(config.models[1]["type"]).to be_nil
+        expect(config.models[2]["type"]).to eq("default")
+      end
+
+      it "returns false for unknown id / nil / empty" do
+        models = [
+          { "model" => "opus", "type" => "default" },
+          { "model" => "sonnet" }
+        ]
+        config = described_class.new(models: models)
+
+        expect(config.set_default_model_by_id("nonexistent")).to be false
+        expect(config.set_default_model_by_id(nil)).to be false
+        expect(config.set_default_model_by_id("")).to be false
+
+        # Original default unchanged on failure
+        expect(config.models[0]["type"]).to eq("default")
       end
     end
 

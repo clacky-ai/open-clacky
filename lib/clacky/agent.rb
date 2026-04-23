@@ -131,14 +131,21 @@ module Clacky
       @hooks.add(event, &block)
     end
 
-    # Switch to a different model by index
-    # @param index [Integer] Model index (0-based)
+    # Switch this session to a different model, identified by its stable
+    # runtime id. Ids survive list reorders, additions, and field edits,
+    # which is why we no longer expose an index-based API.
+    # @param id [String] Model id (see AgentConfig#parse_models)
     # @return [Boolean] true if switched successfully, false otherwise
-    def switch_model(index)
-      # Switch config to the model by index
-      return false unless @config.switch_model(index)
-      
-      # Re-create client for new model
+    def switch_model_by_id(id)
+      return false unless @config.switch_model_by_id(id)
+
+      rebuild_client_for_current_model!
+      true
+    end
+
+    # Rebuild the underlying Client (and dependent components) to pick up
+    # credentials/model name from the currently-selected model in @config.
+    private def rebuild_client_for_current_model!
       @client = Clacky::Client.new(
         @config.api_key,
         base_url: @config.base_url,
@@ -147,11 +154,9 @@ module Clacky
       )
       # Update message compressor with new client and model
       @message_compressor = MessageCompressor.new(@client, model: current_model)
-      
+
       # Inject a new session context to notify the AI of the model switch
       inject_session_context
-      
-      true
     end
 
     # Change the working directory for this session
@@ -987,16 +992,16 @@ module Clacky
         if model == "lite"
           # Special keyword: use lite model if available, otherwise fall back to default
           lite_model = subagent_config.lite_model
-          if lite_model
-            model_index = subagent_config.models.index(lite_model)
-            subagent_config.switch_model(model_index) if model_index
+          if lite_model && lite_model["id"]
+            subagent_config.switch_model_by_id(lite_model["id"])
           end
           # If no lite model, just use current (default) model
         else
-          # Regular model name lookup
-          model_index = subagent_config.model_names.index(model)
-          if model_index
-            subagent_config.switch_model(model_index)
+          # Regular model name lookup — find the first model with a matching
+          # name and switch by its stable id.
+          target = subagent_config.models.find { |m| m["model"] == model }
+          if target && target["id"]
+            subagent_config.switch_model_by_id(target["id"])
           else
             raise AgentError, "Model '#{model}' not found in config. Available models: #{subagent_config.model_names.join(', ')}"
           end

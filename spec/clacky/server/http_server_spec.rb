@@ -397,10 +397,14 @@ RSpec.describe Clacky::Server::HttpServer do
     it "preserves existing API key when masked placeholder is sent" do
       with_server(agent_config: agent_config) do |server|
         original_key = agent_config.api_key
+        # Real flow: frontend first GETs /api/config to obtain the model id,
+        # then POSTs it back along with any edits. Here we simulate that by
+        # reading the id directly from the in-memory config.
+        existing_id = agent_config.models[0]["id"]
 
         payload = {
           models: [{
-            index:            0,
+            id:               existing_id,
             model:            "test-model",
             base_url:         "https://api.example.com",
             api_key:          "sk-test****abcd",  # masked

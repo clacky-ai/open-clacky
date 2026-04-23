@@ -1872,6 +1872,7 @@ module Clacky
       def api_get_config(res)
         models = @agent_config.models.map.with_index do |m, i|
           {
+            id:               m["id"],   # Stable runtime id — use this for switching
             index:            i,
             model:            m["model"],
             base_url:         m["base_url"],
@@ -1882,12 +1883,19 @@ module Clacky
         end
         # Filter out auto-injected models (like lite) from UI display
         models.reject! { |m| @agent_config.models[m[:index]]["auto_injected"] }
-        json_response(res, 200, { models: models, current_index: @agent_config.current_model_index })
+        json_response(res, 200, {
+          models: models,
+          current_index: @agent_config.current_model_index,
+          current_id: @agent_config.current_model&.dig("id")
+        })
       end
 
       # POST /api/config — save updated model list
-      # Body: { models: [ { index, model, base_url, api_key, anthropic_format, type } ] }
-      # api_key may be masked ("sk-ab12****...5678") — keep existing key in that case
+      # Body: { models: [ { id?, index, model, base_url, api_key, anthropic_format, type } ] }
+      # - id may be present for existing models (preserved) or absent for newly added
+      #   models (a new id is generated). Ids are runtime-only and stripped before
+      #   writing to config.yml (see AgentConfig#to_yaml).
+      # - api_key may be masked ("sk-ab12****...5678") — keep existing key in that case
       def api_save_config(req, res)
         body = parse_json_body(req)
         return json_response(res, 400, { error: "Invalid JSON" }) unless body
@@ -1895,8 +1903,18 @@ module Clacky
         incoming = body["models"]
         return json_response(res, 400, { error: "models array required" }) unless incoming.is_a?(Array)
 
-        incoming.each_with_index do |m, i|
-          existing = @agent_config.models[i]
+        # Build a quick id→existing-model lookup. Ids are the single source
+        # of identity for models across save/reload cycles — no index-based
+        # fallback (ids are stable; indexes are not). Live sessions' stored
+        # @current_model_id stays valid as long as the id is still present
+        # in the list after save.
+        existing_by_id = {}
+        @agent_config.models.each { |m| existing_by_id[m["id"]] = m if m["id"] }
+
+        new_models = incoming.map do |m|
+          # Lookup by id only. No id means a brand-new model — we mint one.
+          existing = m["id"] && existing_by_id[m["id"]]
+
           # Resolve api_key: if masked placeholder, keep the stored key
           api_key = if m["api_key"].to_s.include?("****")
                       existing&.dig("api_key")
@@ -1904,26 +1922,26 @@ module Clacky
                       m["api_key"]
                     end
 
-          if existing
-            existing["model"]            = m["model"]            if m.key?("model")
-            existing["base_url"]         = m["base_url"]         if m.key?("base_url")
-            existing["api_key"]          = api_key               if api_key
-            existing["anthropic_format"] = m["anthropic_format"] if m.key?("anthropic_format")
-            existing["type"]             = m["type"]             if m.key?("type")
-          else
-            @agent_config.add_model(
-              model:            m["model"].to_s,
-              api_key:          api_key.to_s,
-              base_url:         m["base_url"].to_s,
-              anthropic_format: m["anthropic_format"] || false,
-              type:             m["type"]
-            )
-          end
+          {
+            "id"               => (existing && existing["id"]) || SecureRandom.uuid,
+            "model"            => m["model"].to_s,
+            "base_url"         => m["base_url"].to_s,
+            "api_key"          => api_key.to_s,
+            "anthropic_format" => m["anthropic_format"] || false,
+            "type"             => m["type"]
+          }.tap { |h| h.delete("type") if h["type"].nil? || h["type"].to_s.empty? }
         end
 
-        # Remove models that are no longer present (trim to incoming length)
-        while @agent_config.models.length > incoming.length
-          @agent_config.models.pop
+        # Replace @models in place — do NOT reassign the array, because every
+        # live session holds a reference to the same array (Plan B shared
+        # models). `replace` mutates in place so all sessions see the new list.
+        @agent_config.models.replace(new_models)
+
+        # Re-anchor current_model_index to the model still holding type: default
+        if (new_default_idx = new_models.find_index { |m| m["type"] == "default" })
+          @agent_config.current_model_index = new_default_idx
+        elsif @agent_config.current_model_index >= new_models.length
+          @agent_config.current_model_index = [new_models.length - 1, 0].max
         end
 
         @agent_config.save
@@ -2048,36 +2066,38 @@ module Clacky
 
       def api_switch_session_model(session_id, req, res)
         body = parse_json_body(req)
-        new_model_name = body["model"].to_s.strip
+        model_id = body["model_id"].to_s.strip
 
-        return json_response(res, 400, { error: "model is required" }) if new_model_name.empty?
+        return json_response(res, 400, { error: "model_id is required" }) if model_id.empty?
         return json_response(res, 404, { error: "Session not found" }) unless @registry.ensure(session_id)
 
         agent = nil
         @registry.with_session(session_id) { |s| agent = s[:agent] }
-        
-        # Find the model configuration index by model name (use global config)
-        model_index = @agent_config.models.find_index { |m| m["model"] == new_model_name }
-        
-        if model_index.nil?
-          return json_response(res, 400, { error: "Model '#{new_model_name}' not found in configuration" })
+
+        # With Plan B (shared @models reference), every session's AgentConfig
+        # points at the same @models array as the global @agent_config. So
+        # resolving the model by stable id here and in agent.switch_model_by_id
+        # will always agree — no more index divergence after add/delete.
+        target_model = @agent_config.models.find { |m| m["id"] == model_id }
+        if target_model.nil?
+          return json_response(res, 400, { error: "Model not found in configuration" })
         end
-        
-        # Switch to the model by index (unified interface with CLI)
-        # This handles: config.switch_model + client rebuild + message_compressor rebuild
-        success = agent.switch_model(model_index)
-        
+
+        # Switch to the model by id (unified interface with CLI)
+        # Handles: config.switch_model_by_id + client rebuild + message_compressor rebuild
+        success = agent.switch_model_by_id(model_id)
+
         unless success
           return json_response(res, 500, { error: "Failed to switch model" })
         end
-        
+
         # Persist the change (saves to session file, NOT global config.yml)
         @session_manager.save(agent.to_session_data)
-        
+
         # Broadcast update to all clients
         broadcast_session_update(session_id)
-        
-        json_response(res, 200, { ok: true, model: new_model_name })
+
+        json_response(res, 200, { ok: true, model_id: model_id, model: target_model["model"] })
       rescue => e
         json_response(res, 500, { error: e.message })
       end

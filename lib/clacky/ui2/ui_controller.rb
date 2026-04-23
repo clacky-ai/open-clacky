@@ -1188,7 +1188,7 @@ module Clacky
             display_name = "#{type_badge}#{model_name} (#{masked_key})"
             choices << {
               name: display_name,
-              value: { action: :switch, index: idx }
+              value: { action: :switch, model_id: model["id"] }
             }
           end
           
@@ -1210,8 +1210,15 @@ module Clacky
           
           case result[:action]
           when :switch
-            current_config.switch_model(result[:index])
-            # Auto-save after switching
+            # CLI is a single-session context: when the user picks a model
+            # we treat it as "make this my default from now on". So:
+            #   1. switch this session's current model
+            #   2. move the global `type: "default"` marker to it
+            #   3. persist to config.yml so next CLI launch uses it
+            # (Web UI's per-session switch is different — it must NOT do
+            # steps 2 and 3, and uses switch_model_by_id directly.)
+            current_config.switch_model_by_id(result[:model_id])
+            current_config.set_default_model_by_id(result[:model_id])
             current_config.save
             # Return to indicate config changed (need to update client)
             return { action: :switch }
@@ -1228,10 +1235,12 @@ module Clacky
                 base_url: new_model[:base_url],
                 anthropic_format: anthropic_format
               )
-              # Auto-save after adding
-              current_config.save
-              # Set newly added model as default
-              current_config.switch_model(current_config.models.length - 1)
+              # CLI: adding a model implies the user wants to use it now and
+              # next launch. Switch this session to it AND set it as the
+              # global default, then persist.
+              new_id = current_config.models.last["id"]
+              current_config.switch_model_by_id(new_id)
+              current_config.set_default_model_by_id(new_id)
               current_config.save
               # Return to exit the menu
               return { action: :switch }
