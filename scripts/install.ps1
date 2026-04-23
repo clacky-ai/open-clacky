@@ -57,6 +57,18 @@ function Test-IsAdmin {
         [Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
+# Returns a stable ASCII installer workspace.
+# $env:TEMP is avoided because it may contain non-ASCII characters (e.g. Chinese
+# usernames) which cause wsl.exe --import and related commands to fail.
+# Using C:\OpenClacky (same pattern as C:\WSL for the distro directory).
+function Get-SafeTempDir {
+    $dir = "$env:SystemDrive\OpenClacky"
+    if (-not (Test-Path $dir)) {
+        New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    }
+    return $dir
+}
+
 # Robust file download: try curl first (shows progress), fall back to
 # Invoke-WebRequest. Returns $true on success, $false on failure.
 function Invoke-Download {
@@ -79,7 +91,8 @@ function Invoke-Download {
 # Returns $true on match, or if the checksum file cannot be fetched (non-fatal).
 function Test-Sha256 {
     param([string]$FilePath, [string]$Sha256Url)
-    $sha256File = "$env:TEMP\download.sha256"
+    $safeTemp = Get-SafeTempDir
+    $sha256File = "$safeTemp\download.sha256"
     try {
         if (-not (Invoke-Download -Url $Sha256Url -OutFile $sha256File)) {
             Write-Warn "Could not download checksum file — skipping verification."
@@ -178,7 +191,8 @@ function Install-UbuntuRootfs {
         $sha256Url = $UBUNTU_WSL_AMD64_SHA256_URL
     }
 
-    $tarPath    = "$env:TEMP\ubuntu-wsl-$cpuArch.tar.gz"
+    $safeTemp   = Get-SafeTempDir
+    $tarPath    = "$safeTemp\ubuntu-wsl-$cpuArch.tar.gz"
     $installDir = $UBUNTU_WSL_DIR
 
     # Disk space check (~2 GB needed: 350 MB download + ~1.5 GB imported)
@@ -324,8 +338,10 @@ function Test-VirtualisationSupported {
     # Probe WSL2 with a minimal tar (512 zero bytes = valid tar EOF block)
     # Called only after WSL feature is confirmed enabled (Main already checked).
     Write-Info "Probing WSL2 availability..."
-    $probeTar = "$env:TEMP\wsl_probe.tar"
-    $probeDir = "$env:TEMP\wsl_probe"
+
+    $safeTemp = Get-SafeTempDir
+    $probeTar = "$safeTemp\wsl_probe.tar"
+    $probeDir = "$safeTemp\wsl_probe"
     $ok = $false
     try {
         $bytes = New-Object byte[] 512
@@ -369,7 +385,8 @@ function Install-WslKernel {
         $url = $WSL_UPDATE_URL_X64
     }
 
-    $msiPath = "$env:TEMP\wsl_update.msi"
+    $safeTemp = Get-SafeTempDir
+    $msiPath = "$safeTemp\wsl_update.msi"
     Write-Step "Downloading WSL kernel update ($cpuArch)..."
     if (-not (Invoke-Download -Url $url -OutFile $msiPath)) {
         Write-Fail "Failed to download WSL kernel update. Check your network and try again."
