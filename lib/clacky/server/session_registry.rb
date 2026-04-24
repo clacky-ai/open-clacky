@@ -143,11 +143,22 @@ module Clacky
       #            nil = no source filter (all sessions)
       #   profile: "general"|"coding"|nil
       #            nil = no agent_profile filter
-      #   limit:   max sessions to return
+      #   limit:   max sessions to return (applies to NON-PINNED only; see below)
       #   before:  ISO8601 cursor — only sessions with created_at < before
+      #             (also applies to NON-PINNED only; pinned items are a separate
+      #             logical section, they should never be paginated away)
+      #   include_pinned: when true (default), all matching pinned sessions are
+      #             always returned on the FIRST page (before == nil) regardless
+      #             of limit. Subsequent pages (before set) contain only
+      #             non-pinned sessions. This guarantees that users who pinned
+      #             an old session always see it at the top of the sidebar,
+      #             even if many newer sessions exist.
+      #
+      # Ordering of the returned array:
+      #   [ ...all_pinned_matching (newest-first), ...non_pinned (newest-first, limited) ]
       #
       # source and profile are orthogonal — either can be nil independently.
-      def list(limit: nil, before: nil, q: nil, date: nil, type: nil)
+      def list(limit: nil, before: nil, q: nil, date: nil, type: nil, include_pinned: true)
         return [] unless @session_manager
 
         live = @mutex.synchronize do
@@ -185,10 +196,26 @@ module Clacky
           }
         end
 
-        all = all.select { |s| (s[:created_at] || "") < before } if before
-        all = all.first(limit) if limit
+        # ── Split pinned vs non-pinned BEFORE applying `before`/`limit`.
+        # Pinned sessions bypass pagination entirely so an old pinned session
+        # never falls off the first page just because newer sessions exist.
+        # (Regression fix for 0.9.37: previously `all_sessions` was only
+        # sorted by created_at and `limit` cut off old pinned rows, making
+        # them invisible until the user clicked "load more".)
+        pinned, non_pinned = all.partition { |s| s[:pinned] }
 
-        all.map do |s|
+        # `before` cursor ONLY applies to non-pinned (paginated) sessions.
+        non_pinned = non_pinned.select { |s| (s[:created_at] || "") < before } if before
+        non_pinned = non_pinned.first(limit) if limit
+
+        # Pinned section: only included on the first page (before == nil) so
+        # "load more" responses don't re-send them. On first page, return ALL
+        # matching pinned sessions regardless of limit.
+        pinned_section = (include_pinned && before.nil?) ? pinned : []
+
+        ordered = pinned_section + non_pinned
+
+        ordered.map do |s|
           id = s[:session_id]
           ls = live[id]
           {

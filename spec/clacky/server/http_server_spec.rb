@@ -218,6 +218,134 @@ RSpec.describe Clacky::Server::HttpServer do
         expect(body["has_more"]).to be true
       end
     end
+
+    # ── Pinned-session visibility (regression for 0.9.37) ─────────────────
+    #
+    # Before this fix, the sidebar would sometimes fail to show pinned
+    # sessions and "refreshing sometimes fixed it". Root cause: the backend
+    # only ordered by created_at and applied `limit` blindly, so a pinned
+    # session older than the first `limit` rows would be cut off entirely.
+    # The fix: `registry.list` always returns ALL matching pinned sessions
+    # on the first page, then fills up to `limit` non-pinned rows after.
+    describe "pinned sessions always appear on the first page" do
+      # Helper: drop a fully-formed session JSON directly on disk so we
+      # control created_at precisely (POST /api/sessions always uses Time.now,
+      # which can't reliably produce "old" sessions for this test).
+      def write_session_file(dir, session_id:, name:, created_at:, pinned: false, source: "manual")
+        data = {
+          session_id:    session_id,
+          name:          name,
+          created_at:    created_at,
+          updated_at:    created_at,
+          working_dir:   "/tmp",
+          source:        source,
+          agent_profile: "general",
+          pinned:        pinned,
+          messages:      [],
+          stats:         { total_tasks: 0, total_cost_usd: 0.0 },
+        }
+        datetime = Time.parse(created_at).strftime("%Y-%m-%d-%H-%M-%S")
+        short_id = session_id[0..7]
+        File.write(File.join(dir, "#{datetime}-#{short_id}.json"),
+                   JSON.pretty_generate(data))
+      end
+
+      it "includes an OLD pinned session in the first page even when limit is small" do
+        # Simulate the user-reported bug: one pinned session is very old,
+        # and many newer sessions exist. With limit=3, the old pinned one
+        # would previously be cut off. After the fix, it MUST still appear.
+        Dir.mktmpdir("clacky_pin_spec") do |dir|
+          # 1 very old pinned session + 5 newer non-pinned sessions
+          write_session_file(dir, session_id: "old_pin_01",  name: "old-pin",
+                             created_at: "2020-01-01T00:00:00+00:00", pinned: true)
+          5.times do |i|
+            ts = "2026-04-01T0#{i}:00:00+00:00"
+            write_session_file(dir, session_id: "newer#{i}_abcdef01",
+                               name: "newer-#{i}", created_at: ts, pinned: false)
+          end
+
+          with_server(agent_config: agent_config, sessions_dir: dir) do |server|
+            req = fake_req(method: "GET", path: "/api/sessions",
+                           query_string: "limit=3")
+            res = fake_res
+            dispatch(server, req, res)
+
+            body = parsed_body(res)
+            names = body["sessions"].map { |s| s["name"] }
+            # The critical assertion: old pinned session must be present
+            expect(names).to include("old-pin"), "old pinned session must appear on first page (got #{names.inspect})"
+            # And it should be at the TOP (pinned first)
+            expect(names.first).to eq("old-pin")
+            # limit=3 still returns up to 3 NON-pinned, so total is 1 + 3 = 4
+            expect(body["sessions"].size).to eq(4)
+            # has_more reflects non-pinned overflow (5 non-pinned, 3 returned → more)
+            expect(body["has_more"]).to be true
+          end
+        end
+      end
+
+      it "returns multiple pinned sessions all on the first page regardless of limit" do
+        Dir.mktmpdir("clacky_pin_spec") do |dir|
+          # 3 pinned (across different ages) + 2 non-pinned
+          write_session_file(dir, session_id: "pin_a_aaaaaaaa", name: "pin-a",
+                             created_at: "2020-01-01T00:00:00+00:00", pinned: true)
+          write_session_file(dir, session_id: "pin_b_bbbbbbbb", name: "pin-b",
+                             created_at: "2023-06-01T00:00:00+00:00", pinned: true)
+          write_session_file(dir, session_id: "pin_c_cccccccc", name: "pin-c",
+                             created_at: "2026-04-01T00:00:00+00:00", pinned: true)
+          write_session_file(dir, session_id: "plain_x_xxxxxxx", name: "plain-x",
+                             created_at: "2026-04-10T00:00:00+00:00", pinned: false)
+          write_session_file(dir, session_id: "plain_y_yyyyyyy", name: "plain-y",
+                             created_at: "2026-04-11T00:00:00+00:00", pinned: false)
+
+          with_server(agent_config: agent_config, sessions_dir: dir) do |server|
+            # Even with limit=1, all 3 pinned should come through.
+            req = fake_req(method: "GET", path: "/api/sessions",
+                           query_string: "limit=1")
+            res = fake_res
+            dispatch(server, req, res)
+
+            body = parsed_body(res)
+            names = body["sessions"].map { |s| s["name"] }
+            # All three pinned present
+            expect(names).to include("pin-a", "pin-b", "pin-c")
+            # Pinned come before non-pinned
+            pinned_idx = names.each_index.select { |i| body["sessions"][i]["pinned"] }
+            non_idx    = names.each_index.reject { |i| body["sessions"][i]["pinned"] }
+            expect(pinned_idx.max).to be < non_idx.min if non_idx.any?
+            # Pinned sorted newest-first among themselves (pin-c, pin-b, pin-a)
+            pinned_names = pinned_idx.map { |i| names[i] }
+            expect(pinned_names).to eq(["pin-c", "pin-b", "pin-a"])
+          end
+        end
+      end
+
+      it "does NOT include pinned sessions on subsequent pages (before cursor set)" do
+        # Pinned sessions are a first-page-only section; the load-more
+        # responses must contain only non-pinned rows to avoid duplication.
+        Dir.mktmpdir("clacky_pin_spec") do |dir|
+          write_session_file(dir, session_id: "pin_a_aaaaaaaa", name: "pin-a",
+                             created_at: "2026-04-15T00:00:00+00:00", pinned: true)
+          write_session_file(dir, session_id: "plain_1_1111111", name: "plain-1",
+                             created_at: "2026-04-10T00:00:00+00:00", pinned: false)
+          write_session_file(dir, session_id: "plain_2_2222222", name: "plain-2",
+                             created_at: "2026-04-05T00:00:00+00:00", pinned: false)
+
+          with_server(agent_config: agent_config, sessions_dir: dir) do |server|
+            # Simulate "load more": cursor = before plain-1
+            req = fake_req(method: "GET", path: "/api/sessions",
+                           query_string: "limit=10&before=2026-04-10T00:00:00%2B00:00")
+            res = fake_res
+            dispatch(server, req, res)
+
+            body = parsed_body(res)
+            names = body["sessions"].map { |s| s["name"] }
+            expect(names).to eq(["plain-2"])   # only the older non-pinned
+            expect(names).not_to include("pin-a")
+          end
+        end
+      end
+    end
   end
 
   # ── POST /api/sessions ────────────────────────────────────────────────────

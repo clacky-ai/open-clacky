@@ -468,10 +468,19 @@ module Clacky
         # Backward-compat: ?source=<x> and ?profile=coding → type
         type ||= query["profile"].to_s.strip.then { |v| v.empty? ? nil : v }
         type ||= query["source"].to_s.strip.then  { |v| v.empty? ? nil : v }
-        # Fetch one extra to detect has_more without a separate count query
+
+        # Fetch one extra NON-PINNED row to detect has_more without a separate count query.
+        # `registry.list` always returns ALL matching pinned rows first (on the
+        # first page; `before` == nil), followed by non-pinned rows up to `limit+1`.
+        # So has_more is determined by whether the non-pinned section overflowed.
         sessions = @registry.list(limit: limit + 1, before: before, q: q, date: date, type: type)
-        has_more = sessions.size > limit
-        sessions = sessions.first(limit)
+
+        # Split pinned vs non-pinned to apply has_more only to the non-pinned tail.
+        pinned_part, non_pinned_part = sessions.partition { |s| s[:pinned] }
+        has_more = non_pinned_part.size > limit
+        non_pinned_part = non_pinned_part.first(limit)
+        sessions = pinned_part + non_pinned_part
+
         json_response(res, 200, { sessions: sessions, has_more: has_more })
       end
 
