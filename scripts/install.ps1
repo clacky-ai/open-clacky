@@ -57,27 +57,9 @@ function Test-IsAdmin {
         [Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
-# Returns a stable ASCII installer workspace.
-# Expands $env:TEMP to resolve Windows 8.3 short filenames (e.g. JANELI~1),
-# then checks if the expanded path contains non-ASCII characters.
-# Pure ASCII paths (English usernames): use $env:TEMP
-# Non-ASCII paths (Chinese usernames): fall back to C:\Temp for WSL compatibility
 function Get-SafeTempDir {
-    # Expand short path to full path (JANELI~1 -> 张三)
-    $tempDir = [IO.Path]::GetFullPath($env:TEMP)
-    
-    # Check if expanded path contains non-ASCII characters
-    if ($tempDir -notmatch '[^\x00-\x7F]') {
-        # Pure ASCII — safe to use (English users or systems with UTF-8 support)
-        return $tempDir
-    }
-    
-    # Contains non-ASCII — fall back to C:\Temp for WSL compatibility
-    $dir = "$env:SystemDrive\Temp"
-    if (-not (Test-Path $dir)) {
-        New-Item -ItemType Directory -Force -Path $dir | Out-Null
-    }
-    return $dir
+    $tempDir = [IO.Path]::GetTempPath()
+    return $tempDir
 }
 
 # Robust file download: try curl first (shows progress), fall back to
