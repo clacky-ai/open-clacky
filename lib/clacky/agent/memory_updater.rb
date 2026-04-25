@@ -2,17 +2,34 @@
 
 module Clacky
   class Agent
-    # Long-term memory update functionality
-    # Triggered at the end of a session to persist important knowledge.
+    # Long-term memory update functionality.
     #
-    # The LLM decides:
+    # Runs at the end of a qualifying task to persist important knowledge
+    # into ~/.clacky/memories/. The LLM decides:
     #   - Which topics were discussed
     #   - Which memory files to update or create
     #   - How to merge new info with existing content
     #   - What to drop to stay within the per-file token limit
     #
+    # Architecture:
+    #   Memory update runs as a **forked subagent**, NOT inline in the
+    #   main agent's loop. The subagent inherits the main agent's history
+    #   (so it can see what happened) via +fork_subagent+'s standard
+    #   deep-clone, and inherits the same model/tools so prompt-cache is
+    #   reused maximally. The subagent runs synchronously; when it returns,
+    #   the main agent prints +show_complete+.
+    #
+    #   This gives us, structurally:
+    #     - Clean main-agent history (no memory_update messages to clean up)
+    #     - Correct visual ordering ([OK] Task Complete is the LAST thing
+    #       printed — the memory-update progress finishes before it)
+    #     - Independent cost accounting (task cost vs. memory update cost)
+    #     - Natural recursion guard (+@is_subagent+ blocks re-entry)
+    #
     # Trigger condition:
-    #   - Iteration count >= MEMORY_UPDATE_MIN_ITERATIONS (avoids trivial tasks like commits)
+    #   - Iteration count >= MEMORY_UPDATE_MIN_ITERATIONS (skip trivial tasks)
+    #   - Not already a subagent (no recursion)
+    #   - Memory update is enabled in config
     module MemoryUpdater
       # Minimum LLM iterations for this task before triggering memory update.
       # Set high enough to skip short utility tasks (commit, deploy, etc.)
@@ -32,43 +49,78 @@ module Clacky
         task_iterations >= MEMORY_UPDATE_MIN_ITERATIONS
       end
 
-      # Inject memory update prompt into @messages so the main agent loop handles it.
-      # Builds the prompt dynamically, injecting the current memory file list so the
-      # LLM doesn't need to scan the directory itself.
-      # Returns true if prompt was injected, false otherwise.
-      def inject_memory_prompt!
-        return false unless should_update_memory?
-        return false if @memory_prompt_injected
+      # Run memory update as a forked subagent.
+      #
+      # This is called by +Agent#run+ on the success path, AFTER the main
+      # loop exits and BEFORE +show_complete+ is printed. It blocks until
+      # the subagent finishes, so the visual order is structurally correct:
+      #
+      #   ... task output ...
+      #   [progress] Updating long-term memory… (spinner)
+      #   [progress finishes]
+      #   [OK] Task Complete
+      #
+      # Safe to call unconditionally; returns early if preconditions fail.
+      # Never raises for "no update needed" — only propagates genuine errors
+      # (+Clacky::AgentInterrupted+ for Ctrl+C, other exceptions are caught
+      # and logged so memory-update failures never mask the parent task's
+      # result).
+      def run_memory_update_subagent
+        return unless should_update_memory?
 
-        @memory_prompt_injected = true
-        @memory_updating = true
-        # Hold onto the owned handle so +cleanup_memory_messages+ can
-        # finish it explicitly. This spans two methods, so +with_progress+
-        # (ensure-based) doesn't fit; we must be careful to always call
-        # cleanup_memory_messages (every call site already does).
-        @memory_progress = @ui&.start_progress(message: "Updating long-term memory…", style: :primary)
+        handle = @ui&.start_progress(message: "Updating long-term memory…", style: :primary)
 
-        @history.append({
-          role: "user",
-          content: build_memory_update_prompt,
-          system_injected: true,
-          memory_update: true
-        })
+        # Fork subagent inheriting main agent's model, tools, and history.
+        # Maximizes prompt-cache reuse: same model, same tool set, same
+        # cloned history — only the +system_prompt_suffix+ (the memory
+        # update instructions) and the final "Please proceed." user turn
+        # are new, landing on top of a warm cache.
+        subagent = fork_subagent(system_prompt_suffix: build_memory_update_prompt)
 
-        true
-      end
+        # Memory update is a background consolidation task — never prompt
+        # the user for confirmation on memory file writes. The subagent
+        # has its own config copy (fork_subagent does deep_copy), so this
+        # doesn't affect the parent.
+        sub_config = subagent.instance_variable_get(:@config)
+        sub_config.permission_mode = :auto_approve if sub_config.respond_to?(:permission_mode=)
 
-      # Clean up memory update messages from conversation history after loop ends.
-      # Call this once after the main loop finishes.
-      def cleanup_memory_messages
-        return unless @memory_prompt_injected
+        begin
+          result = subagent.run("Please proceed.")
+        rescue Clacky::AgentInterrupted
+          # User pressed Ctrl+C during memory update. Propagate so the
+          # parent agent's interrupt handler runs.
+          raise
+        rescue StandardError => e
+          # Memory update failures are NEVER fatal to the parent task.
+          # Log and move on — the user's actual work is already done.
+          @debug_logs << {
+            timestamp: Time.now.iso8601,
+            event: "memory_update_error",
+            error_class: e.class.name,
+            error_message: e.message,
+            backtrace: e.backtrace&.first(10)
+          }
+          Clacky::Logger.error("memory_update_error", error: e)
+          return
+        ensure
+          handle&.finish
+        end
 
-        @history.delete_where { |m| m[:memory_update] }
-        @memory_prompt_injected = false
-        @memory_updating = false
-        if @memory_progress
-          @memory_progress.finish
-          @memory_progress = nil
+        return unless result
+
+        # Merge subagent cost into parent's cumulative session spend so the
+        # sessionbar shows the real total. The parent's task-complete cost
+        # (result[:total_cost_usd] in Agent#run) stays unaffected — it
+        # still reflects ONLY the user's task, not the memory update.
+        subagent_cost = result[:total_cost_usd] || 0.0
+        @total_cost += subagent_cost
+        @ui&.update_sessionbar(cost: @total_cost, cost_source: @cost_source)
+
+        # Only surface a completion info line if the subagent actually
+        # wrote something to memory. The common "No memory updates needed."
+        # path stays silent to avoid visual noise.
+        if subagent_wrote_memory?(subagent)
+          @ui&.show_info("Memory updated: #{result[:iterations]} iterations, $#{subagent_cost.round(4)}")
         end
       end
 
@@ -77,6 +129,43 @@ module Clacky
         return true unless @config.respond_to?(:memory_update_enabled)
 
         @config.memory_update_enabled != false
+      end
+
+      # Inspect the subagent's history for a successful write/edit tool
+      # call targeting a memory file. Used to decide whether to surface a
+      # "Memory updated" info line (option C — silent when nothing changed).
+      # @param subagent [Clacky::Agent]
+      # @return [Boolean]
+      private def subagent_wrote_memory?(subagent)
+        return false unless subagent.respond_to?(:history) && subagent.history
+
+        subagent.history.to_a.any? do |msg|
+          next false unless msg.is_a?(Hash)
+
+          # Match OpenAI-style tool_calls on assistant messages …
+          tool_calls = msg[:tool_calls] || msg["tool_calls"]
+          if tool_calls.is_a?(Array) && tool_calls.any?
+            next true if tool_calls.any? do |tc|
+              name = tc.dig(:function, :name) || tc.dig("function", "name") || tc[:name] || tc["name"]
+              %w[write edit].include?(name.to_s)
+            end
+          end
+
+          # … and Anthropic-style content blocks with type=tool_use.
+          content = msg[:content] || msg["content"]
+          if content.is_a?(Array)
+            next true if content.any? do |block|
+              block.is_a?(Hash) &&
+                (block[:type] == "tool_use" || block["type"] == "tool_use") &&
+                %w[write edit].include?((block[:name] || block["name"]).to_s)
+            end
+          end
+
+          false
+        end
+      rescue StandardError
+        # Defensive: never let introspection errors break memory update.
+        false
       end
 
       # Build the memory update prompt with the current memory file list injected.

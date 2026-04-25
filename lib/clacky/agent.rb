@@ -376,10 +376,7 @@ module Clacky
 
           # Check if done (no more tool calls needed)
           if response[:finish_reason] == "stop" || response[:tool_calls].nil? || response[:tool_calls].empty?
-            # During memory update phase, show LLM response as info (not a chat bubble)
-            if @memory_updating && response[:content] && !response[:content].empty?
-              @ui&.show_info(response[:content].strip)
-            elsif response[:content] && !response[:content].empty?
+            if response[:content] && !response[:content].empty?
               emit_assistant_message(response[:content])
             end
 
@@ -396,15 +393,11 @@ module Clacky
               end
             end
 
-            # Inject memory update prompt and let the loop handle it naturally
-            next if inject_memory_prompt!
-
             break
           end
 
           # Show assistant message if there's content before tool calls
-          # During memory update phase, suppress text output (only tool calls matter)
-          if response[:content] && !response[:content].empty? && !@memory_updating
+          if response[:content] && !response[:content].empty?
             emit_assistant_message(response[:content])
           end
 
@@ -467,6 +460,17 @@ module Clacky
           run_skill_evolution_hooks
         end
 
+        # Run long-term memory update as a forked subagent BEFORE we print
+        # show_complete. Running it as a subagent (rather than inline in
+        # the main loop) gives us correct visual ordering structurally:
+        # the subagent blocks until done, its progress spinner finishes,
+        # and only then [OK] Task Complete is printed. No cleanup dance,
+        # no cross-method progress handle holding.
+        # Skip on interrupt / feedback / subagent (self-guarded inside too).
+        unless @is_subagent || task_interrupted || awaiting_user_feedback
+          run_memory_update_subagent
+        end
+
         if @is_subagent
           # Parent agent (skill_manager) prints the completion summary; skip here.
         else
@@ -503,9 +507,6 @@ module Clacky
         result = build_result(:error, error: e.message)  # rubocop:disable Lint/UselessAssignment
         raise
       ensure
-        # Always clean up memory update messages, even if interrupted or error occurred
-        cleanup_memory_messages
-
         # Safety net: ensure any lingering progress spinner is stopped.
         # Normal paths close their own spinners; this guards against exceptions
         # raised between a progress slot's active/done pair.

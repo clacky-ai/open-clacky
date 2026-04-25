@@ -62,8 +62,10 @@ module Clacky
       @messages.pop
     end
 
-    # Remove all messages matching the block in-place
-    # (e.g. cleanup_memory_messages uses reject! { m[:memory_update] }).
+    # Remove all messages matching the block in-place.
+    # Generic history pruning utility — used by callers that need to
+    # strip transient/system-injected messages out of the persisted
+    # history (e.g. compaction, rollback on 400 errors).
     def delete_where(&block)
       @messages.reject!(&block)
       self

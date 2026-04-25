@@ -10,9 +10,6 @@ module Clacky
       # @param tool_params [Hash, String] Tool parameters
       # @return [Boolean] true if should auto-execute
       def should_auto_execute?(tool_name, tool_params = {})
-        # During memory update phase, always auto-execute (no user confirmation needed)
-        return true if @memory_updating
-
         case @config.permission_mode
         when :auto_approve, :confirm_all
           # Both modes auto-execute all file/shell tools without confirmation.

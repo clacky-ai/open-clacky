@@ -125,7 +125,28 @@ module Clacky
           new_lines = wrap_content_to_lines(content)
           @buffer.replace(id, new_lines)
 
-          repaint_entry_in_place(entry, old_lines, new_lines) unless @fullscreen_mode
+          unless @fullscreen_mode
+            # repaint_entry_in_place relies on the entry being the tail of
+            # live entries (it computes the entry's top row from @output_row
+            # and old height). When the entry is NOT the tail — e.g. a
+            # background progress ticker fires after a newer entry was
+            # appended — that assumption silently corrupts the screen:
+            # the new frame gets painted at the tail's row, clobbering the
+            # latest log line, and @output_row is reset to a position that
+            # predates appended-but-still-live entries. On next scroll,
+            # those stale-now-present rows end up in terminal scrollback as
+            # duplicated lines (the user-visible "output repeats" bug).
+            #
+            # For non-tail replaces, fall back to a full rebuild of the
+            # output area from the buffer. Slower, but correct regardless
+            # of where the entry lives.
+            is_tail = @buffer.live_entries.last&.id == id
+            if is_tail
+              repaint_entry_in_place(entry, old_lines, new_lines)
+            else
+              render_output_from_buffer
+            end
+          end
           render_fixed_areas
           screen.flush
         end
