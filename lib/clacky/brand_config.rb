@@ -1306,11 +1306,9 @@ module Clacky
       platform_client.post(path, payload)
     end
 
-    # Lazy-initialised PlatformHttpClient, respecting CLACKY_LICENSE_SERVER override.
+    # Lazy-initialised PlatformHttpClient. Host selection is automatic.
     private def platform_client
-      @platform_client ||= Clacky::PlatformHttpClient.new(
-        base_url: ENV["CLACKY_LICENSE_SERVER"]
-      )
+      @platform_client ||= Clacky::PlatformHttpClient.new
     end
   end
 end

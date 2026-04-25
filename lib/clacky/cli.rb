@@ -63,6 +63,11 @@ module Clacky
         invoke :help, ["agent"]
         return
       end
+
+      # ── Telemetry (anonymous, opt-out via CLACKY_TELEMETRY=0) ──────────
+      # Fire-and-forget background thread; never blocks startup.
+      Clacky::Telemetry.startup!
+
       agent_config = Clacky::AgentConfig.load
 
       # Handle session listing
@@ -936,6 +941,9 @@ module Clacky
         extra_flags << "--brand-test" if options[:brand_test]
 
         Clacky::Logger.console = true
+
+        # ── Telemetry (anonymous, opt-out via CLACKY_TELEMETRY=0) ──────────
+        Clacky::Telemetry.startup!
 
         Clacky::Server::Master.new(
           host:        options[:host],

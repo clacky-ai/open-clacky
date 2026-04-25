@@ -501,6 +501,10 @@ module Clacky
         # This covers the inline-injection path; the subagent path shreds immediately after
         # subagent.run returns (see execute_skill_with_subagent).
         shred_script_tmpdirs
+
+        # Fire-and-forget telemetry after every agent run.
+        # Tracks daily active users (distinct devices per day) and task volume.
+        Clacky::Telemetry.task!
       end
     end
 

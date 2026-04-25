@@ -123,6 +123,7 @@ require_relative "clacky/tools/redo_task"
 require_relative "clacky/tools/list_tasks"
 require_relative "clacky/tools/browser"
 require_relative "clacky/tools/terminal"
+require_relative "clacky/telemetry"
 require_relative "clacky/agent"
 
 require_relative "clacky/server/session_registry"

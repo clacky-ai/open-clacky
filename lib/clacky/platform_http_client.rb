@@ -15,7 +15,7 @@ module Clacky
   #     5xx error, the request is automatically retried against the fallback domain
   #   - Unified large-file download entry point (#download_file) that reuses the
   #     same primary → fallback failover policy as API calls
-  #   - Override via CLACKY_LICENSE_SERVER env var (used in development)
+  #   - Override via CLACKY_LICENSE_SERVER env var (auto-detected, used in development)
   #
   # Usage:
   #   client = Clacky::PlatformHttpClient.new
@@ -54,12 +54,12 @@ module Clacky
       "device_not_found"     => "Device not registered. Please re-activate."
     }.freeze
 
-    # @param base_url [String, nil]  Override the primary host (e.g. for local dev).
-    #   When set, the fallback domain is disabled — only the override URL is used.
-    def initialize(base_url: nil)
-      if base_url
-        # Developer / test override: single host, no failover
-        @hosts   = [base_url]
+    # Auto-detects the target host(s):
+    #   - When CLACKY_LICENSE_SERVER is set → single host (dev override, no failover)
+    #   - Otherwise                   → [PRIMARY_HOST, FALLBACK_HOST]
+    def initialize
+      if (override = ENV["CLACKY_LICENSE_SERVER"]) && !override.empty?
+        @hosts = [override]
       else
         @hosts = [PRIMARY_HOST, FALLBACK_HOST]
       end
