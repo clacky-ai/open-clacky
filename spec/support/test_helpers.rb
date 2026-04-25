@@ -35,8 +35,8 @@ module TestHelpers
   end
 
   # Mock API response for testing
-  def mock_api_response(content: "Test response", tool_calls: nil, finish_reason: nil)
-    {
+  def mock_api_response(content: "Test response", tool_calls: nil, finish_reason: nil, reasoning_content: nil)
+    resp = {
       content: content,
       tool_calls: tool_calls,
       finish_reason: finish_reason || (tool_calls ? "tool_calls" : "stop"),
@@ -46,6 +46,8 @@ module TestHelpers
         total_tokens: 30
       }
     }
+    resp[:reasoning_content] = reasoning_content if reasoning_content
+    resp
   end
 
   # Mock tool call for testing

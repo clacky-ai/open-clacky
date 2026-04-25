@@ -610,11 +610,21 @@ module Clacky
         # user/assistant alternation for Bedrock Converse API.
         truncated_text = response[:content] || ""
         truncated_text = "..." if truncated_text.strip.empty?
-        @history.append({
+        truncated_msg = {
           role: "assistant",
           content: truncated_text,
           task_id: @current_task_id
-        })
+        }
+        # Preserve reasoning_content on truncated turns as well.
+        # DeepSeek V4 thinking mode (and Kimi/Moonshot) require the assistant's
+        # reasoning_content to be passed back on subsequent requests when the
+        # message sits inside an ongoing tool-call chain. Dropping it causes:
+        #   HTTP 400 "The reasoning_content in the thinking mode must be passed
+        #   back to the API."
+        # This can happen when the model exhausts the output budget entirely on
+        # reasoning tokens (finish_reason=length, content empty, no tool_calls).
+        truncated_msg[:reasoning_content] = response[:reasoning_content] if response[:reasoning_content]
+        @history.append(truncated_msg)
 
         # Insert system message to guide LLM to retry with smaller steps
         @history.append({

@@ -792,6 +792,40 @@ RSpec.describe Clacky::Agent do
       expect(assistant_messages.size).to be >= 1
       expect(assistant_messages.last[:content]).to include("break it down into smaller steps")
     end
+
+    # Regression: DeepSeek V4 thinking mode (and Kimi/Moonshot extended thinking)
+    # require the assistant's reasoning_content to be round-tripped back to the API
+    # when the message sits inside an ongoing tool-call chain. The truncation
+    # recovery path used to drop reasoning_content, causing HTTP 400:
+    #   "The reasoning_content in the thinking mode must be passed back to the API."
+    # This happens most visibly when the model spends the entire output budget on
+    # reasoning tokens (finish_reason=length with empty content AND no tool_calls).
+    it "preserves reasoning_content on truncated assistant messages" do
+      truncated_thinking_response = mock_api_response(
+        content: "",
+        tool_calls: nil,                       # budget fully spent on reasoning
+        finish_reason: "length",
+        reasoning_content: "Let me think step by step about this complex task..."
+      )
+      recovery_response = mock_api_response(
+        content: "Here is the result.",
+        finish_reason: "stop"
+      )
+
+      allow(client).to receive(:send_messages_with_tools)
+        .and_return(truncated_thinking_response, recovery_response)
+
+      agent.run("Do something complex")
+
+      # The placeholder assistant message that recorded the truncation MUST carry
+      # its reasoning_content so the next request satisfies the thinking-mode contract.
+      truncated_asst_msg = agent.history.to_a.find do |m|
+        m[:role] == "assistant" && m[:content] == "..."
+      end
+      expect(truncated_asst_msg).not_to be_nil
+      expect(truncated_asst_msg[:reasoning_content])
+        .to eq("Let me think step by step about this complex task...")
+    end
   end
 
   describe "#inject_todo_reminder" do
