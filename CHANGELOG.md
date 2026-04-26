@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0.beta.2] - 2026-04-27
+
+### Added
+- **New session creation supports model & working-directory options.** The Web UI "new session" dialog now lets you pick the model and starting directory up front, instead of having to adjust them after the session opens.
+
+### Fixed
+- **System prompt now refreshes when you switch models.** Previously the system prompt captured at session start stuck around even after `/model` or `/provider` switches, which could leave model-specific instructions out of sync. The agent now re-injects the correct system prompt on every model change.
+- **Port 7070 properly released when the terminal tool exits.** A lingering listener on port 7070 could block subsequent runs; the terminal tool now cleans it up on shutdown.
+- **Windows installer uses `[IO.Path]::GetTempPath()` for the temp directory** (#58) — more reliable than `$env:TEMP` on systems where the env var is unset or points to a non-ASCII path.
+
 ## [1.0.0.beta.1] - 2026-04-26
 
 ### Added
