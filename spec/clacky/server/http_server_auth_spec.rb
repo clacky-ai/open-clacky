@@ -134,4 +134,67 @@ RSpec.describe "HttpServer access key authentication" do
       expect(failures[ip]).to be_nil
     end
   end
+
+  # ── extract_key: cookie fallback ─────────────────────────────────────────
+  # REGRESSION GUARD: The cookie branch was accidentally removed in a prior
+  # refactor. This block ensures it is never silently deleted again.
+  describe "extract_key cookie fallback" do
+
+    # allocate 跳过 initialize，直接拿到一个干净的实例
+    # extract_key 是纯函数：只读 req，不依赖任何实例变量
+    let(:server) { Clacky::Server::HttpServer.allocate }
+
+    def make_req(authorization: nil, query_string: "", cookies: {})
+      req = double("WEBrick::HTTPRequest")
+      allow(req).to receive(:[]) { |k| k == "Authorization" ? authorization.to_s : "" }
+      allow(req).to receive(:query_string).and_return(query_string)
+      allow(req).to receive(:cookies).and_return(
+        cookies.map { |name, value| double("cookie", name: name.to_s, value: value.to_s) }
+      )
+      req
+    end
+
+    # ── Cookie 是唯一来源 ────────────────────────────────────────────────────
+    it "returns the cookie value when no header or query param is present" do
+      req = make_req(cookies: { "clacky_access_key" => "cookie-secret" })
+      expect(server.send(:extract_key, req)).to eq("cookie-secret")
+    end
+
+    it "ignores cookies with unrelated names" do
+      req = make_req(cookies: { "other_cookie" => "irrelevant" })
+      expect(server.send(:extract_key, req)).to be_nil
+    end
+
+    it "returns nil when cookie value is empty" do
+      req = make_req(cookies: { "clacky_access_key" => "" })
+      expect(server.send(:extract_key, req)).to be_nil
+    end
+
+    # ── 优先级：Bearer > query param > cookie ────────────────────────────────
+    it "prefers Bearer header over cookie" do
+      req = make_req(
+        authorization: "Bearer header-wins",
+        cookies:       { "clacky_access_key" => "cookie-key" }
+      )
+      expect(server.send(:extract_key, req)).to eq("header-wins")
+    end
+
+    it "prefers query param over cookie" do
+      req = make_req(
+        query_string: "access_key=query-wins",
+        cookies:      { "clacky_access_key" => "cookie-key" }
+      )
+      expect(server.send(:extract_key, req)).to eq("query-wins")
+    end
+
+    it "falls back to cookie when header and query param are absent" do
+      req = make_req(cookies: { "clacky_access_key" => "cookie-wins" })
+      expect(server.send(:extract_key, req)).to eq("cookie-wins")
+    end
+
+    # ── 无凭证 ───────────────────────────────────────────────────────────────
+    it "returns nil when all sources are empty" do
+      expect(server.send(:extract_key, make_req)).to be_nil
+    end
+  end
 end

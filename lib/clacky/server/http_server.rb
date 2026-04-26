@@ -956,6 +956,10 @@ module Clacky
         token = query["access_key"].to_s.strip
         return token unless token.empty?
 
+        req.cookies.each do |c|
+          return c.value if c.name == "clacky_access_key" && !c.value.to_s.empty?
+        end
+
         nil
       end
 
