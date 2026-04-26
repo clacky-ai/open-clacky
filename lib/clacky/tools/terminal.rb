@@ -621,11 +621,38 @@ module Clacky
         log_file = SessionManager.allocate_log_file
         log_io   = File.open(log_file, "wb")
 
+        # Prevent the child process from inheriting the server's
+        # listening socket (port 7070) which would block hot_restart.
+        # PTY.spawn does not support close_others, so we temporarily
+        # set close_on_exec on the inherited fd — the kernel closes
+        # it in the child after exec while the parent keeps it open.
+        inherited_fd = ENV["CLACKY_INHERIT_FD"].to_i
+        if inherited_fd > 0
+          begin
+            inherited_io = IO.for_fd(inherited_fd)
+            inherited_io.autoclose = false
+            was_cloexec = inherited_io.close_on_exec?
+            inherited_io.close_on_exec = true
+          rescue StandardError
+            inherited_fd = 0
+          end
+        end
+
         reader, writer, pid = PTY.spawn(
           spawn_env, *args, chdir_args(cwd)
         )
         reader.sync = true
         writer.sync = true
+
+        # Restore original close_on_exec flag on the parent's fd so the
+        # server can continue accepting connections after hot_restart.
+        if inherited_fd > 0
+          begin
+            inherited_io.close_on_exec = was_cloexec
+          rescue StandardError
+            # best-effort
+          end
+        end
 
         begin
           writer.winsize = [40, 120]
