@@ -826,6 +826,78 @@ RSpec.describe Clacky::Agent do
       expect(truncated_asst_msg[:reasoning_content])
         .to eq("Let me think step by step about this complex task...")
     end
+
+    # Regression: when the conversation was started on a provider that keeps
+    # thinking inline in content (e.g. MiniMax: <think>...</think>) and the
+    # user then switches to DeepSeek / Kimi thinking-mode, the first request
+    # to the new provider fails with:
+    #   HTTP 400 "The reasoning_content in the thinking mode must be passed
+    #             back to the API."
+    # because no assistant message in the history carries the reasoning_content
+    # FIELD — the "thinking text" is buried inside content. The LLM caller
+    # must detect this specific 400, pad every assistant message with an
+    # empty reasoning_content, and retry once — transparently to the user.
+    it "recovers from a 400 'reasoning_content must be passed back' by padding and retrying once" do
+      # Pre-populate the history with MiniMax-style turns: <think> in content,
+      # NO reasoning_content field anywhere. This mirrors ~/Downloads/session.json.
+      agent.history.append({ role: "user", content: "hi", task_id: 0 })
+      agent.history.append({
+        role: "assistant",
+        content: "<think>pondering...</think>\n\nhello back",
+        task_id: 0
+      })
+
+      final_response = mock_api_response(content: "done")
+
+      # First call raises BadRequestError with the exact DeepSeek wording;
+      # the caller should catch it, pad reasoning_content, and retry with
+      # the same history — which then returns successfully.
+      call_count = 0
+      captured_second_call_messages = nil
+      allow(client).to receive(:send_messages_with_tools) do |messages, **_opts|
+        call_count += 1
+        if call_count == 1
+          raise Clacky::BadRequestError,
+                "[LLM] Client request error: The reasoning_content in the thinking mode must be passed back to the API."
+        end
+        captured_second_call_messages = messages
+        final_response
+      end
+      allow(client).to receive(:format_tool_results).and_return([])
+
+      result = agent.run("keep going")
+
+      expect(result[:status]).to eq(:success)
+      # Exactly two attempts: the original failing one + the padded retry.
+      expect(call_count).to eq(2)
+
+      # The retry payload MUST have every assistant message carrying
+      # reasoning_content (empty string is fine).
+      retry_assistants = captured_second_call_messages.select { |m| m[:role] == "assistant" }
+      expect(retry_assistants).not_to be_empty
+      expect(retry_assistants).to all(have_key(:reasoning_content))
+      # The pre-existing MiniMax-style assistant message should be padded
+      # with empty string (since it lacked the field), and the <think>
+      # content must be preserved untouched.
+      minimax_asst = retry_assistants.find { |m| m[:content]&.include?("<think>pondering") }
+      expect(minimax_asst).not_to be_nil
+      expect(minimax_asst[:reasoning_content]).to eq("")
+    end
+
+    # Negative case: a 400 that is NOT about reasoning_content must NOT
+    # trigger the pad-and-retry path — it must propagate as a normal error
+    # on the first attempt (so the CLI/UI shows it to the user).
+    it "does not retry on unrelated 400 errors" do
+      call_count = 0
+      allow(client).to receive(:send_messages_with_tools) do |_messages, **_opts|
+        call_count += 1
+        raise Clacky::BadRequestError, "[LLM] Client request error: invalid tool schema"
+      end
+
+      expect { agent.run("go") }.to raise_error(Clacky::BadRequestError, /invalid tool schema/)
+      # Crucial: only ONE attempt — no silent retry for unrelated 400s.
+      expect(call_count).to eq(1)
+    end
   end
 
   describe "#inject_todo_reminder" do

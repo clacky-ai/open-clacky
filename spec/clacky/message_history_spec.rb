@@ -423,6 +423,57 @@ RSpec.describe Clacky::MessageHistory do
 
         expect(non_assistant).to all(satisfy { |m| !m.key?(:reasoning_content) })
       end
+
+      # Regression: a session started on a provider that keeps thinking
+      # inline in content (e.g. MiniMax: <think>...</think>) then switched
+      # to DeepSeek/Kimi thinking-mode. The history-evidence heuristic
+      # can't fire because no assistant message ever carried a
+      # reasoning_content FIELD — everything is embedded in content. The
+      # LLM caller detects the 400 "reasoning_content must be passed back"
+      # error and retries once with force_reasoning_content_pad: true.
+      it "pads every assistant message when force_reasoning_content_pad is true even without any evidence in history" do
+        # Simulate the exact shape of ~/Downloads/session.json: all assistant
+        # messages have <think> text inside content, none carry a
+        # reasoning_content field.
+        history.append(user_msg("go"))
+        history.append(assistant_with_tool_calls("terminal", content: "<think>planning...</think>"))
+        history.append(tool_result_msg)
+        history.append(assistant_msg("<think>done</think>\n\nDone!"))
+        history.append(user_msg("random"))
+        history.append(assistant_msg("<think>hmm</think>\n\nReply"))
+
+        # Without the flag, to_api does NOT pad (nothing in history says
+        # we're in thinking mode).
+        unforced = history.to_api
+        unforced_asst = unforced.select { |m| m[:role] == "assistant" }
+        expect(unforced_asst).to all(satisfy { |m| !m.key?(:reasoning_content) })
+
+        # With the flag (set by the BadRequestError retry path), every
+        # assistant message gets a padded empty reasoning_content.
+        forced = history.to_api(force_reasoning_content_pad: true)
+        forced_asst = forced.select { |m| m[:role] == "assistant" }
+        expect(forced_asst.size).to eq(3)
+        expect(forced_asst).to all(have_key(:reasoning_content))
+        expect(forced_asst.map { |m| m[:reasoning_content] }).to all(eq(""))
+
+        # <think> text inside content must be preserved untouched — the
+        # pad only adds the missing field, never rewrites content.
+        expect(forced_asst[0][:content]).to include("<think>planning...</think>")
+        expect(forced_asst[2][:content]).to include("<think>hmm</think>")
+      end
+
+      it "force pad preserves existing non-empty reasoning_content on real LLM messages" do
+        history.append(user_msg("hi"))
+        history.append(assistant_msg("real reply", reasoning_content: "real thought"))
+        history.append(user_msg("more"))
+        history.append(assistant_msg("synthetic", system_injected: true))
+
+        forced = history.to_api(force_reasoning_content_pad: true)
+        asst = forced.select { |m| m[:role] == "assistant" }
+
+        expect(asst[0][:reasoning_content]).to eq("real thought")
+        expect(asst[1][:reasoning_content]).to eq("")
+      end
     end
   end
 

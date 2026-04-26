@@ -175,9 +175,18 @@ module Clacky
     # - strips internal-only fields
     # - pads reasoning_content on synthetic assistant messages when the
     #   conversation is running against a thinking-mode provider
-    def to_api
+    #
+    # @param force_reasoning_content_pad [Boolean]
+    #   When true, unconditionally pad every assistant message that lacks a
+    #   reasoning_content field with an empty string. This is set by the
+    #   LLM caller AFTER a 400 "reasoning_content must be passed back" error
+    #   as a one-shot retry signal — the history-evidence heuristic below
+    #   can't fire when the previous turns came from a provider that keeps
+    #   thinking inline (e.g. MiniMax: <think>...</think> in content), so
+    #   this bypass lets us recover on the retry without a server restart.
+    def to_api(force_reasoning_content_pad: false)
       msgs = @messages.map { |m| strip_internal_fields(m) }
-      ensure_reasoning_content_consistency(msgs)
+      ensure_reasoning_content_consistency(msgs, force: force_reasoning_content_pad)
     end
 
     # Return a shallow copy of the message list, excluding transient messages.
@@ -265,8 +274,20 @@ module Clacky
     # assistant message ever has reasoning_content, so this is a no-op.
     # The Anthropic adapter also filters unknown fields via a whitelist, so
     # even mid-session fallback between providers remains safe.
-    private def ensure_reasoning_content_consistency(msgs)
-      return msgs unless msgs.any? { |m| m[:role] == "assistant" && m[:reasoning_content] }
+    private def ensure_reasoning_content_consistency(msgs, force: false)
+      self.class.pad_reasoning_content_if_needed(msgs, force: force)
+    end
+
+    # Public helper: pad assistant messages that lack a reasoning_content
+    # field with an empty string, either when forced or when the payload
+    # already shows evidence of thinking-mode (at least one assistant
+    # message with reasoning_content).
+    #
+    # Exposed as a class method so Time Machine's active_messages path can
+    # reuse the exact same logic without routing through #to_api.
+    def self.pad_reasoning_content_if_needed(msgs, force: false)
+      should_pad = force || msgs.any? { |m| m[:role] == "assistant" && m[:reasoning_content] }
+      return msgs unless should_pad
 
       msgs.map do |m|
         next m unless m[:role] == "assistant"

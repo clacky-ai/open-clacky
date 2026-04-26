@@ -93,13 +93,22 @@ module Clacky
       # Filter messages to only show tasks up to active_task_id.
       # This hides "future" messages when user has undone.
       # Returns API-ready array (strips internal fields + handles orphaned tool_calls).
+      # @param force_reasoning_content_pad [Boolean] forwarded to MessageHistory,
+      #   enables one-shot pad-and-retry for thinking-mode providers that
+      #   require reasoning_content on every assistant message.
       # Made public for testing
-      def active_messages
-        return @history.to_api if @active_task_id == @current_task_id
+      def active_messages(force_reasoning_content_pad: false)
+        if @active_task_id == @current_task_id
+          return @history.to_api(force_reasoning_content_pad: force_reasoning_content_pad)
+        end
 
-        @history.for_task(@active_task_id).map do |msg|
+        stripped = @history.for_task(@active_task_id).map do |msg|
           msg.reject { |k, _| MessageHistory::INTERNAL_FIELDS.include?(k) }
         end
+        # Apply the same reasoning_content padding rule used by to_api so
+        # Time Machine replays satisfy thinking-mode providers after a
+        # 400 retry.
+        MessageHistory.pad_reasoning_content_if_needed(stripped, force: force_reasoning_content_pad)
       end
 
       # Undo to parent task

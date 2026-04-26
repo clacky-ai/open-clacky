@@ -54,14 +54,25 @@ module Clacky
         max_retries = 10
         retry_delay = 5
         retries = 0
+        # One-shot flag set by the BadRequestError rescue below when the server
+        # complained about missing reasoning_content. The subsequent retry will
+        # pad every assistant message's reasoning_content, which satisfies
+        # DeepSeek / Kimi thinking-mode providers even when the earlier turns
+        # were produced by a different provider (e.g. MiniMax keeps thinking
+        # inline in content and never emits a reasoning_content field, so the
+        # history-evidence heuristic in MessageHistory can't infer thinking
+        # mode on its own). We retry at most once — if padding doesn't fix it,
+        # the error is something else and we let it propagate.
+        force_reasoning_content_pad = false
+        thinking_retry_attempted = false
 
         begin
           # Use active_messages (Time Machine) when undone, otherwise send full history.
           # to_api strips internal fields and handles orphaned tool_calls.
           messages_to_send = if respond_to?(:active_messages)
-            active_messages
+            active_messages(force_reasoning_content_pad: force_reasoning_content_pad)
           else
-            @history.to_api
+            @history.to_api(force_reasoning_content_pad: force_reasoning_content_pad)
           end
 
           response = @client.send_messages_with_tools(
@@ -137,6 +148,25 @@ module Clacky
           # Progress cleanup is the caller's responsibility (via its own ensure block).
           raise AgentError, "[LLM] Service unavailable after #{current_max} retries"
         end
+
+        rescue Clacky::BadRequestError => e
+          # One-shot recovery for thinking-mode providers (DeepSeek V4, Kimi K2)
+          # that require every assistant message in the history to carry a
+          # reasoning_content field. The history-evidence heuristic in
+          # MessageHistory#to_api can miss this when the preceding turns came
+          # from a different thinking style (e.g. MiniMax keeps <think>...</think>
+          # inline in content and never emits reasoning_content) — so we detect
+          # the error here and retry once with forced padding.
+          if !thinking_retry_attempted && reasoning_content_missing_error?(e)
+            thinking_retry_attempted = true
+            force_reasoning_content_pad = true
+            Clacky::Logger.info(
+              "[thinking-mode] retrying with forced reasoning_content padding " \
+              "(model=#{@config.model_name.inspect} base_url=#{@config.base_url.inspect})"
+            )
+            retry
+          end
+          raise
         end
 
         # Track cost and collect token usage data.
@@ -182,6 +212,22 @@ module Clacky
           "Primary model #{primary} still unavailable. " \
           "Continuing with fallback model: #{fallback}"
         )
+      end
+
+      # True when a 400 BadRequestError is specifically about a missing
+      # reasoning_content field in thinking mode (DeepSeek V4, Kimi K2 thinking).
+      # We require TWO distinct substrings to avoid false positives — a generic
+      # 400 that happens to mention "reasoning_content" in passing (e.g. a
+      # validation hint in some unrelated provider) must NOT trigger the pad
+      # retry, which would silently add an empty field to every assistant
+      # message in the history.
+      private def reasoning_content_missing_error?(err)
+        return false unless err.is_a?(Clacky::BadRequestError)
+
+        msg = err.message.to_s.downcase
+        msg.include?("reasoning_content") &&
+          (msg.include?("thinking") || msg.include?("must be passed back") ||
+           msg.include?("must be provided"))
       end
     end
   end
