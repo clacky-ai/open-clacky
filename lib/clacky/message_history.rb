@@ -100,6 +100,14 @@ module Clacky
     # Business queries
     # ─────────────────────────────────────────────
 
+    # True when a system prompt message is present in the history.
+    # Used by inject_session_context to avoid injecting context messages
+    # before the system prompt has been built (which would cause the
+    # guard in run() to skip building it altogether).
+    def has_system_prompt?
+      @messages.any? { |m| m[:role] == "system" }
+    end
+
     # True when the last assistant message has tool_calls but no
     # tool_result has been appended yet (would cause a 400 from the API).
     def pending_tool_calls?

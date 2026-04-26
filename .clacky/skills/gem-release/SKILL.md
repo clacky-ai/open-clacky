@@ -3,7 +3,9 @@
 name: gem-release
 description: >-
   Automates the complete process of releasing a new version of the openclacky Ruby
-  gem
+  gem. Supports both stable releases (auto-increment) and pre-release versions
+  (user-specified, e.g., 1.0.0.beta.1). Handles version bumping, testing, building,
+  RubyGems publishing, GitHub Releases, and OSS CDN mirroring.
 disable-model-invocation: false
 user-invocable: true
 ---
@@ -21,6 +23,7 @@ This skill handles the entire gem release workflow from version bumping to publi
 To use this skill, simply say:
 - "Release a new version"
 - "Publish a new gem version"
+- "Release version 1.0.0.beta.1" (pre-release with explicit version)
 - Use the command: `/gem-release`
 
 ## Process Steps
@@ -31,9 +34,29 @@ To use this skill, simply say:
 - Ensure the repository is in a clean state
 
 ### 2. Version Management
+
+**Stable releases (default):**
 - Read current version from `lib/clacky/version.rb`
 - Increment version number (typically patch version: x.y.z → x.y.z+1)
 - Update the VERSION constant in the version file
+
+**Pre-release versions (when user specifies a version like `1.0.0.beta.1`):**
+- Accept the user-provided version string directly — do NOT auto-increment
+- The version must follow semver pre-release format: `X.Y.Z-<identifier>` or `X.Y.Z.<identifier>` (e.g., `1.0.0.beta.1`, `2.0.0-alpha`, `1.5.0-rc1`)
+- Before proceeding, warn the user about pre-release caveats (see Pre-Release Caveats below)
+
+### 2a. Pre-Release Caveats
+
+When releasing a pre-release version, inform the user of these known behaviors in the Clacky ecosystem:
+
+| Concern | Behavior | Impact |
+|---------|----------|--------|
+| **Version check notification** | RubyGems API returns the highest version number, including prereleases. `Gem::Version("0.9.38") < Gem::Version("1.0.0.beta.1")` → `true`. | ✅ The upgrade dot WILL appear in the Web UI for most users. |
+| **`gem update` (official source)** | `gem update openclacky --no-document` does NOT install prereleases without `--pre`. | ❌ Users on official RubyGems source who click "Upgrade" will see the notification but the upgrade will silently do nothing. |
+| **OSS CDN upgrade (mirror users)** | `upgrade_via_oss_cdn` downloads the exact `.gem` from `latest.txt` on OSS. | ⚠️ If you update `latest.txt` to point to the prerelease, mirror users WILL get the beta. |
+| **OSS `latest.txt`** | Stable users fetching `latest.txt` for fresh installs would get the beta. | ⚠️ By default, do NOT update `latest.txt` for pre-releases. Only update if this is intentional (e.g., a release candidate for broad testing). |
+
+**Action**: Ask the user whether to update `latest.txt` on OSS before proceeding. For internal testing, the answer is usually "no".
 
 ### 3. Quality Assurance
 - Run the full test suite with `bundle exec rspec`
@@ -93,12 +116,23 @@ To use this skill, simply say:
 
 4. **Create GitHub Release and Upload gem**
 
-   Extract the release notes for this version from CHANGELOG.md, then create a GitHub Release with the .gem file attached:
+   Extract the release notes for this version from CHANGELOG.md, then create a GitHub Release with the .gem file attached.
+
+   **For stable releases:**
    ```bash
    gh release create v{version} \
      --title "v{version}" \
-     --notes-file /tmp/release_notes.md \
+     --notes-file /tmp/release_notes_{version}.md \
      --latest \
+     openclacky-{version}.gem
+   ```
+
+   **For pre-release versions (e.g., `1.0.0.beta.1`):** use `--prerelease` instead of `--latest`:
+   ```bash
+   gh release create v{version} \
+     --title "v{version}" \
+     --notes-file /tmp/release_notes_{version}.md \
+     --prerelease \
      openclacky-{version}.gem
    ```
 
@@ -112,21 +146,27 @@ To use this skill, simply say:
 
 5. **Sync to Tencent Cloud OSS (CN mirror)**
 
-   After GitHub Release is created, upload the .gem file and update `latest.txt` on OSS so Chinese users can install without hitting GitHub directly:
+   After GitHub Release is created, upload the .gem file to OSS so Chinese users can install without hitting GitHub directly.
 
    ```bash
-   # Upload .gem file
+   # Upload .gem file (always do this for any release)
    coscli cp openclacky-{version}.gem cos://clackyai-1258723534/openclacky/openclacky-{version}.gem
+   ```
 
-   # Update latest.txt
+   **For stable releases only** — update `latest.txt` so fresh installs and mirror users pick up the new version:
+   ```bash
    echo "{version}" > /tmp/latest.txt
    coscli cp /tmp/latest.txt cos://clackyai-1258723534/openclacky/latest.txt
 
    # Verify
    curl -fsSL https://oss.1024code.com/openclacky/latest.txt
    ```
-
    Expected output of verify: `{version}`
+
+   **For pre-release versions** — do NOT update `latest.txt` unless the user explicitly requested it. Updating `latest.txt` to a prerelease would cause:
+   - Mirror users clicking "Upgrade" to get the beta via `upgrade_via_oss_cdn`
+   - Fresh installs via the install script to get the beta
+   - Only skip this if the user explicitly wants broad beta distribution
 
    > **Prerequisite**: `coscli` installed at `/usr/local/bin/coscli` and configured at `~/.cos.yaml`
 
@@ -325,21 +365,33 @@ git tag vX.Y.Z
 git push origin main
 git push origin --tags
 
-# Create GitHub Release with .gem asset (requires gh CLI)
-# 1. Extract release notes from CHANGELOG.md for this version
-# 2. Write to temp file to avoid shell escaping issues
-# 3. Create the release and attach .gem file
+# ── GitHub Release ──────────────────────────────────────────────────────
+
+# Stable release:
 gh release create vX.Y.Z \
   --title "vX.Y.Z" \
   --notes-file /tmp/release_notes_X.Y.Z.md \
   --latest \
   openclacky-X.Y.Z.gem
 
-# Sync to Tencent Cloud OSS (CN mirror)
+# Pre-release (use --prerelease instead of --latest):
+gh release create vX.Y.Z-beta.1 \
+  --title "vX.Y.Z-beta.1" \
+  --notes-file /tmp/release_notes_X.Y.Z-beta.1.md \
+  --prerelease \
+  openclacky-X.Y.Z.beta.1.gem
+
+# ── OSS CDN (CN mirror) ─────────────────────────────────────────────────
+
+# Always upload the .gem file:
 coscli cp openclacky-X.Y.Z.gem cos://clackyai-1258723534/openclacky/openclacky-X.Y.Z.gem
+
+# Stable releases ONLY — update latest.txt:
 echo "X.Y.Z" > /tmp/latest.txt
 coscli cp /tmp/latest.txt cos://clackyai-1258723534/openclacky/latest.txt
 curl -fsSL https://oss.1024code.com/openclacky/latest.txt  # verify
+
+# Pre-releases — skip latest.txt update unless user explicitly requests it
 
 # Sync scripts/ to OSS (build from templates first)
 bash scripts/build/build.sh
@@ -365,8 +417,10 @@ curl -fsSL https://oss.1024code.com/clacky-ai/openclacky/main/scripts/install.sh
 - Git repository updated with version tag
 - CHANGELOG.md updated with release notes
 - GitHub Release created with .gem file attached at https://github.com/clacky-ai/openclacky/releases
+  - Use `--latest` for stable releases, `--prerelease` for pre-releases
 - .gem file uploaded to OSS: https://oss.1024code.com/openclacky/openclacky-{version}.gem
-- latest.txt updated on OSS: https://oss.1024code.com/openclacky/latest.txt returns the new version
+- For stable releases: `latest.txt` updated on OSS: https://oss.1024code.com/openclacky/latest.txt returns the new version
+- For pre-releases: `latest.txt` NOT updated (unless user explicitly opts in)
 - No build or deployment errors
 - User-facing release summary presented at the end
 

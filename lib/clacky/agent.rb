@@ -1371,7 +1371,19 @@ module Clacky
     # Core method to inject session context (date, model, OS, paths).
     # Called by inject_session_context_if_needed (with date check)
     # and by switch_model (without date check, to force update).
+    #
+    # IMPORTANT: Skip injection when the system prompt hasn't been built yet.
+    # Otherwise, appending a user message to an empty history makes
+    # @history.empty? false, which causes run() to skip building the
+    # system prompt entirely (see run()'s "first run" guard).
+    # The injection will happen naturally in run() via
+    # inject_session_context_if_needed after the system prompt is in place.
     private def inject_session_context
+      # Don't inject context before system prompt exists — defer to
+      # inject_session_context_if_needed which runs inside run()
+      # after the system prompt has been built.
+      return unless @history.has_system_prompt?
+
       today   = Time.now.strftime("%Y-%m-%d")
       os      = Clacky::Utils::EnvironmentDetector.os_type
       desktop = Clacky::Utils::EnvironmentDetector.desktop_path
