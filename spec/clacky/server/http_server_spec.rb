@@ -685,6 +685,112 @@ RSpec.describe Clacky::Server::HttpServer do
         expect(parsed_body(res)["error"]).to match(/models array required/)
       end
     end
+
+    # Regression: switching the default model in the Web UI used to only
+    # take effect after a server restart.
+    #
+    # Root cause: api_save_config re-anchored @current_model_index to the
+    # new type:"default" entry but left @current_model_id pointing at the
+    # previous default. Since AgentConfig#current_model resolves by id FIRST
+    # (indexes are volatile), every new session built via build_session →
+    # deep_copy inherited the stale id and kept serving the pre-edit model.
+    # A server restart masked the bug because initialize re-seeds
+    # @current_model_id from the current type:"default" entry.
+    #
+    # This test pins the fix: after saving a new default, the server-side
+    # agent_config's #current_model (the template cloned into every new
+    # session) must resolve to the NEW default.
+    it "re-anchors @current_model_id to the new default so new sessions pick it up without a restart" do
+      # Seed a second model and mark the ORIGINAL one as default (baseline).
+      agent_config.models << {
+        "id"       => "model-opus-id",
+        "model"    => "opus-model",
+        "api_key"  => "sk-opus-key",
+        "base_url" => "https://api.opus.example.com"
+      }
+      original_default_id = agent_config.models[0]["id"]
+      # Force the lazy @current_model_id to bind to the original default —
+      # this mirrors what happens on the live server after the first request
+      # touches #current_model.
+      expect(agent_config.current_model["id"]).to eq(original_default_id)
+
+      with_server(agent_config: agent_config) do |server|
+        # User edits Settings: flip the default from the original model to
+        # opus-model. Frontend sends the full array with type:"default"
+        # moved, api_key masked for the non-edited rows.
+        payload = {
+          models: [
+            {
+              id:               original_default_id,
+              model:            "test-model",
+              base_url:         "https://api.example.com",
+              api_key:          "sk-test****abcd",
+              anthropic_format: true
+              # type omitted → no longer default
+            },
+            {
+              id:               "model-opus-id",
+              model:            "opus-model",
+              base_url:         "https://api.opus.example.com",
+              api_key:          "sk-opus****-key",
+              anthropic_format: true,
+              type:             "default"
+            }
+          ]
+        }
+        req = fake_req(method: "POST", path: "/api/config", body: payload)
+        res = fake_res
+        dispatch(server, req, res)
+
+        expect(res.status).to eq(200)
+
+        # The main assertion: a freshly-derived session config (build_session
+        # calls deep_copy) must now resolve to opus-model.
+        fresh_session_config = agent_config.deep_copy
+        expect(fresh_session_config.current_model["id"]).to eq("model-opus-id")
+        expect(fresh_session_config.model_name).to eq("opus-model")
+        expect(fresh_session_config.base_url).to eq("https://api.opus.example.com")
+
+        # And the server-side template itself should be re-anchored.
+        expect(agent_config.current_model_id).to eq("model-opus-id")
+        expect(agent_config.current_model_index).to eq(1)
+      end
+    end
+
+    it "clears @current_model_id if the previously-current model was deleted" do
+      # Start with two models; bind current to the second.
+      agent_config.models << {
+        "id"       => "model-2-id",
+        "model"    => "second-model",
+        "api_key"  => "sk-second",
+        "base_url" => "https://api2.example.com"
+      }
+      agent_config.current_model_id = "model-2-id"
+
+      with_server(agent_config: agent_config) do |server|
+        # User deletes model-2 via Settings save (sends only the remaining one,
+        # still as default).
+        remaining_id = agent_config.models[0]["id"]
+        payload = {
+          models: [{
+            id:               remaining_id,
+            model:            "test-model",
+            base_url:         "https://api.example.com",
+            api_key:          "sk-test****abcd",
+            anthropic_format: true,
+            type:             "default"
+          }]
+        }
+        req = fake_req(method: "POST", path: "/api/config", body: payload)
+        res = fake_res
+        dispatch(server, req, res)
+
+        expect(res.status).to eq(200)
+        # Must fall back to the new default; the stale id is gone.
+        expect(agent_config.current_model_id).to eq(remaining_id)
+        expect(agent_config.current_model["model"]).to eq("test-model")
+      end
+    end
   end
 
   # ── POST /api/config/test ─────────────────────────────────────────────────

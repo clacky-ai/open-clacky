@@ -329,6 +329,101 @@ RSpec.describe Clacky::MessageHistory do
       api_msgs = history.to_api
       expect(api_msgs.first[:role]).to eq("system")
     end
+
+    # ── reasoning_content consistency ────────────────────────────────────────
+    #
+    # Thinking-mode providers (DeepSeek V4, Kimi K2 thinking, etc.) return a
+    # `reasoning_content` field on each assistant turn and REQUIRE the caller
+    # to echo `reasoning_content` back on every subsequent assistant message
+    # in the payload — omitting it triggers HTTP 400 with:
+    #   "The reasoning_content in the thinking mode must be passed back"
+    #
+    # History contains two kinds of assistant messages:
+    #   • Real LLM responses (carry reasoning_content when provider emitted it)
+    #   • Synthetic / injected messages (skill injection, subagent acks,
+    #     slash-command notices, truncation fallbacks — never carry it)
+    #
+    # #to_api must pad synthetic messages with an empty reasoning_content
+    # whenever ANY assistant message in the history already carries one
+    # (proving the current provider is in thinking mode).
+    describe "reasoning_content auto-padding" do
+      it "pads synthetic assistant messages with empty reasoning_content when a real LLM assistant has reasoning_content" do
+        # Scenario: DeepSeek V4 thinking-mode session where the LLM returned
+        # reasoning, then a skill was injected locally (no reasoning).
+        history.append(user_msg("hi"))
+        history.append(assistant_msg("LLM reply", reasoning_content: "I think..."))
+        history.append(user_msg("do skill"))
+        history.append(assistant_with_tool_calls("invoke_skill", reasoning_content: "calling skill"))
+        history.append(tool_result_msg)
+        # Locally-injected synthetic assistant — no reasoning_content.
+        history.append(assistant_msg("# Skill Content\n...", system_injected: true))
+        history.append(user_msg("[SYSTEM] proceed", system_injected: true))
+
+        api_msgs = history.to_api
+        assistant_msgs = api_msgs.select { |m| m[:role] == "assistant" }
+
+        expect(assistant_msgs.size).to eq(3)
+        expect(assistant_msgs).to all(have_key(:reasoning_content))
+        # Real LLM messages keep their original reasoning_content.
+        expect(assistant_msgs[0][:reasoning_content]).to eq("I think...")
+        expect(assistant_msgs[1][:reasoning_content]).to eq("calling skill")
+        # Synthetic message is padded with an empty string.
+        expect(assistant_msgs[2][:reasoning_content]).to eq("")
+      end
+
+      it "does NOT pad when no assistant message carries reasoning_content (non-thinking provider)" do
+        # Scenario: Claude / OpenAI session — LLM never emits reasoning_content.
+        history.append(user_msg("hi"))
+        history.append(assistant_msg("Claude reply"))
+        history.append(user_msg("do skill"))
+        history.append(assistant_msg("# Skill Content", system_injected: true))
+
+        api_msgs = history.to_api
+        assistant_msgs = api_msgs.select { |m| m[:role] == "assistant" }
+
+        expect(assistant_msgs).to all(satisfy { |m| !m.key?(:reasoning_content) })
+      end
+
+      it "does NOT pad when only synthetic assistant messages exist (thinking mode not yet activated)" do
+        # Scenario: first turn invokes a skill via slash-command before any
+        # real LLM response — thinking mode has not been proven yet.
+        history.append(user_msg("/skill-name"))
+        history.append(assistant_msg("# Skill Content", system_injected: true))
+        history.append(user_msg("[SYSTEM] proceed", system_injected: true))
+
+        api_msgs = history.to_api
+        assistant_msgs = api_msgs.select { |m| m[:role] == "assistant" }
+
+        expect(assistant_msgs.size).to eq(1)
+        expect(assistant_msgs.first).not_to have_key(:reasoning_content)
+      end
+
+      it "preserves an explicit empty-string reasoning_content and does not overwrite it" do
+        history.append(user_msg("hi"))
+        history.append(assistant_msg("reply", reasoning_content: "thought"))
+        history.append(user_msg("more"))
+        history.append(assistant_msg("reply 2", reasoning_content: ""))
+
+        api_msgs = history.to_api
+        assistant_msgs = api_msgs.select { |m| m[:role] == "assistant" }
+
+        expect(assistant_msgs[0][:reasoning_content]).to eq("thought")
+        expect(assistant_msgs[1][:reasoning_content]).to eq("")
+      end
+
+      it "does not mutate user/tool/system messages (only assistant is padded)" do
+        history.append(system_msg("You are helpful."))
+        history.append(user_msg("hi"))
+        history.append(assistant_msg("reply", reasoning_content: "thought"))
+        history.append(assistant_with_tool_calls("bash"))
+        history.append(tool_result_msg)
+
+        api_msgs = history.to_api
+        non_assistant = api_msgs.reject { |m| m[:role] == "assistant" }
+
+        expect(non_assistant).to all(satisfy { |m| !m.key?(:reasoning_content) })
+      end
+    end
   end
 
   # ─────────────────────────────────────────────

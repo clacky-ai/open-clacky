@@ -173,8 +173,11 @@ module Clacky
 
     # Return a clean copy of messages suitable for sending to the LLM API:
     # - strips internal-only fields
+    # - pads reasoning_content on synthetic assistant messages when the
+    #   conversation is running against a thinking-mode provider
     def to_api
-      @messages.map { |m| strip_internal_fields(m) }
+      msgs = @messages.map { |m| strip_internal_fields(m) }
+      ensure_reasoning_content_consistency(msgs)
     end
 
     # Return a shallow copy of the message list, excluding transient messages.
@@ -230,6 +233,47 @@ module Clacky
 
     private def strip_internal_fields(message)
       message.reject { |k, _| INTERNAL_FIELDS.include?(k) }
+    end
+
+    # Detect thinking-mode providers purely from history content and pad
+    # synthetic assistant messages with an empty reasoning_content when needed.
+    #
+    # WHY: Providers like DeepSeek V4 and Kimi K2 in thinking mode return a
+    # `reasoning_content` field on every assistant turn and REQUIRE the caller
+    # to echo a `reasoning_content` field back on every subsequent assistant
+    # message in the payload — omitting it triggers:
+    #     HTTP 400: "The reasoning_content in the thinking mode must be passed
+    #                back to the API"
+    #
+    # The canonical history contains assistant messages from two sources:
+    #   1. Real LLM responses — carry reasoning_content when returned by the
+    #      provider (preserved in agent.rb via parse_response).
+    #   2. Synthetic / locally-injected messages — skill injection, subagent
+    #      acks, slash-command notices, truncation fallbacks. These are never
+    #      produced by the LLM so they naturally lack reasoning_content.
+    #
+    # RULE: If ANY assistant message in the history carries reasoning_content,
+    # the conversation is provably running against a thinking-mode provider
+    # (the provider itself produced it). In that case, every other assistant
+    # message must echo the field, so we pad with an empty string.
+    #
+    # This is a purely structural inference with no model-name coupling —
+    # it self-adapts to new thinking-mode providers and new synthetic-message
+    # injection sites without any code changes elsewhere.
+    #
+    # For non-thinking providers (Claude / OpenAI / Gemini / Bedrock) no
+    # assistant message ever has reasoning_content, so this is a no-op.
+    # The Anthropic adapter also filters unknown fields via a whitelist, so
+    # even mid-session fallback between providers remains safe.
+    private def ensure_reasoning_content_consistency(msgs)
+      return msgs unless msgs.any? { |m| m[:role] == "assistant" && m[:reasoning_content] }
+
+      msgs.map do |m|
+        next m unless m[:role] == "assistant"
+        next m if m.key?(:reasoning_content)
+
+        m.merge(reasoning_content: "")
+      end
     end
 
     # Defense-in-depth: recursively scrub invalid UTF-8 bytes from every String

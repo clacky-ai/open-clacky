@@ -1292,64 +1292,58 @@ module Clacky
           
           case result[:action]
           when :switch
-            # CLI is a single-session context: when the user picks a model
-            # we treat it as "make this my default from now on". So:
-            #   1. switch this session's current model
-            #   2. move the global `type: "default"` marker to it
-            #   3. persist to config.yml so next CLI launch uses it
-            # (Web UI's per-session switch is different — it must NOT do
-            # steps 2 and 3, and uses switch_model_by_id directly.)
-            current_config.switch_model_by_id(result[:model_id])
-            current_config.set_default_model_by_id(result[:model_id])
-            current_config.save
-            # Return to indicate config changed (need to update client)
-            return { action: :switch }
+            # Just signal the caller which model to switch to.
+            # All side effects (agent.switch_model_by_id to rebuild the Client,
+            # set_default_model_by_id, persistence) are done by the CLI layer
+            # in handle_config_command — this keeps show_config_modal a pure
+            # UI component and avoids the modal half-mutating config while
+            # the agent's @client still points at the old credentials.
+            return { action: :switch, model_id: result[:model_id] }
           when :add
             new_model = show_model_edit_form(nil, test_callback: test_callback)
             if new_model
               # Determine anthropic_format based on provider
               # For Anthropic provider, use Anthropic API format
               anthropic_format = new_model[:provider] == "anthropic"
-              
+
               current_config.add_model(
                 model: new_model[:model],
                 api_key: new_model[:api_key],
                 base_url: new_model[:base_url],
                 anthropic_format: anthropic_format
               )
-              # CLI: adding a model implies the user wants to use it now and
-              # next launch. Switch this session to it AND set it as the
-              # global default, then persist.
+              # Hand off the new model's stable id to the caller. CLI layer
+              # decides whether to switch to it / mark default / persist.
               new_id = current_config.models.last["id"]
-              current_config.switch_model_by_id(new_id)
-              current_config.set_default_model_by_id(new_id)
-              current_config.save
-              # Return to exit the menu
-              return { action: :switch }
+              return { action: :add, model_id: new_id }
             end
           when :edit
             current_model = current_config.current_model
             edited = show_model_edit_form(current_model, test_callback: test_callback)
             if edited
-              # Update current model in place (keep anthropic_format unchanged)
+              # Update current model in place (keep anthropic_format unchanged).
+              # Because we mutate the same hash that's in @models, the model's
+              # stable id is preserved — the caller will rebuild the agent's
+              # Client by calling agent.switch_model_by_id with the same id,
+              # which reruns the Bedrock/anthropic/api_key detection.
               current_model["api_key"] = edited[:api_key]
               current_model["model"] = edited[:model]
               current_model["base_url"] = edited[:base_url]
-              # Auto-save after editing
-              current_config.save
-              # Return to indicate config changed (need to update client)
-              return { action: :edit }
+              return { action: :edit, model_id: current_model["id"] }
             end
           when :delete
             if current_config.models.length <= 1
               # Can't delete - show error and continue
               next
             end
-            
-            # Delete current model
+
+            # Delete current model — this clears @current_model_id so the
+            # next current_model lookup picks type:default or index fallback.
             current_config.remove_model(current_config.current_model_index)
-            # Auto-save after deleting
-            current_config.save
+            # New current model id after deletion (may be nil briefly; resolved
+            # on next current_model call, which also re-anchors @current_model_id).
+            new_current = current_config.current_model
+            return { action: :delete, model_id: new_current && new_current["id"] }
           when :close
             # Just close the modal
             return nil

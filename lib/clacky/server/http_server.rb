@@ -2045,11 +2045,30 @@ module Clacky
         # models). `replace` mutates in place so all sessions see the new list.
         @agent_config.models.replace(new_models)
 
-        # Re-anchor current_model_index to the model still holding type: default
-        if (new_default_idx = new_models.find_index { |m| m["type"] == "default" })
-          @agent_config.current_model_index = new_default_idx
-        elsif @agent_config.current_model_index >= new_models.length
-          @agent_config.current_model_index = [new_models.length - 1, 0].max
+        # Re-anchor current_model_index AND current_model_id to the model
+        # still holding type: default.
+        #
+        # @current_model_id is the *primary* truth for AgentConfig#current_model
+        # (see resolve_current_model_entry). If we leave the old id in place,
+        # then every new session built via build_session → deep_copy inherits
+        # the stale id and #current_model resolves to the pre-edit model —
+        # even though we already moved the type:"default" marker. That's why,
+        # before this fix, changing the default in the web UI only "took"
+        # after a server restart (which re-runs initialize and re-seeds
+        # @current_model_id from the type:"default" entry).
+        if (new_default = new_models.find { |m| m["type"] == "default" })
+          @agent_config.current_model_index = new_models.find_index { |m| m.equal?(new_default) }
+          @agent_config.current_model_id    = new_default["id"]
+        else
+          # No default marker → keep behaviour but also clear the id so that
+          # resolve_current_model_entry falls back to index-based lookup
+          # instead of sticking to a possibly-deleted id.
+          if @agent_config.current_model_index >= new_models.length
+            @agent_config.current_model_index = [new_models.length - 1, 0].max
+          end
+          # Only clear the id if it no longer exists in the new list.
+          still_exists = new_models.any? { |m| m["id"] == @agent_config.current_model_id }
+          @agent_config.current_model_id = nil unless still_exists
         end
 
         @agent_config.save

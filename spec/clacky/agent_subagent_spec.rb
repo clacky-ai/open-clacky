@@ -139,6 +139,79 @@ RSpec.describe Clacky::Agent, "#fork_subagent" do
         }.to raise_error(Clacky::AgentError, /not found in config/)
       end
     end
+
+    context "with model: 'lite' (virtual overlay)" do
+      # Build a realistic config: current model is Opus on openclacky,
+      # so virtual-lite should resolve to Haiku (per Providers preset).
+      let(:config) do
+        Clacky::AgentConfig.new(
+          models: [
+            {
+              "id" => "opus-id",
+              "model" => "abs-claude-opus-4-7",
+              "base_url" => "https://api.openclacky.com",
+              "api_key" => "clacky-test-key",
+              "anthropic_format" => false,
+              "type" => "default"
+            }
+          ],
+          current_model_id: "opus-id"
+        )
+      end
+
+      it "routes the subagent through the lite model (Haiku) via overlay" do
+        subagent = agent.fork_subagent(model: "lite")
+        expect(subagent.instance_variable_get(:@config).model_name)
+          .to eq("abs-claude-haiku-4-5")
+      end
+
+      it "does NOT mutate the parent agent's current model" do
+        original_opus_hash = config.models.first
+        original_model_name = original_opus_hash["model"]
+
+        agent.fork_subagent(model: "lite")
+
+        # Parent's raw @models hash must be unchanged — no in-place mutation.
+        expect(original_opus_hash["model"]).to eq(original_model_name)
+        expect(config.model_name).to eq("abs-claude-opus-4-7")
+      end
+
+      it "keeps the parent and subagent models hash isolated at object level" do
+        subagent = agent.fork_subagent(model: "lite")
+        parent_hash = config.current_model
+        sub_hash = subagent.instance_variable_get(:@config).current_model
+
+        # Different hash instances (overlay produces a merged copy).
+        expect(sub_hash).not_to be(parent_hash)
+        expect(sub_hash["model"]).to eq("abs-claude-haiku-4-5")
+        expect(parent_hash["model"]).to eq("abs-claude-opus-4-7")
+      end
+
+      it "resolves lite even when base_url is a local-debug proxy (clacky-* api_key fallback)" do
+        # Swap the config to use a local proxy base_url — the classic
+        # self-hosted debug scenario. The clacky- api_key prefix should
+        # still identify this as openclacky and map opus → haiku.
+        config.models.first["base_url"] = "http://localhost:3100"
+
+        subagent = agent.fork_subagent(model: "lite")
+        sub_config = subagent.instance_variable_get(:@config)
+        expect(sub_config.model_name).to eq("abs-claude-haiku-4-5")
+        # base_url is preserved so the subagent still goes through the proxy.
+        expect(sub_config.base_url).to eq("http://localhost:3100")
+      end
+
+      it "falls back to the current model when no lite is resolvable" do
+        # Use a self-hosted base_url AND a non-clacky api_key: no provider
+        # can be resolved, so lite_model_config_for_current returns nil and
+        # the subagent just inherits the primary.
+        config.models.first["base_url"] = "http://localhost:9999"
+        config.models.first["api_key"] = "sk-generic"
+
+        subagent = agent.fork_subagent(model: "lite")
+        expect(subagent.instance_variable_get(:@config).model_name)
+          .to eq("abs-claude-opus-4-7")
+      end
+    end
   end
 
   describe "#generate_subagent_summary" do

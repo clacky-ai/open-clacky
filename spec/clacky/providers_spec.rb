@@ -118,4 +118,41 @@ RSpec.describe Clacky::Providers do
       expect(described_class.supports?("minimax", :vision)).to be false
     end
   end
+
+  describe ".resolve_provider" do
+    it "prefers base_url when it matches a known preset" do
+      expect(described_class.resolve_provider(
+               base_url: "https://api.openclacky.com", api_key: nil
+             )).to eq("openclacky")
+    end
+
+    it "returns the base_url match even when api_key belongs to a different family" do
+      # base_url wins over api_key heuristic — users explicitly pointed there.
+      expect(described_class.resolve_provider(
+               base_url: "https://api.deepseek.com", api_key: "clacky-abc"
+             )).to eq("deepseekv4")
+    end
+
+    it "falls back to clacky-* api_key prefix when base_url is unknown (local-debug proxy)" do
+      expect(described_class.resolve_provider(
+               base_url: "http://localhost:3100", api_key: "clacky-af2a576"
+             )).to eq("openclacky")
+    end
+
+    it "returns nil when base_url is unknown and api_key is not a clacky-* key" do
+      expect(described_class.resolve_provider(
+               base_url: "http://localhost:9999", api_key: "sk-generic"
+             )).to be_nil
+      expect(described_class.resolve_provider(
+               base_url: "http://localhost:9999", api_key: nil
+             )).to be_nil
+      expect(described_class.resolve_provider(
+               base_url: "http://localhost:9999", api_key: ""
+             )).to be_nil
+    end
+
+    it "returns nil when both base_url and api_key are missing" do
+      expect(described_class.resolve_provider(base_url: nil, api_key: nil)).to be_nil
+    end
+  end
 end

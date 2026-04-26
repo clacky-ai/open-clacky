@@ -14,6 +14,9 @@ RSpec.describe Clacky::CLI, "UI2 slash commands" do
   let(:working_dir) { Dir.pwd }
   let(:agent_config) { Clacky::AgentConfig.new }
   let(:client) { instance_double(Clacky::Client) }
+  # client_factory is the new contract: a zero-arg lambda the CLI calls whenever
+  # it needs a Client. Must reflect *current* agent_config state.
+  let(:client_factory) { -> { client } }
 
   # Fake UIController: stores registered callbacks so tests can invoke them.
   let(:ui_controller) do
@@ -64,7 +67,7 @@ RSpec.describe Clacky::CLI, "UI2 slash commands" do
     allow(agent).to receive(:instance_variable_set)
 
     # Run the method — start_input_loop is a no-op so it returns immediately
-    cli.send(:run_agent_with_ui2, agent, working_dir, agent_config, nil, client)
+    cli.send(:run_agent_with_ui2, agent, working_dir, agent_config, nil, client_factory)
   end
 
   # ── /help ──────────────────────────────────────────────────────────────────
@@ -151,8 +154,8 @@ RSpec.describe Clacky::CLI, "UI2 slash commands" do
 
   # ── /config ────────────────────────────────────────────────────────────────
   describe "/config" do
-    it "delegates to handle_config_command" do
-      expect(cli).to receive(:handle_config_command).with(ui_controller, client, agent_config, agent)
+    it "delegates to handle_config_command without the client param (agent owns its client)" do
+      expect(cli).to receive(:handle_config_command).with(ui_controller, agent_config, agent)
       send_input("/config")
     end
   end

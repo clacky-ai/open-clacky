@@ -302,6 +302,41 @@ module Clacky
         end&.first
       end
 
+      # Resolve the provider id for a model entry, trying base_url first and
+      # then falling back to an api_key hint for the openclacky family.
+      #
+      # Why the api_key fallback exists:
+      #   For local-debug / self-hosted proxy setups, users sometimes point
+      #   an "abs-claude-*" or "dsk-deepseek-*" model at http://localhost:XXXX
+      #   while still using a real `clacky-...` api key. Pure base_url matching
+      #   would report "unknown provider" and downstream logic (lite pairing,
+      #   fallback_models, capability detection) silently degrades. Recognising
+      #   the `clacky-` key prefix keeps those flows working without forcing
+      #   the user to edit base_url.
+      #
+      # Not generalised to other providers: the `sk-...` prefix is used by
+      # OpenAI, DeepSeek, Moonshot, and many others, so it can't uniquely
+      # identify a provider. We only special-case `clacky-` because it's
+      # unique to us and the debug-proxy scenario is specifically ours.
+      #
+      # @param base_url [String, nil] the configured base_url
+      # @param api_key  [String, nil] the configured api_key
+      # @return [String, nil] provider id or nil if unresolvable
+      def resolve_provider(base_url: nil, api_key: nil)
+        id = find_by_base_url(base_url)
+        return id if id
+
+        # Local-debug fallback: clacky-* api keys belong to the openclacky
+        # family. Both "openclacky" and "clackyai-sea" share the same key
+        # namespace and an identical model lineup/lite mapping, so picking
+        # "openclacky" is equivalent for downstream lookups.
+        if api_key.is_a?(String) && api_key.start_with?("clacky-")
+          return "openclacky"
+        end
+
+        nil
+      end
+
       # Resolve the capabilities hash for a given provider+model.
       #
       # Resolution order (most specific wins):

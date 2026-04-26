@@ -190,6 +190,16 @@ module Clacky
         auto_create_threshold: 12,
         reflection_mode: "llm_analysis"
       }
+
+      # Per-session virtual model overlay.
+      # When set, #current_model returns a *merged* hash (the resolved @models
+      # entry merged with this overlay) without mutating the shared @models
+      # array. Used by fork_subagent's virtual-lite path so a forked subagent
+      # can run on different credentials (e.g. Haiku instead of Opus) without
+      # polluting the parent agent's shared @models hashes.
+      # Keys honored: "api_key", "base_url", "model", "anthropic_format".
+      # @return [Hash, nil]
+      @virtual_model_overlay = options[:virtual_model_overlay]
     end
 
     # Load configuration from file
@@ -304,7 +314,15 @@ module Clacky
     def deep_copy
       # dup gives us a new AgentConfig with independent scalar ivars but
       # the same @models reference — exactly what we want.
-      dup
+      copy = dup
+      # But @virtual_model_overlay must be independent: a forked subagent
+      # setting/clearing its own overlay must NOT leak into the parent.
+      # (dup copies the ivar reference; an unset overlay is nil which is
+      # already independent, but an active overlay must be cloned.)
+      if @virtual_model_overlay
+        copy.instance_variable_set(:@virtual_model_overlay, @virtual_model_overlay.dup)
+      end
+      copy
     end
 
     def save(config_file = CONFIG_FILE)
@@ -420,10 +438,16 @@ module Clacky
       current_model&.dig("api_key")
     end
 
-    # Set API key for current model
+    # Set API key for current model.
+    # When a virtual overlay is active, writes into the overlay (not the
+    # shared @models hash) to keep session-level isolation.
     def api_key=(value)
-      return unless current_model
-      current_model["api_key"] = value
+      return unless resolve_current_model_entry
+      if @virtual_model_overlay
+        @virtual_model_overlay["api_key"] = value
+      else
+        resolve_current_model_entry["api_key"] = value
+      end
     end
 
     # Get base URL for current model
@@ -431,10 +455,14 @@ module Clacky
       current_model&.dig("base_url")
     end
 
-    # Set base URL for current model
+    # Set base URL for current model (overlay-aware; see #api_key=).
     def base_url=(value)
-      return unless current_model
-      current_model["base_url"] = value
+      return unless resolve_current_model_entry
+      if @virtual_model_overlay
+        @virtual_model_overlay["base_url"] = value
+      else
+        resolve_current_model_entry["base_url"] = value
+      end
     end
 
     # Get model name for current model
@@ -442,10 +470,14 @@ module Clacky
       current_model&.dig("model")
     end
 
-    # Set model name for current model
+    # Set model name for current model (overlay-aware; see #api_key=).
     def model_name=(value)
-      return unless current_model
-      current_model["model"] = value
+      return unless resolve_current_model_entry
+      if @virtual_model_overlay
+        @virtual_model_overlay["model"] = value
+      else
+        resolve_current_model_entry["model"] = value
+      end
     end
 
     # Check if should use Anthropic format for current model
@@ -529,7 +561,12 @@ module Clacky
       primary = current_model
       return nil unless primary && primary["base_url"] && primary["model"]
 
-      provider_id = Clacky::Providers.find_by_base_url(primary["base_url"])
+      # Use resolve_provider (base_url first, then clacky-* api_key fallback
+      # for local-debug / self-hosted proxies).
+      provider_id = Clacky::Providers.resolve_provider(
+        base_url: primary["base_url"],
+        api_key:  primary["api_key"]
+      )
       return nil unless provider_id
 
       lite_name = Clacky::Providers.lite_model(provider_id, primary["model"])
@@ -561,7 +598,10 @@ module Clacky
       m = current_model
       return nil unless m
 
-      provider_id = Clacky::Providers.find_by_base_url(m["base_url"])
+      provider_id = Clacky::Providers.resolve_provider(
+        base_url: m["base_url"],
+        api_key:  m["api_key"]
+      )
       return nil unless provider_id
 
       Clacky::Providers.fallback_model(provider_id, model_name)
@@ -633,6 +673,23 @@ module Clacky
     def current_model
       return nil if @models.empty?
 
+      resolved = resolve_current_model_entry
+      return nil unless resolved
+
+      # If a virtual overlay is active (e.g. subagent running on lite-model
+      # credentials), return a *merged copy* so callers see the overlay fields
+      # but the shared @models hash is never mutated.
+      if @virtual_model_overlay && !@virtual_model_overlay.empty?
+        resolved.merge(@virtual_model_overlay)
+      else
+        resolved
+      end
+    end
+
+    # Internal: resolve the current model entry from @models (no overlay).
+    # Extracted from the old #current_model so overlay logic sits in one place.
+    # @return [Hash, nil]
+    private def resolve_current_model_entry
       if @current_model_id
         m = @models.find { |mm| mm["id"] == @current_model_id }
         return m if m
@@ -653,6 +710,32 @@ module Clacky
       m = @models[@current_model_index]
       @current_model_id = m["id"] if m
       m
+    end
+
+    # Apply a virtual model overlay for this session (and only this session).
+    # The overlay fields are merged on top of the current model entry when
+    # #current_model is called, without ever mutating the shared @models
+    # array or its hashes.
+    #
+    # Used by Agent#fork_subagent when routing a subagent through a virtual
+    # lite model (Haiku for Claude family, Flash for DeepSeek, ...). Apply on
+    # the forked config only — the parent config is untouched.
+    #
+    # @param overlay [Hash, nil] fields to overlay; pass nil or {} to clear.
+    #   Recognized keys: "api_key", "base_url", "model", "anthropic_format".
+    # @return [void]
+    def apply_virtual_model_overlay!(overlay)
+      if overlay.nil? || overlay.empty?
+        @virtual_model_overlay = nil
+      else
+        # Dup so later mutations to the passed-in hash don't leak in.
+        @virtual_model_overlay = overlay.dup
+      end
+    end
+
+    # @return [Hash, nil] the active overlay (read-only view; dup before mutating)
+    def virtual_model_overlay
+      @virtual_model_overlay
     end
 
     # Query whether the *current* model supports a given capability.

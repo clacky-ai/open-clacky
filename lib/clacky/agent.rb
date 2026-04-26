@@ -641,13 +641,10 @@ module Clacky
           task_id: @current_task_id
         }
         # Preserve reasoning_content on truncated turns as well.
-        # DeepSeek V4 thinking mode (and Kimi/Moonshot) require the assistant's
-        # reasoning_content to be passed back on subsequent requests when the
-        # message sits inside an ongoing tool-call chain. Dropping it causes:
-        #   HTTP 400 "The reasoning_content in the thinking mode must be passed
-        #   back to the API."
-        # This can happen when the model exhausts the output budget entirely on
-        # reasoning tokens (finish_reason=length, content empty, no tool_calls).
+        # This is the real LLM-emitted reasoning — keeping it here lets
+        # MessageHistory#to_api recognize we're in thinking mode and pad any
+        # other synthetic assistant messages in the history with an empty
+        # reasoning_content automatically (see message_history.rb).
         truncated_msg[:reasoning_content] = response[:reasoning_content] if response[:reasoning_content]
         @history.append(truncated_msg)
 
@@ -683,8 +680,12 @@ module Clacky
       end
       # Store token_usage in the message so replay_history can re-emit it
       msg[:token_usage] = response[:token_usage] if response[:token_usage]
-      # Preserve reasoning_content so it is echoed back to APIs that require it
-      # (e.g. Kimi/Moonshot extended thinking — omitting it causes HTTP 400)
+      # Preserve reasoning_content from the real LLM response.
+      # This is the authoritative signal used by MessageHistory#to_api to
+      # detect thinking-mode providers (DeepSeek V4, Kimi K2 thinking, etc.)
+      # and automatically pad any synthetic assistant messages with an empty
+      # reasoning_content so every outgoing payload satisfies the provider's
+      # "reasoning_content must be passed back" contract.
       msg[:reasoning_content] = response[:reasoning_content] if response[:reasoning_content]
       @history.append(msg)
 
@@ -1049,16 +1050,17 @@ module Clacky
           lite_cfg = subagent_config.lite_model_config_for_current
           if lite_cfg
             if lite_cfg["virtual"]
-              # Provider-preset derived: apply the lite fields in-place to
-              # this subagent's current_model slot. No @models mutation —
-              # the subagent simply runs with overridden credentials.
-              cur = subagent_config.current_model
-              if cur
-                cur["api_key"]          = lite_cfg["api_key"]
-                cur["base_url"]         = lite_cfg["base_url"]
-                cur["model"]            = lite_cfg["model"]
-                cur["anthropic_format"] = lite_cfg["anthropic_format"]
-              end
+              # Provider-preset derived: apply the lite fields as a *session
+              # overlay* on the subagent's config — this intentionally avoids
+              # mutating the shared @models array / hashes which would pollute
+              # the parent agent's own current model (e.g. turning the parent's
+              # Opus entry into Haiku for the rest of the session).
+              subagent_config.apply_virtual_model_overlay!(
+                "api_key"          => lite_cfg["api_key"],
+                "base_url"         => lite_cfg["base_url"],
+                "model"            => lite_cfg["model"],
+                "anthropic_format" => lite_cfg["anthropic_format"]
+              )
             elsif lite_cfg["id"]
               # Explicit user-configured lite (from CLACKY_LITE_* env): a
               # real @models entry with a stable id. Switch to it normally.

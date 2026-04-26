@@ -88,8 +88,23 @@ module Clacky
       agent_config.permission_mode = options[:mode].to_sym if options[:mode]
       agent_config.verbose = options[:verbose] if options[:verbose]
 
-      # Create client for current model
-      client = Clacky::Client.new(agent_config.api_key, base_url: agent_config.base_url, model: agent_config.model_name, anthropic_format: agent_config.anthropic_format?)
+      # Client factory: produces a fresh Client reflecting the *current*
+      # state of agent_config each time it's called. The CLI never holds a
+      # long-lived `client` variable — instead, anyone who needs a client
+      # (initial agent construction, /clear, etc.) calls the factory.
+      #
+      # This mirrors the server-side design (HTTPServer#client_factory) and
+      # avoids the class of bugs where a shared client is ivar_set'd field by
+      # field (easy to miss @model / @use_bedrock) and then reused for a
+      # later Agent.new, serving stale credentials.
+      client_factory = lambda do
+        Clacky::Client.new(
+          agent_config.api_key,
+          base_url: agent_config.base_url,
+          model: agent_config.model_name,
+          anthropic_format: agent_config.anthropic_format?
+        )
+      end
 
       # Resolve agent profile name from --agent option
       agent_profile = options[:agent] || "coding"
@@ -100,16 +115,16 @@ module Clacky
       is_session_load = false
 
       if options[:continue]
-        agent = load_latest_session(client, agent_config, session_manager, working_dir, profile: agent_profile)
+        agent = load_latest_session(client_factory.call, agent_config, session_manager, working_dir, profile: agent_profile)
         is_session_load = !agent.nil?
       elsif options[:attach]
-        agent = load_session_by_number(client, agent_config, session_manager, working_dir, options[:attach], profile: agent_profile)
+        agent = load_session_by_number(client_factory.call, agent_config, session_manager, working_dir, options[:attach], profile: agent_profile)
         is_session_load = !agent.nil?
       end
 
       # Create new agent if no session loaded
       if agent.nil?
-        agent = Clacky::Agent.new(client, agent_config, working_dir: working_dir, ui: nil, profile: agent_profile,
+        agent = Clacky::Agent.new(client_factory.call, agent_config, working_dir: working_dir, ui: nil, profile: agent_profile,
                                   session_id: Clacky::SessionManager.generate_id, source: :manual)
         agent.rename("CLI Session")
       end
@@ -123,9 +138,9 @@ module Clacky
           file_paths = Array(options[:file]) + Array(options[:image])
           run_non_interactive(agent, options[:message], file_paths, agent_config, session_manager)
         elsif options[:json]
-          run_agent_with_json(agent, working_dir, agent_config, session_manager, client, profile: agent_profile)
+          run_agent_with_json(agent, working_dir, agent_config, session_manager, client_factory, profile: agent_profile)
         else
-          run_agent_with_ui2(agent, working_dir, agent_config, session_manager, client, is_session_load: is_session_load)
+          run_agent_with_ui2(agent, working_dir, agent_config, session_manager, client_factory, is_session_load: is_session_load)
         end
       ensure
         Dir.chdir(original_dir)
@@ -133,59 +148,85 @@ module Clacky
     end
 
     no_commands do
-      private def handle_config_command(ui_controller, client, agent_config, agent)
+      # Handle the `/config` slash command.
+      #
+      # show_config_modal is a pure UI component — it only mutates @models
+      # (for add/edit/delete) and returns the user's intent as a hash:
+      #   nil                                         — user closed, no-op
+      #   { action: :switch, model_id: <id> }         — switch to existing model
+      #   { action: :add,    model_id: <id> }         — user added a new model, switch to it
+      #   { action: :edit,   model_id: <id> }         — user edited current model in place
+      #   { action: :delete, model_id: <id or nil> }  — user deleted current model
+      #
+      # All side-effects (switching the agent, rebuilding its Client, marking
+      # the new global default, saving config.yml, updating the UI) live here
+      # so the path is unified with the server-side api_switch_session_model.
+      private def handle_config_command(ui_controller, agent_config, agent)
         config = agent_config
 
-        # Create test callback
+        # Test callback used by the model edit form. Uses a throwaway Client
+        # with the form's (not-yet-saved) values to validate creds.
         test_callback = lambda do |test_config|
-          # Create a temporary client with new config to test
           test_client = Clacky::Client.new(
             test_config.api_key,
             base_url: test_config.base_url,
             model: test_config.model_name,
             anthropic_format: test_config.anthropic_format?
           )
-
-          # Test connection
           test_client.test_connection(model: test_config.model_name)
         end
 
-        # Show modal dialog for configuration with test callback
         result = ui_controller.show_config_modal(config, test_callback: test_callback)
+        return if result.nil?
 
-        # If user closed modal without changes, return early
-        if result.nil?
-          return
+        case result[:action]
+        when :switch, :add
+          # CLI is a single-session context: picking (or adding) a model
+          # implies "use this now AND next launch". So we:
+          #   1. switch the agent to it — this goes through the single entry
+          #      point Agent#switch_model_by_id, which rebuilds the Client
+          #      (recomputing @use_bedrock / @use_anthropic_format), the
+          #      message compressor, and injects a session-context message.
+          #   2. mark it as the global default (type: "default" marker)
+          #   3. persist config.yml
+          target_id = result[:model_id]
+          agent.switch_model_by_id(target_id)
+          config.set_default_model_by_id(target_id)
+          config.save
+        when :edit
+          # current model was mutated in place — its stable id is unchanged.
+          # Re-run switch_model_by_id with the same id to rebuild the Client,
+          # so updated api_key / base_url / model take effect AND @use_bedrock
+          # is re-detected (the user may have edited the model name from
+          # abs-* to a non-Bedrock one or vice versa).
+          agent.switch_model_by_id(result[:model_id])
+          config.save
+        when :delete
+          # If the deleted model was the current one, show_config_modal has
+          # already re-resolved current_model and passed its new id back to
+          # us. Rebuild the Client around the new current model.
+          # If nothing is current (e.g. last model deleted — guarded by the
+          # modal, shouldn't happen), there's nothing to rebuild.
+          if result[:model_id]
+            agent.switch_model_by_id(result[:model_id])
+          end
+          config.save
         end
 
-        # Config was changed (either switch or edit), update client, agent, and UI
-        # Update client with current model's config
-        client.instance_variable_set(:@api_key, config.api_key)
-        client.instance_variable_set(:@base_url, config.base_url)
-        client.instance_variable_set(:@use_anthropic_format, config.anthropic_format?)
-
-        # Update agent's client (agent has its own @client instance variable)
-        agent.instance_variable_set(:@client, Clacky::Client.new(
-          config.api_key,
-          base_url: config.base_url,
-          model: config.model_name,
-          anthropic_format: config.anthropic_format?
-        ))
-
-        # Update agent's message compressor with new client
-        agent.instance_variable_set(:@message_compressor,
-          Clacky::MessageCompressor.new(agent.instance_variable_get(:@client), model: config.model_name)
-        )
-
-        # Update UI controller's model display
+        # Refresh UI bar
         ui_controller.config[:model] = config.model_name
         ui_controller.update_sessionbar(
           tasks: agent.total_tasks,
           cost: agent.total_cost
         )
 
-        # Show success message in output
-        masked_key = "#{config.api_key[0..7]}#{'*' * 20}#{config.api_key[-4..]}"
+        # Show summary. Guard api_key slice against empty/short keys.
+        key = config.api_key.to_s
+        masked_key = if key.length >= 12
+          "#{key[0..7]}#{'*' * 20}#{key[-4..]}"
+        else
+          "(not set)"
+        end
         ui_controller.show_success("Configuration updated!")
         ui_controller.append_output("  Current Model: #{config.model_name}")
         ui_controller.append_output("  API Key: #{masked_key}")
@@ -553,7 +594,7 @@ module Clacky
       #   {"type":"confirmation","id":"conf_1","result":"yes"} — answer to request_confirmation
       #
       # If a bare string line is received it is treated as a message content.
-      def run_agent_with_json(agent, working_dir, agent_config, session_manager, client, profile:)
+      def run_agent_with_json(agent, working_dir, agent_config, session_manager, client_factory, profile:)
         json_ui = Clacky::JsonUIController.new
         agent.instance_variable_set(:@ui, json_ui)
 
@@ -587,7 +628,10 @@ module Clacky
             when "/exit", "/quit"
               break
             when "/clear"
-              agent = Clacky::Agent.new(client, agent_config, working_dir: working_dir, ui: nil, profile: profile,
+              # Fresh Client from factory — guarantees credentials reflect the
+              # *current* agent_config (any /config model switch since startup
+              # is applied automatically). No stale shared client reference.
+              agent = Clacky::Agent.new(client_factory.call, agent_config, working_dir: working_dir, ui: nil, profile: profile,
                                         session_id: Clacky::SessionManager.generate_id, source: :manual)
               agent.instance_variable_set(:@ui, json_ui)
               json_ui.emit("info", message: "Session cleared. Starting fresh.")
@@ -628,7 +672,7 @@ module Clacky
       end
 
       # Run agent with UI2 split-screen interface
-      def run_agent_with_ui2(agent, working_dir, agent_config, session_manager = nil, client = nil, is_session_load: false)
+      def run_agent_with_ui2(agent, working_dir, agent_config, session_manager = nil, client_factory = nil, is_session_load: false)
         # Brand license check — must happen before UI2 starts (raw terminal mode conflict)
         check_brand_license_cli
 
@@ -736,7 +780,7 @@ module Clacky
           # Handle commands
           case input.downcase.strip
           when "/config"
-            handle_config_command(ui_controller, client, agent_config, agent)
+            handle_config_command(ui_controller, agent_config, agent)
             next
           when "/undo"
             handle_time_machine_command(ui_controller, agent, session_manager)
@@ -747,8 +791,12 @@ module Clacky
             ui_controller.layout.clear_output
             # Cancel old idle timer before replacing agent to avoid stale-agent compression
             idle_timer.cancel
-            # Clear session by creating a new agent
-            agent = Clacky::Agent.new(client, agent_config, working_dir: working_dir, ui: ui_controller, profile: agent.agent_profile.name, session_id: Clacky::SessionManager.generate_id, source: :manual)
+            # Fresh Client built from the *current* agent_config (picks up any
+            # /config model switch made during this session). Never reuse a
+            # long-lived `client` — a previous implementation did, and after
+            # a DSK → Opus switch the reused Client carried stale @model /
+            # @use_bedrock, causing /chat/completions 404s on openclacky.com.
+            agent = Clacky::Agent.new(client_factory.call, agent_config, working_dir: working_dir, ui: ui_controller, profile: agent.agent_profile.name, session_id: Clacky::SessionManager.generate_id, source: :manual)
             # Rebuild idle timer bound to the new agent
             idle_timer = Clacky::IdleCompressionTimer.new(
               agent:           agent,
