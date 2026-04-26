@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0.beta.1] - 2026-04-26
+
+### Added
+- **Vision support — agents can now "see" images.** When you attach image files (PNG, JPG, GIF, WebP), the agent can analyze them visually with vision-capable models. Non-vision models automatically fall back to disk references instead of breaking.
+- **DeepSeek V4 (Clacky-DS) provider.** New `deepseekv4` provider preset with native DeepSeek API endpoint, supporting `deepseek-v4-pro` and `deepseek-v4-flash` models with accurate pricing.
+- **Memory subagent.** Long-term memory management now runs as a dedicated background subagent — writes memories when the task reaches meaningful completion, instead of on every turn.
+- **Usage telemetry.** Anonymous usage data collection helps us understand how the product is used and prioritize improvements. No personal or conversation data is collected.
+- **Brand configuration auto-refresh.** White-label brand settings now refresh automatically when the WebUI starts up, no manual restart needed.
+
+### Improved
+- **Progress handles revamped.** Nested progress handles now hide/show automatically, ticker threads keep animations smooth, and fast-completing tasks no longer flash a pointless "done" message.
+- **Todo manager tool upgrades.** Batch add/remove multiple todos at once, and completed todos auto-clear when you add new ones.
+- **Model switching more robust.** CLI slash commands (`/model`, `/provider`) now work seamlessly, server-side routing handles dynamic endpoints correctly, and switching between all provider types is more reliable.
+
+### Fixed
+- **Access key now persists via cookies.** The WebUI login key was stored only in `localStorage`, causing WebSocket connections to lose authentication. Now also written to a `clacky_access_key` cookie for consistent auth across all connection types.
+- **MiniMax → DeepSeek switch error.** Switching models from MiniMax to DeepSeek no longer fails due to mismatched message format handling.
+- **Bedrock truncated tool call recovery.** When AWS Bedrock truncates a tool call mid-argument, the agent now detects the error, sends feedback, and successfully retries on the next turn.
+- **Sidebar "Load More" scroll jump.** Clicking "Load More" at the bottom of the session list no longer jerks the sidebar back to the active session — scroll position is now preserved.
+- **Double-render regression.** An output buffer lifecycle bug that occasionally caused duplicate content in the terminal UI has been fixed.
+- **DeepSeek V4 message content extraction.** Compression no longer mishandles DeepSeek V4's user message content format.
+
 ## [0.9.38] - 2026-04-24
 
 ### Fixed
