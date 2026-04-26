@@ -58,7 +58,12 @@ function Test-IsAdmin {
 }
 
 function Get-SafeTempDir {
-    $tempDir = [IO.Path]::GetTempPath()
+    # Use [IO.Path]::GetTempPath() instead of $env:TEMP.
+    # $env:TEMP can return a short (8.3) path (e.g. C:\Users\USERNA~1\AppData\Local\Temp)
+    # on systems where the user profile path contains spaces or non-ASCII characters,
+    # which can break tools that don't handle 8.3 names correctly.
+    # [IO.Path]::GetTempPath() always returns the full long path.
+    $tempDir = [IO.Path]::GetTempPath().TrimEnd("\", "/")
     return $tempDir
 }
 
