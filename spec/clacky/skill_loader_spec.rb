@@ -321,27 +321,21 @@ RSpec.describe Clacky::SkillLoader do
     end
   end
 
-  describe "MAX_SKILLS limit" do
-    it "has MAX_SKILLS constant set to 50" do
-      expect(described_class::MAX_SKILLS).to eq(50)
-    end
-
-    it "stops loading skills once MAX_SKILLS is reached and records a warning" do
+  describe "skill loading (no global cap)" do
+    it "loads all skills regardless of count — verified with 65+ total skills" do
       skills_dir = File.join(working_dir, ".clacky", "skills")
       FileUtils.mkdir_p(skills_dir)
 
-      # There are 11 default skills built into the gem (update this count when adding new default skills).
-      # Stub MAX_SKILLS to 13 so we have room for 2 project skills before hitting the cap.
-      # Then create 5 project skills — only 2 should be loaded, the rest skipped.
-      stub_const("Clacky::SkillLoader::MAX_SKILLS", 13)
-
-      5.times do |i|
-        skill_dir = File.join(skills_dir, "overflow-skill-#{i}")
+      # Create 60 project skills on top of ~12 default skills → ~72 total.
+      # Before the MAX_SKILLS removal, the 60th project skill onward would be
+      # silently dropped (cap was 50).
+      60.times do |i|
+        skill_dir = File.join(skills_dir, "proj-skill-#{i}")
         FileUtils.mkdir_p(skill_dir)
         File.write(File.join(skill_dir, "SKILL.md"), <<~CONTENT)
           ---
-          name: overflow-skill-#{i}
-          description: Overflow skill #{i}
+          name: proj-skill-#{i}
+          description: Project skill #{i}
           ---
           Content #{i}.
         CONTENT
@@ -349,11 +343,15 @@ RSpec.describe Clacky::SkillLoader do
 
       loader = described_class.new(working_dir: working_dir, brand_config: nil)
 
-      # Total skills must not exceed MAX_SKILLS
-      expect(loader.count).to be <= 13
+      # All 60 project skills must be loaded
+      loaded = loader.all_skills.select { |s| s.identifier.start_with?("proj-skill-") }
+      expect(loaded.size).to eq(60)
 
-      # At least one warning should mention the limit
-      expect(loader.errors).to include(a_string_matching(/Skill limit reached/))
+      # Total skills must be > 60 (includes defaults) — proves no cap at 50
+      expect(loader.count).to be > 60
+
+      # No skill-limit warnings
+      expect(loader.errors.grep(/Skill limit reached/)).to be_empty
     end
   end
 end
