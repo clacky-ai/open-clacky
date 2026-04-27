@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0.beta.3] - 2026-04-28
+
+### Added
+- **Gemini 2.5 Pro support.** The new `gemini2.5-pro` model is now available as a selectable option, giving you access to Google's latest flagship model.
+- **File attachments now support Markdown, plain text, and `.tar.gz` archives.** When you attach `.md`, `.txt`, or `.tar.gz` files to a session, the agent can read and reason over their contents directly.
+- **Image type auto-detection.** Image files are now correctly identified by their binary content (magic bytes), not just their file extension — preventing misclassified images from causing upload or vision errors.
+
+### Improved
+- **Settings page fully revamped.** The Web UI Settings panel now saves configuration correctly and exposes a richer set of options for managing providers, models, and API keys.
+- **Skills no longer have a 50-item cap.** The skill loader previously limited the results list to 50 entries; that cap has been removed so all available skills show up.
+- **Cost tracking no longer requires a hard-coded price list.** Model pricing is now resolved dynamically, so new models show real cost figures instead of falling back to a default.
+
+### Fixed
+- **Terminal tool no longer crashes on non-UTF-8 output.** Commands that emit binary or non-UTF-8 bytes (e.g. compiled output, legacy scripts) no longer raise an encoding error in the terminal tool.
+
 ## [1.0.0.beta.2] - 2026-04-27
 
 ### Added
