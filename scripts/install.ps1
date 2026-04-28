@@ -173,11 +173,8 @@ function Prompt-Reboot {
     exit 0
 }
 
-# Download Ubuntu rootfs, verify checksum, import into WSL.
-# $WslVersion: 1 or 2
-function Install-UbuntuRootfs {
-    param([int]$WslVersion)
-
+# Download Ubuntu rootfs and verify checksum. Returns local tar path.
+function Get-UbuntuRootfs {
     $cpuArch = Get-CpuArch
     Write-Info "CPU architecture: $cpuArch"
 
@@ -232,22 +229,33 @@ function Install-UbuntuRootfs {
             }
         }
 
-        Write-Step "Importing Ubuntu into WSL$WslVersion (this may take a minute)..."
-        New-Item -ItemType Directory -Force -Path $installDir | Out-Null
-        wsl.exe --import Ubuntu $installDir $tarPath --version $WslVersion
-        if ($LASTEXITCODE -ne 0) {
-            Write-Fail "wsl --import failed (exit $LASTEXITCODE)."
-            Write-Fail "Try removing $installDir and running the script again."
-            exit 1
-        }
-        Write-Success "Ubuntu (WSL$WslVersion) imported successfully."
+        return $tarPath
     } finally {
         # Keep the tarball as cache for future runs (e.g. after reboot)
-        # Only clean up if import succeeded — leave it for retry otherwise
         if (Test-Path $tarPath) {
             Write-Info "Keeping Ubuntu rootfs cache at $tarPath for future use."
         }
     }
+}
+
+# Import Ubuntu rootfs into WSL.
+# $WslVersion: 1 or 2
+function Install-UbuntuRootfs {
+    param([int]$WslVersion, [string]$TarPath = "")
+
+    if (-not $TarPath) {
+        $TarPath = Get-UbuntuRootfs
+    }
+
+    Write-Step "Importing Ubuntu into WSL$WslVersion (this may take a minute)..."
+    New-Item -ItemType Directory -Force -Path $UBUNTU_WSL_DIR | Out-Null
+    wsl.exe --import Ubuntu $UBUNTU_WSL_DIR $TarPath --version $WslVersion
+    if ($LASTEXITCODE -ne 0) {
+        Write-Fail "wsl --import failed (exit $LASTEXITCODE)."
+        Write-Fail "Try removing $UBUNTU_WSL_DIR and running the script again."
+        exit 1
+    }
+    Write-Success "Ubuntu (WSL$WslVersion) imported successfully."
 }
 
 # Install OpenClacky inside the Ubuntu WSL distro.
@@ -328,39 +336,31 @@ function Remove-InstallReg {
 # WSL2 Path — preferred, requires hardware virtualisation
 # ===========================================================================
 
-# Returns $true if WSL2 is actually usable by doing a real probe import.
-# A 512-byte zero-filled tar (valid EOF block) is used as minimal rootfs.
-# Probe import succeeds   → WSL2 usable
-# Probe import fails (HCS_E_HYPERV_NOT_INSTALLED etc.) → WSL1 only
+# Returns $true if WSL2 can import the real Ubuntu rootfs.
 function Test-VirtualisationSupported {
-    # Probe WSL2 with a minimal tar (512 zero bytes = valid tar EOF block)
-    # Called only after WSL feature is confirmed enabled (Main already checked).
+    param([string]$TarPath)
+
     Write-Info "Probing WSL2 availability..."
 
     $safeTemp = Get-SafeTempDir
-    $probeTar = "$safeTemp\wsl_probe.tar"
-    $probeDir = "$safeTemp\wsl_probe"
+    $probeName = "Wsl2Probe-$([guid]::NewGuid().ToString('N'))"
+    $probeDir = "$safeTemp\$probeName"
     $ok = $false
     try {
-        $bytes = New-Object byte[] 512
-        [System.IO.File]::WriteAllBytes($probeTar, $bytes)
         New-Item -ItemType Directory -Force -Path $probeDir | Out-Null
 
-        Write-Info "[probe] Running: wsl --import WslProbe $probeDir $probeTar --version 2"
-        wsl.exe --import WslProbe $probeDir $probeTar --version 2 >$null 2>$null
+        Write-Info "[probe] Running: wsl --import $probeName $probeDir $TarPath --version 2"
+        wsl.exe --import $probeName $probeDir $TarPath --version 2 >$null 2>$null
         $importExit = $LASTEXITCODE
         Write-Info "[probe] wsl --import exit code: $importExit"
         $ok = ($importExit -eq 0)
-        if ($ok) {
-            wsl.exe --unregister WslProbe 2>$null | Out-Null
-            Write-Info "[probe] WslProbe unregistered."
-        }
     } catch {
         Write-Info "[probe] Exception caught: $_"
         $ok = $false
     } finally {
+        wsl.exe --unregister $probeName 2>$null | Out-Null
+        Write-Info "[probe] $probeName unregistered."
         Remove-Item -Force -Recurse -ErrorAction SilentlyContinue $probeDir
-        Remove-Item -Force -ErrorAction SilentlyContinue $probeTar
     }
 
     Write-Info "[probe] Final result: ok=$ok"
@@ -405,33 +405,6 @@ function Enable-WslFeatures {
     Install-WslKernel
     Set-InstallReg -Name "InstallPhase" -Value "wsl-pending"
     Prompt-Reboot
-}
-
-# Full WSL2 install path. Called only after WSL feature is confirmed enabled
-# and WSL2 probe has passed.
-function Install-WithWsl2 {
-    Write-Step "WSL2 mode selected."
-    if (Test-UbuntuInstalled) {
-        Write-Info "Ubuntu (WSL) already installed — skipping import."
-    } else {
-        wsl.exe --set-default-version 2 2>$null
-        Install-UbuntuRootfs -WslVersion 2
-    }
-}
-
-# ===========================================================================
-# WSL1 Path — fallback when virtualisation is unavailable (e.g. inside a VM)
-# ===========================================================================
-
-# Full WSL1 install path. Called only after WSL feature is confirmed enabled
-# and WSL2 probe has failed (Hyper-V not available).
-function Install-WithWsl1 {
-    Write-Step "WSL1 mode selected."
-    if (Test-UbuntuInstalled) {
-        Write-Info "Ubuntu (WSL) already installed — skipping import."
-    } else {
-        Install-UbuntuRootfs -WslVersion 1
-    }
 }
 
 # ===========================================================================
@@ -483,16 +456,21 @@ if ($installPhase -eq "wsl-pending" -and $wslCode -eq 1) {
 # wslCode != 1 (0, -1, -444, 50, etc.): WSL is functional, continue.
 Remove-InstallReg -Name "InstallPhase"
 
-# Step 2: Probe whether WSL2 actually works
-$virt = Test-VirtualisationSupported
-Write-Info "[main] Test-VirtualisationSupported returned: $virt"
-if ($virt) {
-    Install-WithWsl2
-    $wslVersion = 2
+# Step 2: Install Ubuntu, preferring WSL2 when the real rootfs imports cleanly.
+if (Test-UbuntuInstalled) {
+    Write-Info "Ubuntu (WSL) already installed — skipping import."
+    $wslVersion = Get-InstallReg -Name "WslVersion" -Default 2
 } else {
-    Write-Info "[main] WSL2 unavailable, falling back to WSL1..."
-    Install-WithWsl1
-    $wslVersion = 1
+    $tarPath = Get-UbuntuRootfs
+    if (Test-VirtualisationSupported -TarPath $tarPath) {
+        wsl.exe --set-default-version 2 >$null 2>$null
+        Install-UbuntuRootfs -WslVersion 2 -TarPath $tarPath
+        $wslVersion = 2
+    } else {
+        Write-Info "[main] WSL2 unavailable, falling back to WSL1..."
+        Install-UbuntuRootfs -WslVersion 1 -TarPath $tarPath
+        $wslVersion = 1
+    }
 }
 
 Write-Success "WSL is ready."
