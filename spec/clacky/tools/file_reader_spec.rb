@@ -370,7 +370,7 @@ RSpec.describe Clacky::Tools::FileReader do
   end
 
   describe "#format_result_for_llm" do
-    it "formats image file for LLM" do
+    it "formats image file for LLM with image_inject sidecar (not inline Array)" do
       result = {
         binary: true,
         path: "/path/to/image.png",
@@ -382,17 +382,18 @@ RSpec.describe Clacky::Tools::FileReader do
 
       formatted = tool.format_result_for_llm(result)
 
-      # Should return Array of content blocks (same pattern as browser tool)
-      expect(formatted).to be_an(Array)
-      expect(formatted.length).to eq(2)
+      # Should return a Hash with plain text + image_inject sidecar,
+      # NOT an Array — images must be delivered via a follow-up user message,
+      # not inside a tool message (OpenAI-compatible APIs reject image_url in tool role).
+      expect(formatted).to be_a(Hash)
+      expect(formatted[:type]).to eq("text")
+      expect(formatted[:text]).to include("image.png")
 
-      text_block = formatted[0]
-      expect(text_block[:type]).to eq("text")
-      expect(text_block[:text]).to include("image.png")
-
-      image_block = formatted[1]
-      expect(image_block[:type]).to eq("image_url")
-      expect(image_block[:image_url][:url]).to eq("data:image/png;base64,iVBORw0KG...")
+      inject = formatted[:image_inject]
+      expect(inject).to be_a(Hash)
+      expect(inject[:mime_type]).to eq("image/png")
+      expect(inject[:base64_data]).to eq("iVBORw0KG...")
+      expect(inject[:path]).to eq("/path/to/image.png")
     end
 
     it "returns a plain string for non-binary files (avoids JSON double-escaping)" do

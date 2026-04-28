@@ -169,6 +169,17 @@ module Clacky
         # Inject TODO reminder for non-todo_manager tools
         formatted_result = inject_todo_reminder(call[:name], formatted_result)
 
+        # Extract image_inject sidecar before building the tool content string.
+        # image_inject carries the base64 payload that must be delivered as a
+        # follow-up `role:"user"` message (OpenAI/OpenRouter/Gemini only accept
+        # image_url blocks in user messages, not in tool messages).
+        # Strip it from the content sent to the API so it isn't tokenised as text.
+        image_inject = nil
+        if formatted_result.is_a?(Hash) && formatted_result[:image_inject]
+          image_inject = formatted_result[:image_inject]
+          formatted_result = formatted_result.reject { |k, _| k == :image_inject }
+        end
+
         # If the tool returned a plain string, use it directly (avoids double-escaping).
         # If it returned an Array (e.g. multipart vision blocks with image + text),
         # pass it through as-is so format_tool_results can send it to the API.
@@ -182,10 +193,9 @@ module Clacky
                     JSON.generate(formatted_result)
                   end
 
-        {
-          id: call[:id],
-          content: content
-        }
+        result = { id: call[:id], content: content }
+        result[:image_inject] = image_inject if image_inject
+        result
       end
 
       # Build error result for tool execution

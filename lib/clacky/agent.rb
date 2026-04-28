@@ -883,6 +883,36 @@ module Clacky
 
       formatted_messages = @client.format_tool_results(response, tool_results, model: current_model)
       formatted_messages.each { |msg| @history.append(msg.merge(task_id: @current_task_id)) }
+
+      # Append a follow-up `role:"user"` message for any image payloads that
+      # could not be delivered inside the tool message.
+      #
+      # Background: OpenAI-compatible APIs (OpenRouter, Gemini, GPT-4o, etc.)
+      # only accept image_url content blocks in `role:"user"` messages.  Putting
+      # base64 data in a `role:"tool"` message causes it to be JSON-encoded as
+      # plain text, inflating token counts by 20-40x.  The tool result carries a
+      # plain-text description for the LLM; the actual image is delivered here.
+      tool_results.each do |tr|
+        inject = tr[:image_inject]
+        next unless inject
+
+        mime_type  = inject[:mime_type]
+        base64_data = inject[:base64_data]
+        path       = inject[:path]
+        next unless mime_type && base64_data
+
+        data_url = "data:#{mime_type};base64,#{base64_data}"
+        image_content = [
+          { type: "text",      text: "[Image from file_reader: #{File.basename(path.to_s)}]" },
+          { type: "image_url", image_url: { url: data_url } }
+        ]
+        @history.append({
+          role:             "user",
+          content:          image_content,
+          system_injected:  true,
+          task_id:          @current_task_id
+        })
+      end
     end
 
     # Interrupt the agent's current run

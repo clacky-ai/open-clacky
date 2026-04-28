@@ -218,13 +218,29 @@ module Clacky
             description += "\nWARNING: Large file (>#{Utils::FileProcessor::MAX_FILE_SIZE / 1024}KB) - may consume significant tokens"
           end
 
-          # For images, return content blocks Array (same pattern as browser tool)
-          # so build_success_result passes it through as-is instead of JSON.generate-ing it.
+          # For images: return a plain-text tool result + a sidecar `image_inject`
+          # payload that the agent will append as a follow-up `role: "user"` message.
+          #
+          # WHY: OpenAI-compatible APIs (including OpenRouter/Gemini) only accept
+          # image_url content blocks inside `role: "user"` messages, NOT inside
+          # `role: "tool"` messages.  Putting base64 in a tool message causes it to
+          # be JSON-encoded as a plain string, which the tokeniser treats as text —
+          # blowing up token counts by 20-40x (observed: ~115k tokens for a 124 KB jpg).
+          #
+          # The agent detects `:image_inject` in the tool result after observe() and
+          # appends a `role: "user"` system_injected message containing the image block.
+          # This matches the standard workaround used by OpenAI's own agent SDK and
+          # pydantic-ai for multimodal tool outputs.
           if result[:mime_type]&.start_with?("image/")
-            return [
-              { type: "text", text: description },
-              { type: "image_url", image_url: { url: "data:#{result[:mime_type]};base64,#{result[:base64_data]}" } }
-            ]
+            return {
+              type: "text",
+              text: description,
+              image_inject: {
+                mime_type: result[:mime_type],
+                base64_data: result[:base64_data],
+                path: result[:path]
+              }
+            }
           end
 
           # For PDFs and other binary formats, just return metadata with base64
