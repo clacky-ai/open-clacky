@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0.beta.4] - 2026-04-28
+
+### Fixed
+- **首次配置 API Key 时报 JSON 解析错误。** 初始化向导（Onboard）保存 API 配置时调用了已废弃的旧接口 `POST /api/config`，该接口在 beta.2 重构后已不存在，服务器返回 404 导致前端报 `Unexpected token 'N', "Not Found" is not valid JSON`。现已修复，改为调用正确的新接口 `POST /api/config/models`。
+
 ## [1.0.0.beta.3] - 2026-04-28
 
 ### Added
