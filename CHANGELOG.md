@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0.beta.5] - 2026-04-29
+
+### Added
+- **WSL2 mirrored networking mode for localhost access.** Windows users running under WSL2 can now configure mirrored networking, allowing the Clacky server to be reached at `localhost` from the Windows host instead of needing to look up the WSL IP address.
+- **Message compressor preserves chunk order.** Compression chunks are now consistently ordered with `chunk-nn` naming, making it easier to browse and understand compressed conversation history.
+- **Session model is now saved.** The currently active model selection is persisted in session data, so it survives page refreshes and server restarts.
+- **Feedback button styling in Web UI.** The feedback interface now has improved CSS styling for a better user experience.
+
+### Improved
+- **Fewer LLM turns for common tool operations.** The file reader, security tool, and todo manager have been optimized to require fewer round-trips with the AI model, making tasks faster and cheaper.
+- **Terminal now supports mise-based Node.js.** The terminal tool correctly resolves Node.js when installed through `mise` version manager, not just `nvm` or system paths.
+
+### Fixed
+- **Browser MCP connection recovers from crashes.** The browser tool's MCP daemon handles process restarts more gracefully, and stale Node.js detection code has been cleaned up.
+- **Brand configuration no longer crashes on empty data.** When brand config data is empty or missing, the system now handles it gracefully instead of raising an error.
+- **Kimi K2.5 and K2.6 models now show correct pricing.** These models are now in the pricing table, so cost tracking reflects actual usage costs.
+- **Feishu messages with images no longer silently dropped.** Image markdown syntax in Feishu messages is now sanitized before sending, preventing the Feishu API from silently rejecting them.
+- **Onboarding model selector and provider presets fixed.** The model combobox in the onboarding flow now works correctly, and provider presets are properly updated.
+- **File reader now works correctly with OpenAI provider.** Files attached to sessions are now properly read and processed when using the OpenAI API format.
+- **Image URLs with special tokens no longer mis-handled.** The message formatter no longer mis-handles image URLs containing special tokens (e.g., `bong`).
+
+### Changed
+- **`run_project` tool removed.** This deprecated tool has been removed. Use the terminal tool to run commands in projects instead.
+
+### More
+- Improved WSL2 detection on Windows PowerShell installer
+- Minor test and documentation fixes
+
 ## [1.0.0.beta.4] - 2026-04-28
 
 ### Fixed

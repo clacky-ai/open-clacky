@@ -267,43 +267,8 @@ RSpec.describe Clacky::Tools::Browser do
 
   # ---------------------------------------------------------------------------
   # find_node_binary / chrome_mcp_available?
-  # ---------------------------------------------------------------------------
-  describe "#find_node_binary" do
-    it "returns a string path or nil" do
-      result = tool.send(:find_node_binary)
-      expect(result).to satisfy { |r| r.nil? || (r.is_a?(String) && !r.empty?) }
-    end
 
-    it "returns a path to an executable file when found" do
-      result = tool.send(:find_node_binary)
-      if result
-        expect(File.executable?(result)).to be true
-      end
-    end
-  end
 
-  describe "#node_error" do
-    it "returns nil when node is installed and version is sufficient" do
-      allow(tool).to receive(:node_major_version).and_return(22)
-      expect(tool.send(:node_error)).to be_nil
-    end
-
-    it "returns an error hash when node is not installed" do
-      allow(tool).to receive(:node_major_version).and_return(nil)
-      result = tool.send(:node_error)
-      expect(result).to be_a(Hash)
-      expect(result[:error]).to include("Node.js")
-      expect(result[:error]).to include("nodejs.org")
-    end
-
-    it "returns an error hash when node version is too old" do
-      allow(tool).to receive(:node_major_version).and_return(18)
-      result = tool.send(:node_error)
-      expect(result).to be_a(Hash)
-      expect(result[:error]).to include("版本过低")
-      expect(result[:error]).to include("v18")
-    end
-  end
 
   # ---------------------------------------------------------------------------
   # Tool metadata
