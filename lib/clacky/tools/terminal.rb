@@ -233,7 +233,10 @@ module Clacky
           session = spawn_dedicated_session(cwd: cwd, env: env)
           return session if session.is_a?(Hash) && session[:error]
 
-          write_user_command(session, safe_command)
+          # Dedicated sessions spawn with `--noprofile --norc` so there's
+          # nothing to hook. with_hooks is a no-op there but we keep it
+          # true for symmetry / future-proofing.
+          write_user_command(session, safe_command, with_hooks: true)
 
           return wait_and_package(
             session,
@@ -255,7 +258,11 @@ module Clacky
         session ||= spawn_dedicated_session(cwd: cwd, env: env)
         return session if session.is_a?(Hash) && session[:error]
 
-        write_user_command(session, safe_command)
+        # Run precmd/chpwd hooks before the user command so directory-
+        # aware version managers (mise, direnv, conda, pyenv-virtualenv…)
+        # pick up the current cwd and push their tools onto PATH. See
+        # write_user_command for the full rationale.
+        write_user_command(session, safe_command, with_hooks: true)
 
         wait_and_package(
           session,
@@ -438,6 +445,16 @@ module Clacky
       #     __CLACKY_DONE_<token>_ is by definition an echoed wrapper.
       private def strip_command_echo(text, marker_token: nil)
         return text if text.nil? || text.empty?
+
+        # Pass 0: strip the hooks prefix echo if `stty -echo` failed and
+        # the shell echoed our `{ for __clacky_f ...; } >/dev/null 2>&1`
+        # line. `__clacky_f` / `__clacky_pc` are our private variable
+        # names (double-underscore) that real user code effectively never
+        # emits, which makes this safe to strip anywhere in the buffer.
+        text = text.gsub(
+          /\{\s*(?:for\s+__clacky_f[^}]*?unset\s+__clacky_f[^}]*?|if\s+\[[^}]*?__clacky_pc[^}]*?unset\s+__clacky_pc[^}]*?)\}\s*>\s*\/dev\/null\s+2>&1;?\n?/m,
+          ""
+        )
 
         # Pass 1: anchored strip — the full wrapper echoed at the start,
         # possibly spanning multiple real newlines.
@@ -762,10 +779,87 @@ module Clacky
       #
       # Leading `\n` in the printf format ensures the marker starts on its
       # own line even when the user command ended without a trailing newline.
-      private def write_user_command(session, command)
-        token = session.marker_token
-        line = %Q|{ #{command}\n}; __clacky_ec=$?; printf "\n__CLACKY_DONE_#{token}_%s__\n" "$__clacky_ec"\n|
+      #
+      # `with_hooks:` — when true and the session is a real rc-loaded zsh/
+      # bash, we run the shell's `chpwd_functions` + `precmd_functions`
+      # before the user command. This mimics what the shell would do at
+      # every prompt in an interactive session, and is what makes mise /
+      # direnv / conda-auto-activate / pyenv-virtualenv / autoenv etc.
+      # actually push their tools onto PATH.
+      #
+      # Why this is necessary:
+      #   Most of these tools register themselves via precmd/chpwd hooks
+      #   when you `eval "$(tool activate zsh)"` in ~/.zshrc. In a real
+      #   terminal, those hooks fire every time the shell draws a new
+      #   prompt. Our persistent session never draws a prompt (we drive
+      #   it by writing one line at a time and reading back our marker),
+      #   so the hooks never run — which is why commands like `node -v`
+      #   come back as "command not found" even though ~/.zshrc was
+      #   loaded at spawn time.
+      #
+      # We don't run hooks for internal bookkeeping commands (source rc,
+      # env reset, cd, marker install) — those use with_hooks: false.
+      private def write_user_command(session, command, with_hooks: false)
+        token  = session.marker_token
+        # Hooks run in their own group with stdout+stderr redirected to
+        # /dev/null so any chatty hook (direnv's "direnv: loading .envrc",
+        # conda banners, etc.) never contaminates captured output. Their
+        # exit codes are also swallowed so the *user* command's $? is what
+        # lands in `__clacky_ec`.
+        hooks_line = with_hooks ? hooks_prefix_for(session) : ""
+        line   = %Q|#{hooks_line}{ #{command}\n}; __clacky_ec=$?; printf "\n__CLACKY_DONE_#{token}_%s__\n" "$__clacky_ec"\n|
         session.mutex.synchronize { session.writer.write(line) }
+      end
+
+      # Build the "run hooks" prefix line. Empty string for shells where
+      # we don't know how to introspect hook registries.
+      private def hooks_prefix_for(session)
+        body = hook_invocation_for(session)
+        return "" if body.strip.empty?
+        # Single-line `{ …; } >/dev/null 2>&1;` so the hooks always run in
+        # the same shell (no subshell — they must mutate PATH in *this*
+        # shell), but their output goes nowhere. The trailing semicolon
+        # separates from the user-command wrapper. The whole thing stays
+        # on one logical line (newlines inside `body` are fine inside
+        # `{ ... }`).
+        "{ #{body.strip}\n} >/dev/null 2>&1;\n"
+      end
+
+      # Build the shell-specific snippet that runs every registered
+      # chpwd / precmd function. Returns an empty string for shells we
+      # don't know how to introspect (sh, dedicated --norc bash, etc.)
+      # so those sessions behave exactly as before.
+      #
+      # Each hook is wrapped in `2>/dev/null || true` so a single broken
+      # hook can't abort the user command or leak stderr noise into
+      # captured output.
+      private def hook_invocation_for(session)
+        case session.shell_name.to_s
+        when "zsh"
+          # zsh: chpwd_functions / precmd_functions are arrays of function
+          # names. `(P)name` expansion is avoided — plain `$array` with
+          # word splitting works under the default zsh options since
+          # `.zshrc` already ran (KSH_ARRAYS etc. is off by default for
+          # interactive zsh started via -i).
+          <<~ZSH
+            for __clacky_f in $chpwd_functions; do "$__clacky_f" 2>/dev/null || true; done
+            for __clacky_f in $precmd_functions; do "$__clacky_f" 2>/dev/null || true; done
+            unset __clacky_f 2>/dev/null
+          ZSH
+        when "bash"
+          # bash: no chpwd equivalent. PROMPT_COMMAND may be a string
+          # (classic) or an array (bash 5.1+). Handle both.
+          <<~BASH
+            if [ "${BASH_VERSINFO[0]:-0}" -ge 5 ] && [ "${BASH_VERSINFO[1]:-0}" -ge 1 ] && declare -p PROMPT_COMMAND 2>/dev/null | grep -q 'declare -a'; then
+              for __clacky_pc in "${PROMPT_COMMAND[@]}"; do eval "$__clacky_pc" 2>/dev/null || true; done
+            elif [ -n "${PROMPT_COMMAND:-}" ]; then
+              eval "$PROMPT_COMMAND" 2>/dev/null || true
+            fi
+            unset __clacky_pc 2>/dev/null
+          BASH
+        else
+          ""
+        end
       end
 
       # ---------------------------------------------------------------------
@@ -784,15 +878,26 @@ module Clacky
       end
 
       # Called by the pool when rc files (e.g. ~/.zshrc) have changed since
-      # this session was spawned. Sources them all; ignores per-file errors.
+      # this session was spawned. Sources them in shell-startup order so
+      # later files can see env set by earlier ones.
+      #
+      # Notes:
+      #   - Errors inside each `source` are NOT silenced (dropping stderr
+      #     previously masked failures like a broken `mise activate` that
+      #     would leave PATH without node/ruby/etc.). They land in the PTY
+      #     log where a developer can inspect them if a command mysteriously
+      #     fails to find a tool.
+      #   - `|| true` keeps the compound line's exit code at 0 so our
+      #     marker reader treats the re-source as "succeeded" regardless
+      #     of per-file hiccups — we don't want a flaky rc to disable the
+      #     whole persistent shell.
       def source_rc_in_session(session, rc_files)
         return if rc_files.empty?
-        esc = rc_files.map { |f| "\"#{f.gsub('"', '\"')}\"" }.join(" ")
-        run_inline(
-          session,
-          rc_files.map { |f| "source \"#{f.gsub('"', '\"')}\" 2>/dev/null" }.join("; "),
-          timeout: 10
-        )
+        cmd = rc_files.map { |f|
+          escaped = f.gsub('"', '\"')
+          "source \"#{escaped}\" || true"
+        }.join("; ")
+        run_inline(session, cmd, timeout: 15)
       end
 
       # Called by the pool to reset env between calls. First unsets any keys

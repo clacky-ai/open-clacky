@@ -209,18 +209,28 @@ module Clacky
 
         private :rc_changed?
 
-        # Return the rc files relevant to the given shell. If shell_name is
-        # nil (used by current_rc_fingerprint when we have no session), we
-        # return a superset so we always catch changes regardless of shell.
+        # Return the rc files relevant to the given shell, in the *startup*
+        # order the shell itself would read them. This order matters when
+        # we re-source after a user edit: later files may depend on vars /
+        # PATH prefixes set by earlier ones (e.g. `.zshrc` invoking
+        # `mise activate zsh` which expects `~/.local/bin` already on PATH
+        # from `.zshenv` / `.zprofile`).
+        #
+        # zsh order:  .zshenv  ->  .zprofile (login)  ->  .zshrc (interactive)
+        # bash order: .profile / .bash_profile (login)  ->  .bashrc
+        #
+        # If shell_name is nil (used by current_rc_fingerprint when we have
+        # no session), we return a superset so we always catch changes
+        # regardless of shell.
         def rc_files_for_shell(shell_name)
           home = ENV["HOME"].to_s
           case shell_name
           when "zsh"
-            %w[.zshrc .zprofile .zshenv]
+            %w[.zshenv .zprofile .zshrc]
           when "bash"
-            %w[.bashrc .bash_profile .profile]
+            %w[.profile .bash_profile .bashrc]
           else
-            %w[.zshrc .zprofile .zshenv .bashrc .bash_profile .profile]
+            %w[.zshenv .zprofile .zshrc .profile .bash_profile .bashrc]
           end.map { |f| File.join(home, f) }.select { |f| File.exist?(f) }
         end
 
