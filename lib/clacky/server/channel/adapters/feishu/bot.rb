@@ -62,7 +62,7 @@ module Clacky
 
             code = response["code"]
             if code != 0
-              Clacky::Logger.error("[feishu] send_text failed",
+              Clacky::Logger.warn("[feishu] send_text failed",
                 code: code, msg: response["msg"],
                 chat_id: chat_id, msg_type: msg_type)
             end
@@ -99,7 +99,10 @@ module Clacky
           def send_file(chat_id, path, name: nil, reply_to: nil)
             raise ArgumentError, "File not found: #{path}" unless File.exist?(path)
 
-            filename  = name || File.basename(path)
+            # Always derive filename from the real path for type detection and upload.
+            # The `name` param (often markdown alt text) may lack an extension,
+            # causing images to be mis-detected as generic files.
+            filename  = File.basename(path)
             file_data = File.binread(path)
             ext       = File.extname(filename).downcase
 

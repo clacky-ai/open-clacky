@@ -179,7 +179,7 @@ module Clacky
 
         @adapter.send_text(@chat_id, text, reply_to: @message_id)
       rescue StandardError => e
-        Clacky::Logger.error("[ChannelUI] send_text failed", platform: @platform, chat_id: @chat_id, error: e)
+        Clacky::Logger.warn("[ChannelUI] send_text failed", platform: @platform, chat_id: @chat_id, error: e)
         nil
       end
 
@@ -191,7 +191,7 @@ module Clacky
           send_text("File: #{name || File.basename(path)}\n#{path}")
         end
       rescue StandardError => e
-        Clacky::Logger.error("[ChannelUI] send_file failed (#{@platform}/#{@chat_id}): #{e.message}")
+        Clacky::Logger.warn("[ChannelUI] send_file failed (#{@platform}/#{@chat_id}): #{e.message}")
         send_text("Failed to send file: #{File.basename(path)}\nError: #{e.message}")
       end
 
