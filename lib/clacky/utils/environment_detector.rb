@@ -73,6 +73,19 @@ module Clacky
         end
       end
 
+      # Build a command through the user's shell so version managers and PATH
+      # hooks are available. macOS commonly keeps Node manager setup in
+      # interactive rc files; elsewhere, prefer non-interactive startup to avoid
+      # terminal-only shell setup blocking Open3.
+      def self.login_shell_command(command)
+        shell = ENV["SHELL"].to_s
+        shell = "/bin/bash" if shell.empty? || !File.executable?(shell)
+        shell = "/bin/bash" unless %w[zsh bash fish].include?(File.basename(shell))
+        return [shell, "-l", "-i", "-c", command] if os_type == :macos
+
+        [shell, "-l", "-c", command]
+      end
+
       # Detect the desktop directory path for the current environment.
       # @return [String, nil] absolute path to desktop, or nil if not found
       def self.desktop_path
