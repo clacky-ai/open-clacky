@@ -218,7 +218,6 @@ module Clacky
       # -----------------------------------------------------------------------
 
       private def execute_user_browser(action, opts)
-        return node_error if (err = node_error)
 
         case action.to_s
         when "tabs"
@@ -419,62 +418,6 @@ module Clacky
       # -----------------------------------------------------------------------
       # Chrome MCP
       # -----------------------------------------------------------------------
-
-      private def find_node_binary
-        path = Clacky::Utils::Encoding.cmd_to_utf8(`which node 2>/dev/null`, source_encoding: "UTF-8").strip
-        return nil if path.empty? || !File.executable?(path)
-        path
-      end
-
-      private def node_major_version
-        node = find_node_binary
-        return nil unless node
-        Clacky::Utils::Encoding.cmd_to_utf8(`#{node} --version 2>/dev/null`, source_encoding: "UTF-8").strip.gsub(/^v/, "").split(".").first.to_i
-      end
-
-      private def node_error
-        major = node_major_version
-
-        if major.nil?
-          return {
-            error: <<~MSG
-              ⚠️  IMPORTANT — STOP and tell the user:
-
-              ──────────────────────────────────────────────────
-              浏览器自动化需要 Node.js（>= #{MIN_NODE_MAJOR}）。
-
-              系统未检测到 Node.js，请安装后重试：
-              https://nodejs.org/en/download
-
-              安装完成后告诉我，我来重试。
-              ──────────────────────────────────────────────────
-
-              Do NOT fall back to web_search or any other workaround.
-            MSG
-          }
-        end
-
-        if major < MIN_NODE_MAJOR
-          return {
-            error: <<~MSG
-              ⚠️  IMPORTANT — STOP and tell the user:
-
-              ──────────────────────────────────────────────────
-              当前 Node.js 版本过低（v#{major}），需要 >= #{MIN_NODE_MAJOR}。
-
-              请升级 Node.js 后重试：
-              https://nodejs.org/en/download
-
-              升级完成后告诉我，我来重试。
-              ──────────────────────────────────────────────────
-
-              Do NOT fall back to web_search or any other workaround.
-            MSG
-          }
-        end
-
-        nil
-      end
 
       # Delegate to BrowserManager. Auto-retries once on "selected page has been closed".
       private def mcp_call(tool_name, arguments = {})

@@ -7,7 +7,6 @@ auto_summarize: true
 forbidden_tools:
   - write
   - edit
-  - run_project
   - web_search
   - web_fetch
   - browser

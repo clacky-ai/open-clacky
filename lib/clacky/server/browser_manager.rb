@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
 require "yaml"
+require "shellwords"
+require "open3"
 
 module Clacky
   # BrowserManager owns the chrome-devtools-mcp daemon lifecycle.
@@ -236,10 +238,26 @@ module Clacky
       # Build command with verified detection result
       cmd = build_mcp_command(detected)
       Clacky::Logger.info("[BrowserManager] Starting MCP daemon: #{cmd.join(' ')}")
-      
+
+      # Wrap in a shell that manually sources rc files (.zshrc/.bashrc) so
+      # mise / rbenv / asdf activate and `chrome-devtools-mcp` (a node
+      # binary installed under mise) is on PATH — otherwise the server,
+      # when launched by launchd / a desktop icon with a minimal PATH,
+      # cannot find node.
+      #
+      # LoginShell.login_shell_command builds argv like:
+      #   /bin/zsh -c "{ . ~/.zshrc; ... } 1>&2; exec chrome-devtools-mcp ..."
+      #
+      # The `1>&2` sends rc-time output (banners, mise warnings) to stderr,
+      # keeping the child's stdout 100% clean for JSON-RPC. `exec` then
+      # replaces the shell process with the MCP daemon itself, so the pid
+      # / signals / waitpid we hold point at the real target.
+      inner   = cmd.map { |a| shell_escape(a) }.join(" ")
+      wrapped = Clacky::Utils::LoginShell.login_shell_command(inner)
+
       # close_others: true prevents inheriting the server's listening socket (port 7070).
       # The MCP daemon is an independent external process and should not hold server fds.
-      stdin, stdout, stderr_io, wait_thr = Open3.popen3(*cmd, close_others: true)
+      stdin, stdout, stderr_io, wait_thr = Open3.popen3(*wrapped, close_others: true)
       Thread.new { stderr_io.read rescue nil }
 
       # MCP handshake
@@ -290,6 +308,11 @@ module Clacky
       else
         raise "Unknown detection mode: #{detected[:mode]}"
       end
+    end
+
+    # Shell-escape a single argv token for safe interpolation into a `-c` string.
+    def shell_escape(token)
+      Shellwords.escape(token.to_s)
     end
 
     # Feature flags for chrome-devtools-mcp

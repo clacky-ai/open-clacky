@@ -183,12 +183,20 @@ Print a success summary:
 ```
 
 ### 4. Start Development Server
-After the script completes, use the run_project tool to start the server:
+After the script completes, read the `.1024` config file in the project root
+to find the `run_command`, then start it in the background via the terminal tool:
+
 ```
-run_project(action: "start")
+# First, read .1024 to get the run_command (usually `bin/dev` for Rails):
+file_reader(path: ".1024")
+
+# Then start the server in the background:
+terminal(command: "<run_command from .1024>", background: true)
 ```
 
-**Important**: If run_project executes without errors, the server has started successfully. 
+**Important**: If the terminal call returns a session_id (and no error), the
+server has started successfully. You can inspect logs later by polling the
+same session_id with an empty input.
 
 Then inform the user and ask what to develop next:
 ```
@@ -210,7 +218,7 @@ What would you like to develop next?
 - bin/setup fails → Show error, suggest running `./bin/setup` manually
 - Cloud project creation fails → Soft-fail with warning, continue to start server
 - workspace_key missing → Ask user interactively; skip cloud init if user declines
-- run_project fails → Check logs with `run_project(action: "output")` and verify database status
+- Dev server fails to start → Poll the terminal session (empty input) to check logs, verify database status
 
 ## Example Interaction
 User: "/new"
@@ -224,5 +232,5 @@ Response:
 6. Project setup complete!
 7. Initializing cloud project binding...
 8. ✅ Cloud project created and config injected into config/application.yml!
-9. Starting development server with run_project...
+9. Starting development server via terminal (background)...
 10. ✨ Server running! Visit http://localhost:3000
