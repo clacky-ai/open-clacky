@@ -73,6 +73,15 @@ module Clacky
         end
       end
 
+      # Build a command that runs through the user's login + interactive shell,
+      # so version managers and PATH hooks from shell rc files are available.
+      def self.login_shell_command(command)
+        shell = ENV["SHELL"].to_s
+        shell = "/bin/bash" if shell.empty? || !File.executable?(shell)
+        shell = "/bin/bash" unless %w[zsh bash fish].include?(File.basename(shell))
+        [shell, "-l", "-i", "-c", command]
+      end
+
       # Detect the desktop directory path for the current environment.
       # @return [String, nil] absolute path to desktop, or nil if not found
       def self.desktop_path

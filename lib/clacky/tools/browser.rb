@@ -10,6 +10,7 @@ require "base64"
 require "fileutils"
 require "securerandom"
 require_relative "base"
+require_relative "../utils/environment_detector"
 
 module Clacky
   module Tools
@@ -421,15 +422,23 @@ module Clacky
       # -----------------------------------------------------------------------
 
       private def find_node_binary
-        path = Clacky::Utils::Encoding.cmd_to_utf8(`which node 2>/dev/null`, source_encoding: "UTF-8").strip
-        return nil if path.empty? || !File.executable?(path)
-        path
+        output, _stderr, status = Open3.capture3(
+          *Clacky::Utils::EnvironmentDetector.login_shell_command("command -v node")
+        )
+        path = output.to_s.strip
+        status.success? && File.executable?(path) ? path : nil
+      rescue Errno::ENOENT
+        nil
       end
 
       private def node_major_version
         node = find_node_binary
-        return nil unless node
-        Clacky::Utils::Encoding.cmd_to_utf8(`#{node} --version 2>/dev/null`, source_encoding: "UTF-8").strip.gsub(/^v/, "").split(".").first.to_i
+        output, status = node ? Open3.capture2e(node, "--version") : Open3.capture2e("node", "--version")
+        return nil unless status.success?
+
+        output.to_s.strip.gsub(/^v/, "").split(".").first.to_i
+      rescue Errno::ENOENT
+        nil
       end
 
       private def node_error

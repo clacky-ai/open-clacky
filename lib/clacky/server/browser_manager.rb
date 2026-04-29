@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
 require "yaml"
+require "shellwords"
+require_relative "../utils/environment_detector"
 
 module Clacky
   # BrowserManager owns the chrome-devtools-mcp daemon lifecycle.
@@ -286,7 +288,9 @@ module Clacky
       case detected[:mode]
       when :ws_endpoint
         Clacky::Logger.info("[BrowserManager] Using ws_endpoint mode: #{detected[:value]}")
-        ["chrome-devtools-mcp", *args, "--wsEndpoint", detected[:value]]
+        Clacky::Utils::EnvironmentDetector.login_shell_command(
+          "exec #{Shellwords.join(["chrome-devtools-mcp", *args, "--wsEndpoint", detected[:value]])}"
+        )
       else
         raise "Unknown detection mode: #{detected[:mode]}"
       end
