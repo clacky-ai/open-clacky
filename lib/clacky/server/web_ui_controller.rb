@@ -410,7 +410,7 @@ module Clacky
         subscribers.each do |sub|
           block.call(sub)
         rescue StandardError => e
-          warn "[WebUIController] channel subscriber error: #{e.message}"
+          Clacky::Logger.error("[WebUIController] channel subscriber error", error: e)
         end
       end
     end

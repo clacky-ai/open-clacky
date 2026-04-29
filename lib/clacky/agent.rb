@@ -1427,6 +1427,7 @@ module Clacky
       ].compact.join(". ")
 
       content = "[Session context: #{parts}]"
+
       @history.append({
         role: "user",
         content: content,

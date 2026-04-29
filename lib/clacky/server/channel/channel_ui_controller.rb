@@ -179,7 +179,7 @@ module Clacky
 
         @adapter.send_text(@chat_id, text, reply_to: @message_id)
       rescue StandardError => e
-        warn "[ChannelUI] send_text failed (#{@platform}/#{@chat_id}): #{e.message}"
+        Clacky::Logger.error("[ChannelUI] send_text failed", platform: @platform, chat_id: @chat_id, error: e)
         nil
       end
 

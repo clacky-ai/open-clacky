@@ -59,6 +59,14 @@ module Clacky
             payload[:reply_to_message_id] = reply_to if reply_to
 
             response = post("/open-apis/im/v1/messages", payload, params: { receive_id_type: "chat_id" })
+
+            code = response["code"]
+            if code != 0
+              Clacky::Logger.error("[feishu] send_text failed",
+                code: code, msg: response["msg"],
+                chat_id: chat_id, msg_type: msg_type)
+            end
+
             { message_id: response.dig("data", "message_id") }
           end
 
@@ -168,15 +176,17 @@ module Clacky
           # @return [Array<String, String>] [content_json, msg_type]
           def build_message_payload(text)
             if has_code_block_or_table?(text)
+              safe_text = sanitize_images_for_card(text)
               content = JSON.generate({
                 schema: "2.0",
                 config: { wide_screen_mode: true },
-                body: { elements: [{ tag: "markdown", content: text }] }
+                body: { elements: [{ tag: "markdown", content: safe_text }] }
               })
               [content, "interactive"]
             else
+              safe_text = sanitize_images_for_card(text)
               content = JSON.generate({
-                zh_cn: { content: [[{ tag: "md", text: text }]] }
+                zh_cn: { content: [[{ tag: "md", text: safe_text }]] }
               })
               [content, "post"]
             end
@@ -184,6 +194,33 @@ module Clacky
 
           def has_code_block_or_table?(text)
             text.match?(/```[\s\S]*?```/) || text.match?(/\|.+\|[\r\n]+\|[-:| ]+\|/)
+          end
+
+          # Convert Markdown image syntax ![alt](url) to plain links [alt](url)
+          # inside interactive card content.  Feishu interactive cards do NOT
+          # support image markdown — sending it triggers error 230099 and the
+          # entire message is silently dropped.
+          #
+          # Code blocks are preserved untouched (images inside ``` fences are
+          # left as-is since they are literal text, not rendered markdown).
+          #
+          # This is a pure function with no side effects — thread-safe by design.
+          # @param text [String] raw markdown text
+          # @return [String] sanitised text safe for interactive cards
+          def sanitize_images_for_card(text)
+            # Split on code fences to avoid transforming inside code blocks
+            parts = text.split(/(```[\s\S]*?```)/)
+            parts.map { |segment|
+              if segment.start_with?("```")
+                segment  # code block — leave untouched
+              else
+                # ![alt](url) → [alt](url)   (drop the leading !)
+                segment.gsub(/!\[([^\]]*)\]\(([^)]+)\)/) do
+                  alt, url = Regexp.last_match(1), Regexp.last_match(2)
+                  alt.empty? ? url : "[#{alt}](#{url})"
+                end
+              end
+            }.join
           end
 
           # Get tenant access token (cached)
