@@ -79,7 +79,7 @@ module Clacky
         shell = ENV["SHELL"].to_s
         shell = "/bin/bash" if shell.empty? || !File.executable?(shell)
         shell = "/bin/bash" unless %w[zsh bash fish].include?(File.basename(shell))
-        [shell, "-l", "-i", "-c", command]
+        [shell, "-l", "-c", command]
       end
 
       # Detect the desktop directory path for the current environment.
