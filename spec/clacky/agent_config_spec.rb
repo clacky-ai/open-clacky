@@ -902,39 +902,6 @@ RSpec.describe Clacky::AgentConfig do
         end
       end
 
-      it "pairs the DeepSeek family with V4-flash (runtime follows current model)" do
-        # Two user-facing models in config — one Claude, one DeepSeek — with
-        # Claude as the default. Switching primary to DeepSeek should flip
-        # the derived lite from Haiku to DSK-v4-flash automatically.
-        with_temp_config([
-          {
-            "model"            => "abs-claude-sonnet-4-6",
-            "api_key"          => "absk-test-key",
-            "base_url"         => "https://api.clacky.ai",
-            "anthropic_format" => false,
-            "type"             => "default"
-          },
-          {
-            "model"            => "dsk-deepseek-v4-pro",
-            "api_key"          => "absk-test-key",
-            "base_url"         => "https://api.clacky.ai",
-            "anthropic_format" => false
-          }
-        ]) do |config_file|
-          config = described_class.load(config_file)
-
-          # Start on Claude → lite = Haiku
-          lite1 = config.lite_model_config_for_current
-          expect(lite1["model"]).to eq("abs-claude-haiku-4-5")
-
-          # Switch to DSK-pro → lite follows, now V4-flash
-          dsk = config.models.find { |m| m["model"] == "dsk-deepseek-v4-pro" }
-          expect(config.switch_model_by_id(dsk["id"])).to be true
-          lite2 = config.lite_model_config_for_current
-          expect(lite2["model"]).to eq("dsk-deepseek-v4-flash")
-        end
-      end
-
       it "prefers an explicit user-configured lite (type: lite) over provider derivation" do
         with_temp_config([
           {
@@ -957,6 +924,41 @@ RSpec.describe Clacky::AgentConfig do
           expect(lite["model"]).to eq("my-custom-lite")
           # explicit entry is NOT a virtual hash — it's a real @models row
           expect(lite["virtual"]).to be_nil
+        end
+      end
+    end
+
+    context "when openclacky is the configured provider (DeepSeek lite pairing)" do
+      it "pairs the DeepSeek family with V4-flash (runtime follows current model)" do
+        # Two user-facing models — one Claude, one DeepSeek — with Claude as
+        # default. Switching primary to DeepSeek should flip the derived lite
+        # from Haiku to DSK-v4-flash automatically.
+        with_temp_config([
+          {
+            "model"            => "abs-claude-sonnet-4-6",
+            "api_key"          => "clacky-test-key",
+            "base_url"         => "https://api.openclacky.com",
+            "anthropic_format" => false,
+            "type"             => "default"
+          },
+          {
+            "model"            => "dsk-deepseek-v4-pro",
+            "api_key"          => "clacky-test-key",
+            "base_url"         => "https://api.openclacky.com",
+            "anthropic_format" => false
+          }
+        ]) do |config_file|
+          config = described_class.load(config_file)
+
+          # Start on Claude → lite = Haiku
+          lite1 = config.lite_model_config_for_current
+          expect(lite1["model"]).to eq("abs-claude-haiku-4-5")
+
+          # Switch to DSK-pro → lite follows, now V4-flash
+          dsk = config.models.find { |m| m["model"] == "dsk-deepseek-v4-pro" }
+          expect(config.switch_model_by_id(dsk["id"])).to be true
+          lite2 = config.lite_model_config_for_current
+          expect(lite2["model"]).to eq("dsk-deepseek-v4-flash")
         end
       end
     end
@@ -1039,22 +1041,21 @@ RSpec.describe Clacky::AgentConfig do
   # Providers.lite_model (per-family lookup)
   # ─────────────────────────────────────────────────────────────────────────
   describe "Clacky::Providers.lite_model" do
-    context "clackyai-sea (per-family lite_models table)" do
+    context "clackyai-sea (Claude-only lite_models table)" do
       it "returns Haiku for Claude-family primaries" do
         expect(Clacky::Providers.lite_model("clackyai-sea", "abs-claude-sonnet-4-6"))
           .to eq("abs-claude-haiku-4-5")
-        expect(Clacky::Providers.lite_model("clackyai-sea", "abs-claude-opus-4-7"))
+        expect(Clacky::Providers.lite_model("clackyai-sea", "abs-claude-opus-4-6"))
           .to eq("abs-claude-haiku-4-5")
       end
 
-      it "returns V4-flash for DeepSeek-family primary" do
-        expect(Clacky::Providers.lite_model("clackyai-sea", "dsk-deepseek-v4-pro"))
-          .to eq("dsk-deepseek-v4-flash")
+      it "returns nil for lite-class primaries (Haiku)" do
+        expect(Clacky::Providers.lite_model("clackyai-sea", "abs-claude-haiku-4-5")).to be_nil
       end
 
-      it "returns nil for lite-class primaries (Haiku / V4-flash)" do
-        expect(Clacky::Providers.lite_model("clackyai-sea", "abs-claude-haiku-4-5")).to be_nil
-        expect(Clacky::Providers.lite_model("clackyai-sea", "dsk-deepseek-v4-flash")).to be_nil
+      it "returns nil for models not in the lite_models table (e.g. DeepSeek, not hosted)" do
+        # clackyai-sea only hosts Claude; DeepSeek models are not mapped.
+        expect(Clacky::Providers.lite_model("clackyai-sea", "dsk-deepseek-v4-pro")).to be_nil
       end
 
       it "returns nil when called without a primary on a per-family provider" do

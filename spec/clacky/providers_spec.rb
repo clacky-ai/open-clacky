@@ -39,8 +39,8 @@ RSpec.describe Clacky::Providers do
         expect(described_class.supports?("minimax", :vision)).to be false
       end
 
-      it "returns false for kimi" do
-        expect(described_class.supports?("kimi", :vision)).to be false
+      it "returns true for kimi (k2.5/k2.6 are multimodal)" do
+        expect(described_class.supports?("kimi", :vision)).to be true
       end
 
       it "returns false for deepseekv4" do
@@ -72,9 +72,10 @@ RSpec.describe Clacky::Providers do
                                          model_name: "dsk-deepseek-v4-flash")).to be false
       end
 
-      it "returns false for clackyai-sea + DeepSeek models" do
+      it "returns false for clackyai-sea + unknown model (falls back to provider default)" do
+        # clackyai-sea no longer hosts DeepSeek; unknown model inherits provider-level vision=true.
         expect(described_class.supports?("clackyai-sea", :vision,
-                                         model_name: "dsk-deepseek-v4-pro")).to be false
+                                         model_name: "dsk-deepseek-v4-pro")).to be true
       end
     end
 

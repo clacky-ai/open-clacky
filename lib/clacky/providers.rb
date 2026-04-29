@@ -114,10 +114,10 @@ module Clacky
         "name" => "Kimi (Moonshot)",
         "base_url" => "https://api.moonshot.cn/v1",
         "api" => "openai-completions",
-        "default_model" => "kimi-k2.5",
-        "models" => ["kimi-k2.5"],
-        # Kimi k2.5 (text family) does not accept image inputs.
-        "capabilities" => { "vision" => false }.freeze,
+        "default_model" => "kimi-k2.6",
+        "models" => ["kimi-k2.6", "kimi-k2.5"],
+        # k2.5 / k2.6 are multimodal; legacy k2 text-only models need model_capabilities override if added.
+        "capabilities" => { "vision" => true }.freeze,
         "website_url" => "https://platform.moonshot.cn/console/api-keys"
       }.freeze,
 
@@ -136,29 +136,18 @@ module Clacky
         "api" => "bedrock",
         "default_model" => "abs-claude-sonnet-4-5",
         "models" => [
-          "abs-claude-opus-4-7",
           "abs-claude-opus-4-6",
           "abs-claude-sonnet-4-6",
           "abs-claude-sonnet-4-5",
-          "abs-claude-haiku-4-5",
-          "dsk-deepseek-v4-pro",
-          "dsk-deepseek-v4-flash",
-          "or-gemini-3-1-pro"
+          "abs-claude-haiku-4-5"
         ],
-        # Same lineup as openclacky — Claude is vision, DeepSeek is text-only,
-        # Gemini inherits the provider-default vision=true.
+        # Claude family — all vision-capable.
         "capabilities" => { "vision" => true }.freeze,
-        "model_capabilities" => {
-          "dsk-deepseek-v4-pro"   => { "vision" => false }.freeze,
-          "dsk-deepseek-v4-flash" => { "vision" => false }.freeze
-        }.freeze,
         # Per-primary lite pairing — see openclacky preset for rationale.
         "lite_models" => {
-          "abs-claude-opus-4-7"   => "abs-claude-haiku-4-5",
           "abs-claude-opus-4-6"   => "abs-claude-haiku-4-5",
           "abs-claude-sonnet-4-6" => "abs-claude-haiku-4-5",
-          "abs-claude-sonnet-4-5" => "abs-claude-haiku-4-5",
-          "dsk-deepseek-v4-pro"   => "dsk-deepseek-v4-flash"
+          "abs-claude-sonnet-4-5" => "abs-claude-haiku-4-5"
         },
         # Fallback chain: if a model is unavailable, try the next one in order.
         # Keys are primary model names; values are the fallback model to use instead.
