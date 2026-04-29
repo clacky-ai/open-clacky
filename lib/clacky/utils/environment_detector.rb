@@ -73,12 +73,16 @@ module Clacky
         end
       end
 
-      # Build a command that runs through the user's login + interactive shell,
-      # so version managers and PATH hooks from shell rc files are available.
+      # Build a command through the user's shell so version managers and PATH
+      # hooks are available. macOS commonly keeps Node manager setup in
+      # interactive rc files; elsewhere, prefer non-interactive startup to avoid
+      # terminal-only shell setup blocking Open3.
       def self.login_shell_command(command)
         shell = ENV["SHELL"].to_s
         shell = "/bin/bash" if shell.empty? || !File.executable?(shell)
         shell = "/bin/bash" unless %w[zsh bash fish].include?(File.basename(shell))
+        return [shell, "-l", "-i", "-c", command] if os_type == :macos
+
         [shell, "-l", "-c", command]
       end
 
