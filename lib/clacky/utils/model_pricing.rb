@@ -141,6 +141,42 @@ module Clacky
         }
       },
 
+      # Kimi K2.5 / K2.6 multimodal models
+      # Source: https://platform.moonshot.cn (USD / 1M tokens)
+      # Kimi billing model (same shape as DeepSeek):
+      #   - "cache miss input" = regular prompt_tokens rate
+      #   - "cache hit input"  = cache_read rate (no separate cache-write charge)
+      #   - No tiered pricing (single rate regardless of context length)
+      "kimi-k2.5" => {
+        input: {
+          default: 0.60,                  # $0.60/MTok cache miss
+          over_200k: 0.60                 # no tiered pricing
+        },
+        output: {
+          default: 3.00,                  # $3.00/MTok
+          over_200k: 3.00
+        },
+        cache: {
+          write: 0.60,                    # Kimi doesn't charge extra for writes; bill at miss rate
+          read: 0.10                      # $0.10/MTok cache hit
+        }
+      },
+
+      "kimi-k2.6" => {
+        input: {
+          default: 0.95,                  # $0.95/MTok cache miss
+          over_200k: 0.95
+        },
+        output: {
+          default: 4.00,                  # $4.00/MTok
+          over_200k: 4.00
+        },
+        cache: {
+          write: 0.95,                    # no separate write charge; bill at miss rate
+          read: 0.16                      # $0.16/MTok cache hit
+        }
+      },
+
     }.freeze
 
     # Threshold for tiered pricing (200K tokens)
@@ -270,6 +306,14 @@ module Clacky
         # non-thinking / thinking modes respectively. Bill at flash rates.
         when /^deepseek-chat$/i, /^deepseek-reasoner$/i
           "deepseek-v4-flash"
+        # Kimi K2.5 / K2.6 — strict match only. K2 text-only models
+        # (kimi-k2-0905-preview, kimi-k2-thinking, etc.) are not yet
+        # registered in providers.rb and will be added in a follow-up
+        # issue together with their model_capabilities overrides.
+        when /^kimi-k2\.?5$/i
+          "kimi-k2.5"
+        when /^kimi-k2\.?6$/i
+          "kimi-k2.6"
         else
           nil  # No pricing available for this model — cost will show as N/A
         end

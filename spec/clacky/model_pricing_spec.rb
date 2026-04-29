@@ -191,6 +191,57 @@ RSpec.describe Clacky::ModelPricing do
       end
     end
 
+    context "with Kimi K2 multimodal models" do
+      it "calculates kimi-k2.5 basic cost" do
+        usage = {
+          prompt_tokens: 100_000,          # 100K tokens
+          completion_tokens: 50_000         # 50K tokens
+        }
+
+        # Input:  (100_000 / 1_000_000) * $0.60 = $0.060
+        # Output: (50_000  / 1_000_000) * $3.00 = $0.150
+        # Total:  $0.210
+        result = described_class.calculate_cost(model: "kimi-k2.5", usage: usage)
+        expect(result[:cost]).to be_within(0.0001).of(0.210)
+        expect(result[:source]).to eq(:price)
+      end
+
+      it "calculates kimi-k2.6 with cache read (cache hit billing)" do
+        usage = {
+          prompt_tokens: 100_000,          # includes cache reads per OpenAI-style counting
+          completion_tokens: 50_000,
+          cache_read_input_tokens: 30_000  # cache hit portion
+        }
+
+        # Regular input (non-cached): ((100_000 - 30_000) / 1_000_000) * $0.95 = $0.0665
+        # Output:                     (50_000 / 1_000_000)             * $4.00 = $0.200
+        # Cache read:                 (30_000 / 1_000_000)             * $0.16 = $0.0048
+        # Total: $0.2713
+        result = described_class.calculate_cost(model: "kimi-k2.6", usage: usage)
+        expect(result[:cost]).to be_within(0.0001).of(0.2713)
+        expect(result[:source]).to eq(:price)
+      end
+
+      it "matches kimi-k2.5 case-insensitively" do
+        usage = { prompt_tokens: 100_000, completion_tokens: 50_000 }
+        result = described_class.calculate_cost(model: "Kimi-K2.5", usage: usage)
+        expect(result[:cost]).to be_within(0.0001).of(0.210)
+        expect(result[:source]).to eq(:price)
+      end
+
+      it "does not match unregistered k2 text-only variants" do
+        # K2 text-only models (kimi-k2-0905-preview, kimi-k2-thinking, etc.)
+        # are not in the pricing table yet — they must return N/A, not
+        # accidentally bill at k2.5/k2.6 rates via a loose regex.
+        usage = { prompt_tokens: 100_000, completion_tokens: 50_000 }
+        %w[kimi-k2-0905-preview kimi-k2-thinking kimi-k2-turbo-preview].each do |model|
+          result = described_class.calculate_cost(model: model, usage: usage)
+          expect(result[:cost]).to be_nil
+          expect(result[:source]).to be_nil
+        end
+      end
+    end
+
     context "with Claude 3.5 models" do
       it "supports claude-3-5-sonnet-20241022" do
         usage = {
