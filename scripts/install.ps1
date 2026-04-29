@@ -285,6 +285,34 @@ function Run-InstallInWsl {
     }
 }
 
+# Configure WSL2 mirrored networking so WSL can reach Windows localhost ports
+# (e.g. Chrome/Edge remote debugging on 127.0.0.1:9222).
+# Requires Win11 22H2+ (Build >= 22621). Silently skips on older Windows.
+function Set-Wsl2MirroredNetworking {
+    try {
+        $build = [System.Environment]::OSVersion.Version.Build
+        if ($build -lt 22621) {
+            Write-Warn "Windows Build $build < 22621, skipping WSL2 mirrored networking."
+            return
+        }
+
+        $wslConfig = "$env:USERPROFILE\.wslconfig"
+        $content = if (Test-Path $wslConfig) { Get-Content $wslConfig -Raw } else { "" }
+
+        if ($content -match "networkingMode\s*=\s*mirrored") {
+            Write-Info "WSL2 mirrored networking already configured."
+            return
+        }
+
+        Write-Step "Configuring WSL2 mirrored networking..."
+        Add-Content $wslConfig "`n[wsl2]`nnetworkingMode=mirrored"
+        wsl.exe --shutdown
+        Write-Success "WSL2 mirrored networking enabled."
+    } catch {
+        Write-Warn "Failed to configure WSL2 mirrored networking: $_"
+    }
+}
+
 function Show-PostInstall {
     param([int]$WslVersion)
     Write-Host ""
@@ -472,6 +500,8 @@ if (Test-UbuntuInstalled) {
         $wslVersion = 1
     }
 }
+
+if ($wslVersion -eq 2) { Set-Wsl2MirroredNetworking }
 
 Write-Success "WSL is ready."
 Run-InstallInWsl
