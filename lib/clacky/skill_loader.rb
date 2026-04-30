@@ -287,20 +287,32 @@ module Clacky
     def load_skills_from_directory(dir, source_type)
       return [] unless dir.exist?
 
-      skills = []
-      dir.children.select(&:directory?).each do |skill_dir|
-        source_path = case source_type
-        when :global_clacky
-          Pathname.new(ENV.fetch("HOME", "~")).join(".clacky")
-        when :project_clacky
-          Pathname.new(@working_dir)
-        else
-          skill_dir
-        end
+      source_path = case source_type
+      when :global_clacky
+        Pathname.new(ENV.fetch("HOME", "~")).join(".clacky")
+      when :project_clacky
+        Pathname.new(@working_dir)
+      else
+        dir
+      end
 
-        skill_name = skill_dir.basename.to_s
-        skill = load_single_skill(skill_dir, source_path, skill_name, source_type)
-        skills << skill if skill
+      skills = []
+      dir.children.select(&:directory?).each do |entry|
+        if entry.join("SKILL.md").exist?
+          # Direct skill directory
+          skill = load_single_skill(entry, source_path, entry.basename.to_s, source_type)
+          skills << skill if skill
+        else
+          # Treat as a category directory — scan one level deeper for skills.
+          # This allows grouping skills under ~/.clacky/skills/<category>/<skill>/SKILL.md
+          # (e.g. openclaw-imports/my-skill/SKILL.md) without changing the loader contract.
+          entry.children.select(&:directory?).each do |skill_dir|
+            next unless skill_dir.join("SKILL.md").exist?
+
+            skill = load_single_skill(skill_dir, source_path, skill_dir.basename.to_s, source_type)
+            skills << skill if skill
+          end
+        end
       end
       skills
     end
