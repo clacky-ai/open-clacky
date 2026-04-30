@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0.beta.6] - 2026-04-30
+
+### Fixed
+- **Compression chunk indexing now uses disk-based discovery.** Chunk files are no longer incorrectly overwritten after the second compression. Previously, chunk index was counted from compressed_summary messages in history — which caps at 1 after rebuild — causing chunk-2.md to be overwritten on every subsequent compression. Now uses durable disk-based chunk discovery via SessionManager, ensuring all compressed chunks are preserved.
+- **Skill evolution no longer creates duplicate skills.** The reflect and auto-create scenarios in skill evolution are now mutually exclusive: when a skill was just used, only reflection runs; when no skill was used, only auto-creation is considered. This prevents near-duplicate "auto-*" skills from being extracted from tasks already served by an existing skill.
+
+### Improved
+- **Slash commands no longer misinterpret filesystem paths.** Pasted paths like `/Users/alice/foo` or `/tmp/bar` are no longer mistaken for slash commands, avoiding confusing "skill not found" notices.
+
 ## [1.0.0.beta.5] - 2026-04-29
 
 ### Added
