@@ -1524,11 +1524,15 @@ body {
 .msg-time {
   /* Rendered as a footnote *below* the bubble, floating inside the #messages
      flex gap (12px). Absolute-positioned so showing/hiding it on hover does
-     NOT reflow the message list — surrounding messages stay put. */
+     NOT reflow the message list — surrounding messages stay put.
+
+     Per-side anchoring (see .msg-user / .msg-assistant overrides below) is
+     critical: we must NOT set both left:0 and right:0, because with
+     white-space:nowrap a short bubble (e.g. just "1") would force the time
+     text to extend past the bubble edge and trigger horizontal page scroll.
+     Instead each variant anchors to one side and grows naturally inward. */
   position: absolute;
   top: 100%;
-  left: 0;
-  right: 0;
   margin-top: 2px;
   display: block;
   font-size: 10px;
@@ -1545,9 +1549,10 @@ body {
   opacity: 1;
   transform: translateY(0);
 }
-/* Time color / alignment: match the bubble's alignment in the column. */
-.msg-user .msg-time      { color: var(--color-text-secondary); text-align: right; padding-right: 4px; }
-.msg-assistant .msg-time { color: var(--color-text-secondary); text-align: left;  padding-left: 4px; }
+/* Time color / alignment: anchor to the bubble's own side, let width be
+   driven by content — prevents overflow on narrow bubbles. */
+.msg-user .msg-time      { color: var(--color-text-secondary); right: 0; left: auto; padding-right: 4px; }
+.msg-assistant .msg-time { color: var(--color-text-secondary); left: 0;  right: auto; padding-left: 4px; }
 
 .msg-user      { background: var(--color-accent-primary); color: var(--color-button-primary-text); align-self: flex-end; }
 [data-theme="dark"] .msg-user { background: var(--color-accent-hover); }
