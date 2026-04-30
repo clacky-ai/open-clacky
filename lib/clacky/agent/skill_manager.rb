@@ -33,11 +33,45 @@ module Clacky
       def parse_skill_command(input)
         return { matched: false } unless input.start_with?("/")
 
-        match = input.match(%r{^/(\S+)(?:\s+(.*))?$})
+        # Split off the first whitespace-delimited token after the leading "/".
+        # Shape of a slash command:
+        #   /<command>
+        #   /<command> <arguments...>
+        #
+        # The key distinction we need to make is "slash command" vs. "filesystem
+        # path starting with /". Paths look like "/xxx/yyy", "/Users/alice/foo",
+        # "/tmp/bar" — what they all share is a *second* "/" inside the first
+        # token. Slash commands, on the other hand, may legitimately contain
+        # non-slug characters like ':' or '.' (e.g. "/guizang-ppt-skill:create"),
+        # so we deliberately DO NOT require the command to be a clean slug here —
+        # find_by_command handles the lookup, and a pilot-error like "/foo.bar"
+        # should still surface a friendly "skill not found" notice.
+        #
+        # Rejected as slash commands (treated as plain user messages):
+        #   - "/", "//", "/*.rb"        — token is empty or begins with a separator/glob
+        #   - "/ leading space"         — whitespace immediately after /
+        #   - "/Users/alice/foo"        — second "/" inside the first token ⇒ a path
+        #   - "/xxxx/zzzz/"             — same
+        #
+        # Accepted (routed to find_by_command, may yield :not_found notice):
+        #   - "/commit"
+        #   - "/skill-add https://…"     — "/" appears only in arguments, fine
+        #   - "/guizang-ppt-skill:create", "/foo.bar"  — non-slug but no path shape
+        match = input.match(%r{^/(\S+?)(?:\s+(.*))?$})
         return { matched: false } unless match
 
         skill_name = match[1]
         arguments  = match[2] || ""
+
+        # Reject path-like first tokens: anything containing a "/" after the
+        # leading one belongs to the filesystem, not the command namespace.
+        # This also naturally rejects "" (from "/" alone) and "*…" / ".…" style
+        # tokens because they won't be registered as a command — but those edge
+        # cases fall through to :not_found which is acceptable. The main goal is
+        # to stop pasted paths like "/Users/foo/bar" from producing a bogus
+        # "skill /Users/foo/bar not found" reply.
+        return { matched: false } if skill_name.include?("/")
+        return { matched: false } if skill_name.empty?
 
         skill = @skill_loader.find_by_command("/#{skill_name}")
         return { matched: true, found: false, skill_name: skill_name, reason: :not_found } unless skill
