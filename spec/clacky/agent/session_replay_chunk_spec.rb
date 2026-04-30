@@ -438,6 +438,58 @@ RSpec.describe "replay_history chunk MD expansion" do
       expect(user_events.map { |e| e[:content] }).to include(a_string_including("Still here"))
     end
 
+    # Regression: under the "single summary + previous_chunks index" compression
+    # scheme, session.json only stores ONE compressed_summary message (pointing at
+    # the newest chunk). Older chunks are referenced by basename inside the
+    # summary text. Replay must still expand ALL sibling chunk-*.md files on
+    # disk, in index order — otherwise chunk-1..chunk-N-1 get silently dropped
+    # from the "Load more history" view.
+    it "expands ALL sibling chunk-*.md files when only the newest is referenced" do
+      base_name = "2026-04-30-12-12-52-ab228ba4"
+
+      chunk1_path = File.join(sessions_dir, "#{base_name}-chunk-1.md")
+      File.write(chunk1_path, chunk_md(
+        user_content: "Question from chunk-1",
+        assistant_content: "Answer from chunk-1",
+        archived_at: "2026-04-30T12:30:00+08:00",
+        chunk: 1
+      ))
+
+      chunk2_path = File.join(sessions_dir, "#{base_name}-chunk-2.md")
+      File.write(chunk2_path, chunk_md(
+        user_content: "Question from chunk-2",
+        assistant_content: "Answer from chunk-2",
+        archived_at: "2026-04-30T13:00:00+08:00",
+        chunk: 2
+      ))
+
+      # session.json carries only the newest summary → chunk-2
+      messages = [
+        { role: "system",    content: "System." },
+        { role: "assistant", content: "Summary of everything.",
+          compressed_summary: true, chunk_path: chunk2_path },
+        { role: "user",      content: "Current question", created_at: Time.now.to_f }
+      ]
+
+      agent = build_agent(messages)
+      collector = TestCollector.new
+      agent.replay_history(collector)
+
+      user_contents = collector.events.select { |e| e[:type] == :user }.map { |e| e[:content] }
+
+      # Both chunks AND the session.json user message must be present
+      expect(user_contents).to include(a_string_including("Question from chunk-1"))
+      expect(user_contents).to include(a_string_including("Question from chunk-2"))
+      expect(user_contents).to include(a_string_including("Current question"))
+
+      # Order: chunk-1 → chunk-2 → session (chronological)
+      idx1 = user_contents.index { |c| c.include?("Question from chunk-1") }
+      idx2 = user_contents.index { |c| c.include?("Question from chunk-2") }
+      idx3 = user_contents.index { |c| c.include?("Current question") }
+      expect(idx1).to be < idx2
+      expect(idx2).to be < idx3
+    end
+
     # Regression: when chunk has more rounds than limit, session.json new messages
     # must still appear — they must NOT be squeezed out by rounds.last(limit).
     it "always shows session.json new messages even when chunk rounds exceed limit" do

@@ -178,8 +178,18 @@ module Clacky
           elsif current_round
             current_round[:events] << msg
           elsif msg[:compressed_summary] && msg[:chunk_path]
-            # Compressed summary sitting before any user rounds — expand it from chunk md
-            chunk_rounds = parse_chunk_md_to_rounds(msg[:chunk_path])
+            # Compressed summary sitting before any user rounds — expand ALL chunk
+            # MD files that belong to the same session (siblings of chunk_path),
+            # in chunk-index ascending order.
+            #
+            # Under the current "single summary + previous_chunks index" scheme,
+            # session.json only keeps the newest compressed_summary message (which
+            # points at the newest chunk). Older chunks (chunk-1..chunk-N-1) are
+            # referenced only as basenames inside the summary text. Expanding just
+            # msg[:chunk_path] would therefore lose all prior chunks on replay.
+            chunk_rounds = sibling_chunks_of(msg[:chunk_path]).flat_map { |p|
+              parse_chunk_md_to_rounds(p)
+            }
             rounds.concat(chunk_rounds)
             # After expanding, treat the last chunk round as the current round so that
             # any orphaned assistant/tool messages that follow in session.json (belonging
@@ -241,6 +251,32 @@ module Clacky
         end
 
         { has_more: has_more }
+      end
+
+      # Return all chunk MD file paths that belong to the same session as
+      # +chunk_path+, sorted by chunk index ascending (chunk-1, chunk-2, …).
+      # Uses the filename convention "<base>-chunk-<N>.md".
+      #
+      # Handles path resolution the same way parse_chunk_md_to_rounds does:
+      # if the stored path doesn't exist, fall back to SESSIONS_DIR + basename
+      # (cross-machine / cross-user session bundles).
+      private def sibling_chunks_of(chunk_path)
+        return [] unless chunk_path
+
+        resolved = chunk_path.to_s
+        unless File.exist?(resolved)
+          resolved = File.join(Clacky::SessionManager::SESSIONS_DIR, File.basename(resolved))
+        end
+        return [] unless File.exist?(resolved)
+
+        dir  = File.dirname(resolved)
+        base = File.basename(resolved).sub(/-chunk-\d+\.md\z/, "")
+        return [resolved] if base == File.basename(resolved)  # unconventional name — just use as-is
+
+        Dir.glob(File.join(dir, "#{base}-chunk-*.md")).sort_by do |p|
+          m = File.basename(p).match(/-chunk-(\d+)\.md\z/)
+          m ? m[1].to_i : Float::INFINITY
+        end
       end
 
       # Parse a chunk MD file into an array of rounds compatible with replay_history.
