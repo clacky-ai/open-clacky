@@ -47,11 +47,41 @@ module Clacky
             handle_compression_response(response, compression_context, progress: handle)
             true
           rescue Clacky::AgentInterrupted => e
-            @ui&.log("Idle compression canceled: #{e.message}", level: :info)
+            # User cancelled the idle compression — finish the quiet progress
+            # slot in place so the user sees exactly what happened (rather
+            # than the "Idle detected..." line being silently removed).
+            final = "Idle compression cancelled: #{e.message}"
+            if handle
+              handle.finish(final_message: final)
+            else
+              @ui&.log(final, level: :info)
+            end
             @history.rollback_before(compression_message)
+            Clacky::Logger.info("[idle-compress] cancelled: #{e.message}")
             false
           rescue => e
-            @ui&.log("Idle compression failed: #{e.message}", level: :error)
+            # Compression failed (most commonly: network errors after all
+            # LlmCaller retries exhausted). Previously this only wrote an
+            # @ui.log(:error) that was easy to miss — especially when no
+            # other output followed. Now we:
+            #   1. Replace the active quiet progress line with the error so
+            #      the user always sees *something* where the spinner was.
+            #   2. Emit a show_warning for a more prominent entry.
+            #   3. Persist to Clacky::Logger so post-mortem is possible even
+            #      if the terminal scrollback has rolled past.
+            final = "Idle compression failed: #{e.message}"
+            if handle
+              handle.finish(final_message: final)
+            else
+              @ui&.log(final, level: :error)
+            end
+            @ui&.show_warning(final)
+            Clacky::Logger.warn(
+              "[idle-compress] failed",
+              error_class: e.class.name,
+              error_message: e.message,
+              backtrace: e.backtrace&.first(5)
+            )
             @history.rollback_before(compression_message)
             false
           end
