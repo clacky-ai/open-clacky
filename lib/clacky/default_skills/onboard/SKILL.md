@@ -216,6 +216,22 @@ If `lang == "zh"`, write `~/.clacky/agents/USER.md` in Chinese:
 [1–2 句话，根据用户目标和背景量身定制。]
 ```
 
+### 7c. Import external skills (optional)
+
+Run `test -d ~/.openclaw && echo yes || echo no` via shell.
+
+If the result is `no`, skip silently and proceed to Step 8.
+
+If `yes` (OpenClaw detected):
+  1. Run: `ruby "SKILL_DIR/scripts/import_external_skills.rb" --source openclaw --dry-run`
+  2. Parse the output to get the total skill count N.
+  3. Ask with `request_user_feedback`:
+     - zh: `{ "question": "检测到你安装过 OpenClaw，找到 N 个 Skills，导入到 Clacky 直接使用？", "options": ["导入", "跳过"] }`
+     - en: `{ "question": "OpenClaw detected. Found N skills. Import them into Clacky?", "options": ["Import", "Skip"] }`
+  4. If confirmed: run `ruby "SKILL_DIR/scripts/import_external_skills.rb" --source openclaw --yes`
+  5. Report the result, then proceed to Step 8.
+  6. If skipped → proceed to Step 8.
+
 ### 8. Celebrate soul setup & offer browser (optional)
 
 First, send a short celebratory message to mark that the core setup is done.

@@ -514,19 +514,20 @@ module Clacky
             @warnings << "Invalid name '#{@name}' in metadata; using directory name '#{dir_slug}' instead."
             @name = dir_slug
           else
-            # Unrecoverable: both name and directory slug are invalid — mark skill as invalid
-            @invalid        = true
-            @invalid_reason = "Invalid skill name '#{@name}' and directory name '#{dir_slug}' is also not a valid slug. " \
-                              "Expected lowercase letters, numbers, and hyphens (e.g. 'my-skill')."
-            @name = nil
+            # Both name and directory slug are invalid (e.g. contains dots from version suffix).
+            # Record a warning but keep the skill usable — do not mark as invalid.
+            @warnings << "Invalid skill name '#{@name}' and directory name '#{dir_slug}' is also not a valid slug. " \
+                         "Expected lowercase letters, numbers, and hyphens (e.g. 'my-skill')."
+            @name = dir_slug
           end
         end
       else
-        # No name in frontmatter — check the directory slug itself
+        # No name in frontmatter — check the directory slug itself.
+        # Non-conforming names (e.g. version-suffixed dirs like "test-runner-1.0.0")
+        # are allowed with a warning rather than being rejected outright.
         unless valid_slug.call(dir_slug)
-          @invalid        = true
-          @invalid_reason = "Directory name '#{dir_slug}' is not a valid skill slug. " \
-                            "Expected lowercase letters, numbers, and hyphens (e.g. 'my-skill')."
+          @warnings << "Directory name '#{dir_slug}' is not a valid skill slug. " \
+                       "Expected lowercase letters, numbers, and hyphens (e.g. 'my-skill')."
         end
       end
 
