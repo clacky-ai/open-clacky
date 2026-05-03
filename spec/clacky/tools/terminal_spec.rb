@@ -2,6 +2,7 @@
 
 require "shellwords"
 require "tmpdir"
+require "json"
 
 # Specs for the redesigned, unified Terminal tool.
 # Contract recap:
@@ -312,17 +313,71 @@ RSpec.describe Clacky::Tools::Terminal do
       expect(result).not_to have_key(:session_id)
     end
 
-    it "rewrites rm into a trash move and exposes security_rewrite" do
+    it "moves rm'd files into the project trash via the safe-rm shell function" do
       Dir.mktmpdir do |dir|
         path = File.join(dir, "doomed.txt")
         File.write(path, "bye")
 
+        # Discover where the persistent shell thinks the trash dir is.
+        # (The spec suite reuses a single pooled shell, so its
+        # CLACKY_TRASH_DIR is whatever the first spawn's cwd computed —
+        # not necessarily the current `dir`.)
+        probe = tool.execute(command: 'printf "TRASH=%s\n" "$CLACKY_TRASH_DIR"', cwd: dir)
+        trash = probe[:output][/TRASH=(\S+)/, 1]
+        expect(trash).not_to be_nil
+        expect(trash).not_to be_empty
+
         result = tool.execute(command: "rm #{path}", cwd: dir)
         expect(result[:exit_code]).to eq(0)
-        expect(result[:security_rewrite]).to be_a(Hash)
-        expect(result[:security_rewrite][:original]).to include("rm ")
-        expect(result[:security_rewrite][:rewritten]).not_to include("rm ")
+        # rm is intercepted by a shell function at runtime (not by the
+        # Ruby Security layer), so there's no :security_rewrite entry.
+        expect(result[:security_rewrite]).to be_nil
+        # The file is gone from its original location ...
         expect(File.exist?(path)).to be(false)
+        # ... and appears in the trash with a matching metadata sidecar.
+        moved = Dir.glob(File.join(trash, "doomed.txt_deleted_*"))
+                   .reject { |f| f.end_with?(".metadata.json") }
+        expect(moved.size).to be >= 1
+        sidecar = "#{moved.last}.metadata.json"
+        expect(File.exist?(sidecar)).to be(true)
+        meta = JSON.parse(File.read(sidecar))
+        expect(meta["original_path"]).to eq(File.expand_path(path))
+        expect(meta["deleted_by"]).to eq("clacky_rm_shell")
+      ensure
+        # Best-effort cleanup of files we leaked into the pooled trash.
+        Dir.glob(File.join(trash.to_s, "doomed.txt_deleted_*")).each do |f|
+          FileUtils.rm_f(f) if File.file?(f)
+        end if trash && !trash.empty?
+      end
+    end
+
+    it "safe-rm refuses catastrophic targets (e.g. /etc) via the shell function" do
+      Dir.mktmpdir do |dir|
+        result = tool.execute(command: "rm -rf /etc", cwd: dir)
+        # Shell function emits an error to stderr and returns non-zero;
+        # /etc must still exist.
+        expect(result[:exit_code]).not_to eq(0)
+        expect(result[:output]).to include("refused dangerous target")
+        expect(Dir.exist?("/etc")).to be(true)
+      end
+    end
+
+    it "does NOT rewrite rm inside a heredoc body (regression: multi-line commands)" do
+      # A command that writes a heredoc whose body contains the word 'rm'
+      # must be executed as-is — not mangled by the old static rewriter,
+      # which would have treated the heredoc body tokens as rm targets.
+      Dir.mktmpdir do |dir|
+        script = File.join(dir, "heredoc_victim.txt")
+        cmd = <<~CMD
+          cat > #{script} <<'PYEOF'
+          this line mentions rm but must NOT be interpreted as a command
+          rm is just a word here
+          PYEOF
+        CMD
+        result = tool.execute(command: cmd, cwd: dir)
+        expect(result[:exit_code]).to eq(0)
+        expect(File.exist?(script)).to be(true)
+        expect(File.read(script)).to include("rm is just a word here")
       end
     end
 
@@ -574,6 +629,192 @@ RSpec.describe Clacky::Tools::Terminal do
       expect {
         tool.format_result(exit_code: 0, bytes_read: 8000, output: sliced)
       }.not_to raise_error
+    end
+
+    it "shows the full_output_file path in the UI footer when output overflowed" do
+      formatted = tool.format_result(
+        exit_code: 0, bytes_read: 9999, output: "tail line",
+        output_truncated: true,
+        full_output_file: "/tmp/clacky-terminal-overflow/x.log"
+      )
+      expect(formatted).to include("tail line")
+      expect(formatted).to include("✓ exit=0")
+      expect(formatted).to include("[full: /tmp/clacky-terminal-overflow/x.log]")
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Long-output spill: overflow to disk with disclosed path
+  # ---------------------------------------------------------------------------
+  # When a command produces output larger than MAX_LLM_OUTPUT_CHARS:
+  #   1. The full cleaned output MUST be written to a sidecar file in
+  #      `/tmp/clacky-terminal-overflow/`.
+  #   2. The returned `output:` MUST NOT exceed the budget (it is
+  #      truncated to OVERFLOW_PREVIEW_CHARS + a short notice).
+  #   3. The returned hash MUST carry `full_output_file:` pointing at
+  #      the sidecar so the LLM can grep/tail it in a follow-up call.
+  #   4. `output_truncated: true` must be set.
+  describe "overflow handling" do
+    it "spills to disk and discloses the path when output exceeds MAX_LLM_OUTPUT_CHARS" do
+      # Generate output LARGER than MAX_LLM_OUTPUT_CHARS (4000 bytes).
+      # Must use many short lines rather than one long line, because the
+      # MAX_LINE_CHARS=500 per-line cap runs BEFORE overflow detection —
+      # a single 5000-char line would be cut to ~540 chars and never
+      # trigger the sidecar write.
+      # 500 lines × ~20 chars = ~10 KB, well over the 4 KB budget.
+      # We emit via one `printf` invocation so the test doesn't hit the
+      # spec-level 200ms idle threshold between iterations.
+      n_lines = 500
+      cmd = %(awk 'BEGIN{for(i=1;i<=#{n_lines};i++) print "payload-line-number-"i}')
+      result = tool.execute(command: cmd, idle_ms: Clacky::Tools::Terminal::DISABLED_IDLE_MS)
+
+      expect(result[:exit_code]).to eq(0)
+      expect(result[:output_truncated]).to eq(true)
+      expect(result[:full_output_file]).to be_a(String)
+      expect(File.exist?(result[:full_output_file])).to eq(true)
+
+      # Sidecar on disk must contain BOTH the head and tail of the output
+      # (proves the FULL cleaned output was written, not just the preview).
+      disk_content = File.read(result[:full_output_file])
+      expect(disk_content).to include("payload-line-number-1\n")
+      expect(disk_content).to include("payload-line-number-#{n_lines}")
+
+      # The in-context `output` MUST be under the budget (+ notice slack).
+      expect(result[:output].bytesize).to be <= Clacky::Tools::Terminal::MAX_LLM_OUTPUT_CHARS + 400
+      # And must disclose the overflow path in a way the LLM can parse.
+      expect(result[:output]).to include(result[:full_output_file])
+      expect(result[:output]).to include("grep")
+    ensure
+      File.delete(result[:full_output_file]) if result && result[:full_output_file] && File.exist?(result[:full_output_file])
+    end
+
+    it "does NOT create a sidecar when output fits under the budget" do
+      result = tool.execute(command: "echo small")
+      expect(result[:exit_code]).to eq(0)
+      expect(result[:output_truncated]).to be_falsey
+      expect(result[:full_output_file]).to be_nil
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Per-line truncation: prevent a single minified blob from eating the
+  # whole 4 KB budget. `truncate_long_lines` must chop any line whose byte
+  # length exceeds MAX_LINE_CHARS and annotate how many chars were elided.
+  # ---------------------------------------------------------------------------
+  describe "#truncate_long_lines" do
+    it "leaves short lines untouched" do
+      text = "line a\nline b\nline c"
+      result = tool.send(:truncate_long_lines, text)
+      expect(result).to eq(text)
+    end
+
+    it "truncates a line that exceeds MAX_LINE_CHARS and annotates the original length" do
+      long = "x" * 900
+      text = "short\n#{long}\nafter"
+      result = tool.send(:truncate_long_lines, text)
+      # short and after survive
+      expect(result).to start_with("short\n")
+      expect(result).to end_with("\nafter")
+      # the long line is chopped and annotated
+      expect(result).to include("line truncated: 900 chars")
+      # total size is dramatically smaller than input
+      expect(result.bytesize).to be < text.bytesize
+    end
+
+    it "only truncates the long lines, preserving the rest verbatim" do
+      long1 = "a" * 600
+      long2 = "b" * 700
+      text = "pre\n#{long1}\nmid\n#{long2}\npost"
+      result = tool.send(:truncate_long_lines, text)
+      expect(result).to include("pre\n")
+      expect(result).to include("\nmid\n")
+      expect(result).to include("\npost")
+      expect(result).to include("line truncated: 600 chars")
+      expect(result).to include("line truncated: 700 chars")
+    end
+
+    it "returns nil/empty inputs unchanged" do
+      expect(tool.send(:truncate_long_lines, nil)).to be_nil
+      expect(tool.send(:truncate_long_lines, "")).to eq("")
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # SLOW_COMMAND auto-tuning: rspec / bundle install / cargo build must not
+  # be split into N polling round-trips just because output went quiet for
+  # a few seconds between test files / compilation phases.
+  # ---------------------------------------------------------------------------
+  describe "slow-command auto-tuning" do
+    it "recognises a bare slow command" do
+      expect(tool.send(:slow_command?, "rspec spec/")).to eq(true)
+      expect(tool.send(:slow_command?, "bundle install")).to eq(true)
+      expect(tool.send(:slow_command?, "cargo build --release")).to eq(true)
+      expect(tool.send(:slow_command?, "npm install")).to eq(true)
+    end
+
+    it "recognises a slow command behind common prefixes" do
+      expect(tool.send(:slow_command?, "cd myproj && bundle install")).to eq(true)
+      expect(tool.send(:slow_command?, "cd myproj; rspec spec/foo_spec.rb")).to eq(true)
+      expect(tool.send(:slow_command?, "RAILS_ENV=test bundle exec rspec")).to eq(true)
+      expect(tool.send(:slow_command?, "NODE_ENV=production npm run build")).to eq(true)
+    end
+
+    it "does not misfire on quick commands" do
+      expect(tool.send(:slow_command?, "ls -la")).to eq(false)
+      expect(tool.send(:slow_command?, "echo hello")).to eq(false)
+      expect(tool.send(:slow_command?, "git status")).to eq(false)
+      expect(tool.send(:slow_command?, nil)).to eq(false)
+      expect(tool.send(:slow_command?, "")).to eq(false)
+    end
+
+    it "auto-extends timeout and disables idle-return when execute() sees a slow command" do
+      # Observe the values do_start receives. We don't care about the
+      # actual run, only that auto-tuning kicked in — so we stub do_start
+      # to return immediately.
+      captured = {}
+      allow(tool).to receive(:do_start) do |_cmd, cwd:, env:, timeout:, idle_ms:, background:|
+        captured[:timeout] = timeout
+        captured[:idle_ms] = idle_ms
+        captured[:background] = background
+        { exit_code: 0, output: "", bytes_read: 0 }
+      end
+
+      tool.execute(command: "bundle exec rspec spec/foo_spec.rb")
+
+      expect(captured[:timeout]).to eq(Clacky::Tools::Terminal::SLOW_COMMAND_TIMEOUT)
+      expect(captured[:idle_ms]).to eq(Clacky::Tools::Terminal::DISABLED_IDLE_MS)
+      expect(captured[:background]).to eq(false)
+    end
+
+    it "respects caller-supplied timeout/idle_ms even for slow commands" do
+      captured = {}
+      allow(tool).to receive(:do_start) do |_cmd, cwd:, env:, timeout:, idle_ms:, background:|
+        captured[:timeout] = timeout
+        captured[:idle_ms] = idle_ms
+        { exit_code: 0, output: "", bytes_read: 0 }
+      end
+
+      tool.execute(command: "rspec spec/", timeout: 30, idle_ms: 500)
+
+      expect(captured[:timeout]).to eq(30)
+      expect(captured[:idle_ms]).to eq(500)
+    end
+
+    it "does NOT auto-tune background launches" do
+      captured = {}
+      allow(tool).to receive(:do_start) do |_cmd, cwd:, env:, timeout:, idle_ms:, background:|
+        captured[:timeout] = timeout
+        captured[:idle_ms] = idle_ms
+        captured[:background] = background
+        { exit_code: 0, output: "", bytes_read: 0 }
+      end
+
+      tool.execute(command: "bundle exec rspec", background: true)
+
+      expect(captured[:background]).to eq(true)
+      expect(captured[:timeout]).to eq(Clacky::Tools::Terminal::DEFAULT_TIMEOUT)
+      # background leaves idle_ms at whatever default the caller wanted —
+      # in practice wait_and_package disables idle for backgrounds anyway.
     end
   end
 

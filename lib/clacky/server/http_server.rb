@@ -9,6 +9,8 @@ require "tmpdir"
 require "uri"
 require "securerandom"
 require "timeout"
+require "yaml"
+require "date"
 require_relative "session_registry"
 require_relative "web_ui_controller"
 require_relative "scheduler"
@@ -392,6 +394,13 @@ module Clacky
         when ["GET",    "/api/brand/skills"]      then api_brand_skills(res)
         when ["GET",    "/api/brand"]             then api_brand_info(res)
         when ["GET",    "/api/creator/skills"]    then api_creator_skills(res)
+        when ["GET",    "/api/trash"]     then api_trash(req, res)
+        when ["POST",   "/api/trash/restore"] then api_trash_restore(req, res)
+        when ["DELETE", "/api/trash"]     then api_trash_delete(req, res)
+        when ["GET",    "/api/profile"]   then api_profile_get(res)
+        when ["PUT",    "/api/profile"]   then api_profile_put(req, res)
+        when ["GET",    "/api/memories"]  then api_memories_list(res)
+        when ["POST",   "/api/memories"]  then api_memories_create(req, res)
         when ["GET",    "/api/channels"]          then api_list_channels(res)
         when ["POST",   "/api/tool/browser"]      then api_tool_browser(req, res)
         when ["POST",   "/api/upload"]            then api_upload_file(req, res)
@@ -462,6 +471,15 @@ module Clacky
           elsif method == "POST" && path.match?(%r{^/api/my-skills/[^/]+/publish$})
             name = URI.decode_www_form_component(path.sub("/api/my-skills/", "").sub("/publish", ""))
             api_publish_my_skill(name, req, res)
+          elsif method == "GET" && path.match?(%r{^/api/memories/[^/]+$})
+            filename = URI.decode_www_form_component(path.sub("/api/memories/", ""))
+            api_memories_get(filename, res)
+          elsif method == "PUT" && path.match?(%r{^/api/memories/[^/]+$})
+            filename = URI.decode_www_form_component(path.sub("/api/memories/", ""))
+            api_memories_update(filename, req, res)
+          elsif method == "DELETE" && path.match?(%r{^/api/memories/[^/]+$})
+            filename = URI.decode_www_form_component(path.sub("/api/memories/", ""))
+            api_memories_delete(filename, res)
           else
             not_found(res)
           end
@@ -1885,6 +1903,469 @@ module Clacky
           local_skills:         local_skills,
           platform_fetch_error: platform_result[:success] ? nil : platform_result[:error]
         })
+      end
+
+      # GET /api/trash[?project=<path>]
+      # Lists recently deleted files in the AI trash.
+      #
+      # The trash is organized by project_root; each project gets its own
+      # hashed subdirectory under ~/.clacky/trash/ (see TrashDirectory).
+      # Returns ALL projects' deletions by default, with a per-file
+      # project_root field so the UI can group or filter.
+      #
+      # Optional ?project=<absolute-path> restricts to a single project.
+      # Response:
+      #   { ok: true,
+      #     files: [ { original_path, deleted_at, file_size, file_type,
+      #                project_root, project_name, trash_file } ],
+      #     projects: [ { project_root, project_name, file_count, total_size } ],
+      #     total_count, total_size }
+      private def api_trash(req, res)
+        query = URI.decode_www_form(req.query_string.to_s).to_h
+        filter_project = query["project"].to_s.strip
+        filter_project = nil if filter_project.empty?
+
+        projects =
+          if filter_project
+            [{ project_root: File.expand_path(filter_project),
+               project_name: File.basename(File.expand_path(filter_project)),
+               trash_dir:    Clacky::TrashDirectory.new(filter_project).trash_dir }]
+          else
+            Clacky::TrashDirectory.all_projects
+          end
+
+        all_files    = []
+        project_rows = []
+
+        projects.each do |p|
+          files = _trash_files_in(p[:trash_dir], p[:project_root])
+          next if files.empty? && filter_project.nil?
+
+          total_size = files.sum { |f| f[:file_size].to_i }
+          project_rows << {
+            project_root: p[:project_root],
+            project_name: p[:project_name],
+            file_count:   files.size,
+            total_size:   total_size
+          }
+
+          files.each do |f|
+            all_files << f.merge(
+              project_root: p[:project_root],
+              project_name: p[:project_name]
+            )
+          end
+        end
+
+        all_files.sort_by! { |f| f[:deleted_at].to_s }.reverse!
+
+        json_response(res, 200, {
+          ok:           true,
+          files:        all_files,
+          projects:     project_rows,
+          total_count:  all_files.size,
+          total_size:   all_files.sum { |f| f[:file_size].to_i }
+        })
+      end
+
+      # POST /api/trash/restore
+      # Body: { project_root: "...", original_path: "..." }
+      # Restores a single file from trash back to its original location.
+      # Refuses if the target already exists on disk.
+      private def api_trash_restore(req, res)
+        data           = parse_json_body(req)
+        project_root   = data["project_root"].to_s.strip
+        original_path  = data["original_path"].to_s.strip
+
+        if project_root.empty? || original_path.empty?
+          json_response(res, 400, { ok: false, error: "project_root and original_path are required" })
+          return
+        end
+
+        tool   = Clacky::Tools::TrashManager.new
+        result = tool.execute(action: "restore",
+                              file_path: original_path,
+                              working_dir: project_root)
+
+        if result[:success]
+          json_response(res, 200, { ok: true, restored_file: result[:restored_file], message: result[:message] })
+        else
+          json_response(res, 422, { ok: false, error: result[:message] })
+        end
+      end
+
+      # DELETE /api/trash[?project=<path>][&days_old=<n>][&file=<original_path>]
+      # Three modes:
+      #   ?file=<original_path>&project=<root>  → permanently delete one file
+      #   ?project=<root>[&days_old=0]          → empty that project's trash
+      #   (no project, days_old required)       → empty ALL projects older than N days
+      private def api_trash_delete(req, res)
+        query         = URI.decode_www_form(req.query_string.to_s).to_h
+        project_root  = query["project"].to_s.strip
+        days_old      = query["days_old"].to_s.strip
+        file_path     = query["file"].to_s.strip
+
+        project_root = nil if project_root.empty?
+        file_path    = nil if file_path.empty?
+
+        # Mode 1: single-file permanent delete
+        if file_path
+          unless project_root
+            json_response(res, 400, { ok: false, error: "project is required when file is given" })
+            return
+          end
+          deleted = _trash_delete_single(project_root, file_path)
+          if deleted
+            json_response(res, 200, { ok: true, deleted_count: 1, freed_size: deleted[:file_size].to_i })
+          else
+            json_response(res, 404, { ok: false, error: "File not found in trash: #{file_path}" })
+          end
+          return
+        end
+
+        # Mode 2 & 3: bulk empty (optionally scoped to one project, optionally by age)
+        days_i = days_old.empty? ? 0 : days_old.to_i
+        tool   = Clacky::Tools::TrashManager.new
+
+        targets =
+          if project_root
+            [project_root]
+          else
+            Clacky::TrashDirectory.all_projects.map { |p| p[:project_root] }
+          end
+
+        total_deleted = 0
+        total_freed   = 0
+        targets.each do |root|
+          result = tool.execute(action: "empty", days_old: days_i, working_dir: root)
+          next unless result[:success]
+          total_deleted += result[:deleted_count].to_i
+          total_freed   += result[:freed_size].to_i
+        end
+
+        json_response(res, 200, {
+          ok:            true,
+          deleted_count: total_deleted,
+          freed_size:    total_freed,
+          days_old:      days_i
+        })
+      end
+
+      # ── Trash helpers (private) ─────────────────────────────────────
+      # Reads all metadata sidecars in `trash_dir` and returns enriched
+      # file records. Silently skips sidecars whose payload file has
+      # already been purged from disk.
+      private def _trash_files_in(trash_dir, project_root)
+        return [] unless trash_dir && Dir.exist?(trash_dir)
+
+        files = []
+        Dir.glob(File.join(trash_dir, "*.metadata.json")).each do |meta_path|
+          begin
+            meta  = JSON.parse(File.read(meta_path))
+            trash = meta_path.sub(/\.metadata\.json\z/, "")
+            next unless File.exist?(trash)
+            files << {
+              original_path: meta["original_path"],
+              deleted_at:    meta["deleted_at"],
+              deleted_by:    meta["deleted_by"],
+              file_size:     meta["file_size"].to_i,
+              file_type:     meta["file_type"],
+              file_mode:     meta["file_mode"],
+              trash_file:    trash
+            }
+          rescue StandardError
+            # Corrupt or partial metadata — skip.
+          end
+        end
+        files
+      end
+
+      # Permanently deletes the single trash entry whose original_path
+      # matches inside `project_root`'s trash. Returns the removed
+      # metadata hash, or nil if not found.
+      private def _trash_delete_single(project_root, original_path)
+        trash_dir = Clacky::TrashDirectory.new(project_root).trash_dir
+        expanded  = File.expand_path(original_path, project_root)
+        entry     = _trash_files_in(trash_dir, project_root).find do |f|
+          f[:original_path] == expanded
+        end
+        return nil unless entry
+
+        File.delete(entry[:trash_file])                       if File.exist?(entry[:trash_file])
+        File.delete("#{entry[:trash_file]}.metadata.json")    if File.exist?("#{entry[:trash_file]}.metadata.json")
+        entry
+      rescue StandardError
+        nil
+      end
+
+      # ── Profile API (USER.md / SOUL.md) ──────────────────────────────
+      #
+      # User can override the built-in defaults by writing their own
+      # ~/.clacky/agents/USER.md and ~/.clacky/agents/SOUL.md. These
+      # endpoints let the Web UI read and edit those files.
+
+      PROFILE_USER_AGENTS_DIR  = File.expand_path("~/.clacky/agents").freeze
+      PROFILE_DEFAULT_AGENTS_DIR = File.expand_path("../../default_agents", __dir__).freeze
+      PROFILE_MAX_BYTES = 50_000  # Hard limit; prevents runaway content.
+
+      # GET /api/profile
+      # Returns { ok:, user: { path, content, is_default }, soul: { ... } }
+      private def api_profile_get(res)
+        json_response(res, 200, {
+          ok:   true,
+          user: _profile_read_file("USER.md"),
+          soul: _profile_read_file("SOUL.md")
+        })
+      end
+
+      # PUT /api/profile
+      # Body: { kind: "user"|"soul", content: "..." }
+      # Writes the file to ~/.clacky/agents/<KIND>.md. Empty content
+      # deletes the override so the built-in default is used again.
+      private def api_profile_put(req, res)
+        data    = parse_json_body(req)
+        kind    = data["kind"].to_s.downcase
+        content = data["content"].to_s
+
+        filename = case kind
+                   when "user" then "USER.md"
+                   when "soul" then "SOUL.md"
+                   else
+                     json_response(res, 400, { ok: false, error: "kind must be 'user' or 'soul'" })
+                     return
+                   end
+
+        if content.bytesize > PROFILE_MAX_BYTES
+          json_response(res, 413, { ok: false, error: "Content too large (max #{PROFILE_MAX_BYTES} bytes)" })
+          return
+        end
+
+        FileUtils.mkdir_p(PROFILE_USER_AGENTS_DIR)
+        target = File.join(PROFILE_USER_AGENTS_DIR, filename)
+
+        # Treat whitespace-only payload as "reset to built-in default":
+        # delete the override file so AgentProfile falls back to default.
+        if content.strip.empty?
+          File.delete(target) if File.exist?(target)
+          json_response(res, 200, { ok: true, reset: true, file: _profile_read_file(filename) })
+          return
+        end
+
+        File.write(target, content)
+        json_response(res, 200, { ok: true, file: _profile_read_file(filename) })
+      rescue StandardError => e
+        json_response(res, 500, { ok: false, error: e.message })
+      end
+
+      # Read a profile file — user override if present, else built-in default.
+      # Returns { path:, content:, is_default:, writable: }.
+      private def _profile_read_file(filename)
+        user_path    = File.join(PROFILE_USER_AGENTS_DIR, filename)
+        default_path = File.join(PROFILE_DEFAULT_AGENTS_DIR, filename)
+
+        if File.exist?(user_path) && !File.zero?(user_path)
+          {
+            path:       user_path,
+            content:    File.read(user_path),
+            is_default: false
+          }
+        elsif File.exist?(default_path)
+          {
+            path:       default_path,
+            content:    File.read(default_path),
+            is_default: true
+          }
+        else
+          {
+            path:       user_path,  # Where it WILL be written
+            content:    "",
+            is_default: true
+          }
+        end
+      rescue StandardError => e
+        { path: "", content: "", is_default: true, error: e.message }
+      end
+
+      # ── Memories API (~/.clacky/memories/*.md) ───────────────────────
+      #
+      # Long-term memories are plain Markdown files with YAML frontmatter
+      # stored under ~/.clacky/memories/. These endpoints let the user
+      # inspect, edit, create, and delete them from the Web UI.
+
+      MEMORIES_DIR    = File.expand_path("~/.clacky/memories").freeze
+      MEMORY_MAX_BYTES = 50_000
+
+      # GET /api/memories
+      # Returns { ok:, dir:, memories: [ { filename, topic, description, updated_at, size, preview } ] }
+      # Sorted by updated_at (YAML frontmatter) descending, falling back to file mtime.
+      private def api_memories_list(res)
+        FileUtils.mkdir_p(MEMORIES_DIR)
+        memories = Dir.glob(File.join(MEMORIES_DIR, "*.md")).map do |path|
+          _memory_summary(path)
+        end.compact
+
+        # Sort key: prefer updated_at string (ISO-ish sorts correctly), fall back to mtime.
+        # `mtime` is always present in the summary (ISO 8601), so we use it as the
+        # ultimate tiebreaker. Negate by reversing after sort for descending order.
+        memories.sort_by! do |m|
+          key = m[:updated_at].to_s
+          key = m[:mtime].to_s if key.empty?
+          key
+        end
+        memories.reverse!
+
+        json_response(res, 200, { ok: true, dir: MEMORIES_DIR, memories: memories })
+      end
+
+      # GET /api/memories/:filename
+      # Returns { ok:, filename:, path:, content: }
+      private def api_memories_get(filename, res)
+        safe = _memory_safe_filename(filename)
+        unless safe
+          json_response(res, 400, { ok: false, error: "Invalid filename" })
+          return
+        end
+        path = File.join(MEMORIES_DIR, safe)
+        unless File.exist?(path)
+          json_response(res, 404, { ok: false, error: "Memory not found" })
+          return
+        end
+        json_response(res, 200, {
+          ok:       true,
+          filename: safe,
+          path:     path,
+          content:  File.read(path)
+        })
+      end
+
+      # POST /api/memories
+      # Body: { filename: "topic.md", content: "..." }
+      # Create a new memory file. Refuses to overwrite existing.
+      private def api_memories_create(req, res)
+        data     = parse_json_body(req)
+        filename = _memory_safe_filename(data["filename"].to_s)
+        content  = data["content"].to_s
+
+        unless filename
+          json_response(res, 400, { ok: false, error: "Invalid filename (must end in .md, no path separators)" })
+          return
+        end
+        if content.bytesize > MEMORY_MAX_BYTES
+          json_response(res, 413, { ok: false, error: "Content too large (max #{MEMORY_MAX_BYTES} bytes)" })
+          return
+        end
+
+        FileUtils.mkdir_p(MEMORIES_DIR)
+        path = File.join(MEMORIES_DIR, filename)
+        if File.exist?(path)
+          json_response(res, 409, { ok: false, error: "Memory '#{filename}' already exists" })
+          return
+        end
+
+        File.write(path, content)
+        json_response(res, 201, { ok: true, memory: _memory_summary(path) })
+      rescue StandardError => e
+        json_response(res, 500, { ok: false, error: e.message })
+      end
+
+      # PUT /api/memories/:filename
+      # Body: { content: "..." }
+      private def api_memories_update(filename, req, res)
+        safe = _memory_safe_filename(filename)
+        unless safe
+          json_response(res, 400, { ok: false, error: "Invalid filename" })
+          return
+        end
+        data    = parse_json_body(req)
+        content = data["content"].to_s
+        if content.bytesize > MEMORY_MAX_BYTES
+          json_response(res, 413, { ok: false, error: "Content too large (max #{MEMORY_MAX_BYTES} bytes)" })
+          return
+        end
+
+        path = File.join(MEMORIES_DIR, safe)
+        unless File.exist?(path)
+          json_response(res, 404, { ok: false, error: "Memory not found" })
+          return
+        end
+
+        File.write(path, content)
+        json_response(res, 200, { ok: true, memory: _memory_summary(path) })
+      rescue StandardError => e
+        json_response(res, 500, { ok: false, error: e.message })
+      end
+
+      # DELETE /api/memories/:filename
+      private def api_memories_delete(filename, res)
+        safe = _memory_safe_filename(filename)
+        unless safe
+          json_response(res, 400, { ok: false, error: "Invalid filename" })
+          return
+        end
+        path = File.join(MEMORIES_DIR, safe)
+        unless File.exist?(path)
+          json_response(res, 404, { ok: false, error: "Memory not found" })
+          return
+        end
+        File.delete(path)
+        json_response(res, 200, { ok: true, filename: safe })
+      rescue StandardError => e
+        json_response(res, 500, { ok: false, error: e.message })
+      end
+
+      # Returns nil if the filename is unsafe. Must end in .md, contain
+      # no path separators or shell metacharacters, and be non-empty.
+      private def _memory_safe_filename(name)
+        s = name.to_s.strip
+        return nil if s.empty?
+        return nil if s.include?("/") || s.include?("\\")
+        return nil if s.start_with?(".")
+        return nil unless s.end_with?(".md")
+        return nil unless s.match?(/\A[A-Za-z0-9._\-]+\z/)
+        s
+      end
+
+      # Build a summary record for a memory file. Parses YAML frontmatter
+      # if present; otherwise falls back to filename-derived topic.
+      # Returns nil if the file can't be read.
+      private def _memory_summary(path)
+        content = File.read(path)
+        stat    = File.stat(path)
+
+        topic       = File.basename(path, ".md")
+        description = ""
+        updated_at  = stat.mtime.strftime("%Y-%m-%d")
+
+        # Parse YAML frontmatter: --- ... --- at the top of the file.
+        if content.start_with?("---")
+          if (m = content.match(/\A---\s*\n(.*?)\n---\s*\n/m))
+            begin
+              # permitted_classes: Date so YAML `updated_at: 2026-05-01`
+              # parses to a Date instance instead of raising DisallowedClass.
+              fm = YAML.safe_load(m[1], permitted_classes: [Date, Time]) || {}
+              topic       = fm["topic"].to_s       unless fm["topic"].to_s.strip.empty?
+              description = fm["description"].to_s
+              updated_at  = fm["updated_at"].to_s  unless fm["updated_at"].to_s.strip.empty?
+            rescue StandardError
+              # Bad frontmatter — fall back to defaults above.
+            end
+          end
+        end
+
+        preview = content.sub(/\A---.*?---\s*\n/m, "").strip[0, 200]
+
+        {
+          filename:    File.basename(path),
+          path:        path,
+          topic:       topic,
+          description: description,
+          updated_at:  updated_at,
+          size:        stat.size,
+          mtime:       stat.mtime.iso8601,
+          preview:     preview
+        }
+      rescue StandardError
+        nil
       end
 
       # Auto-packages the named skill directory into a ZIP and uploads it to the

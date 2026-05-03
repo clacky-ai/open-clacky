@@ -161,6 +161,42 @@
         </div>
       </div>
 
+      <!-- My Data Group — personal data management (profile, memories, trash) -->
+      <div id="data-section">
+        <div class="sidebar-divider"><span data-i18n="sidebar.dataSection">My Data</span></div>
+        <div id="data-nav-items">
+          <div id="profile-sidebar-item" class="task-item task-item-summary">
+            <div class="task-row">
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="task-icon">
+                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+                <circle cx="12" cy="7" r="4"/>
+              </svg>
+              <div class="task-info">
+                <span class="task-name" id="profile-sidebar-label" data-i18n="sidebar.profile">Profile &amp; Soul</span>
+              </div>
+            </div>
+          </div>
+          <div id="memories-sidebar-item" class="task-item task-item-summary" style="display:none" aria-hidden="true">
+            <!-- Deprecated: Memories is now merged into the Profile panel.
+                 Kept as a hidden placeholder so any legacy CSS selector that
+                 targets this id still resolves harmlessly. -->
+          </div>
+          <div id="trash-sidebar-item" class="task-item task-item-summary">
+            <div class="task-row">
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="task-icon">
+                <polyline points="3 6 5 6 21 6"/>
+                <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+                <path d="M10 11v6"/><path d="M14 11v6"/>
+                <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
+              </svg>
+              <div class="task-info">
+                <span class="task-name" id="trash-sidebar-label" data-i18n="sidebar.trash">File Recall</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- Creator Group — only shown when user_licensed -->
       <div id="creator-section" style="display:none">
         <div class="sidebar-divider"><span data-i18n="sidebar.creatorSection">Creator</span></div>
@@ -487,6 +523,124 @@
         </div>
 
         <div id="channels-list"></div>
+      </div>
+    </div>
+
+    <!-- ── TRASH PANEL — Recently deleted files across all projects ─── -->
+    <div id="trash-panel" style="display:none">
+      <div id="trash-body">
+        <div class="channels-page-header">
+          <h2 class="channels-page-title" data-i18n="trash.title">File Recall</h2>
+          <p class="channels-page-subtitle" data-i18n="trash.subtitle">Files the agent moved to trash across all projects. Recall them back to where they were, or clear the ones you don't need.</p>
+        </div>
+
+        <div class="trash-toolbar">
+          <span class="trash-summary" id="trash-summary"></span>
+          <div class="trash-actions">
+            <button id="btn-trash-refresh" class="btn-trash-action" title="Refresh">
+              <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/>
+                <path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/>
+              </svg>
+              <span data-i18n="trash.refresh">Refresh</span>
+            </button>
+            <button id="btn-trash-empty-old" class="btn-trash-action" title="Permanently delete files older than 7 days">
+              <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+              </svg>
+              <span data-i18n="trash.emptyOld">Empty &gt;7 days</span>
+            </button>
+            <button id="btn-trash-empty-orphans" class="btn-trash-action" title="Permanently delete entries whose original project directory no longer exists (e.g. test temp dirs)">
+              <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+                <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+              </svg>
+              <span data-i18n="trash.emptyOrphans">Clean orphans</span>
+            </button>
+            <button id="btn-trash-empty-all" class="btn-trash-action btn-trash-danger" title="Permanently delete all trashed files">
+              <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="3 6 5 6 21 6"/>
+                <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+                <path d="M10 11v6"/><path d="M14 11v6"/>
+                <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
+              </svg>
+              <span data-i18n="trash.emptyAll">Empty all</span>
+            </button>
+          </div>
+        </div>
+
+        <div id="trash-list"></div>
+      </div>
+    </div>
+
+    <!-- ── PROFILE PANEL — "Assistant Memory": a 3-tab window into the agent's inner state.
+         All mutations happen through sessions (never in-browser editors):
+           SOUL tab   → [让助理整理性格] → /onboard scope:soul
+           USER tab   → [让助理更新档案] → /onboard scope:user
+           Memory tab → per-card [整理] → /onboard path:<abs>
+                        per-card [删除] → direct DELETE /api/memories/:filename (with confirm)
+         ────────────────────────────────────────────────────────────── -->
+    <div id="profile-panel" style="display:none">
+      <div id="profile-body">
+        <div class="channels-page-header">
+          <h2 class="channels-page-title" data-i18n="profile.title">Assistant Memory</h2>
+          <p class="channels-page-subtitle" data-i18n="profile.subtitle">A window into the assistant's inner life: who it is, who you are, and what it remembers about your work together.</p>
+        </div>
+
+        <!-- Tab bar -->
+        <div class="profile-tabs" role="tablist">
+          <button class="profile-tab active" role="tab" aria-selected="true"
+                  data-tab="soul" id="profile-tab-soul" data-i18n="profile.tab.soul">Soul</button>
+          <button class="profile-tab" role="tab" aria-selected="false"
+                  data-tab="user" id="profile-tab-user" data-i18n="profile.tab.user">User</button>
+          <button class="profile-tab" role="tab" aria-selected="false"
+                  data-tab="memories" id="profile-tab-memories" data-i18n="profile.tab.memories">Memories</button>
+        </div>
+
+        <!-- Tab: SOUL.md -->
+        <section class="profile-tab-panel active" id="profile-pane-soul" role="tabpanel" aria-labelledby="profile-tab-soul">
+          <header class="profile-section-head">
+            <h3 class="profile-section-title" data-i18n="profile.whoIAm">Who I am</h3>
+            <div class="profile-section-meta">
+              <span class="profile-path" id="profile-soul-path"></span>
+              <span class="profile-status" id="profile-soul-status"></span>
+            </div>
+          </header>
+          <div id="profile-soul-body" class="profile-markdown"></div>
+          <div class="profile-pane-footer">
+            <p class="profile-pane-footer-hint" data-i18n="profile.soul.curateHint">Not quite right? Let the assistant curate this through a short conversation.</p>
+            <button id="btn-profile-curate-soul" class="btn-profile-update" data-i18n="profile.soul.curateBtn">Have the assistant curate this</button>
+          </div>
+        </section>
+
+        <!-- Tab: USER.md -->
+        <section class="profile-tab-panel" id="profile-pane-user" role="tabpanel" aria-labelledby="profile-tab-user" style="display:none">
+          <header class="profile-section-head">
+            <h3 class="profile-section-title" data-i18n="profile.whoYouAre">Who you are</h3>
+            <div class="profile-section-meta">
+              <span class="profile-path" id="profile-user-path"></span>
+              <span class="profile-status" id="profile-user-status"></span>
+            </div>
+          </header>
+          <div id="profile-user-body" class="profile-markdown"></div>
+          <div class="profile-pane-footer">
+            <p class="profile-pane-footer-hint" data-i18n="profile.user.curateHint">Changed jobs? Picked up new interests? Let the assistant update your profile.</p>
+            <button id="btn-profile-curate-user" class="btn-profile-update" data-i18n="profile.user.curateBtn">Have the assistant update this</button>
+          </div>
+        </section>
+
+        <!-- Tab: Memories -->
+        <section class="profile-tab-panel" id="profile-pane-memories" role="tabpanel" aria-labelledby="profile-tab-memories" style="display:none">
+          <header class="profile-section-head">
+            <h3 class="profile-section-title" data-i18n="memories.title">Memories</h3>
+            <div class="profile-section-meta">
+              <span class="memories-summary" id="memories-summary"></span>
+              <button id="btn-memories-refresh-list" class="btn-memories-mini" data-i18n-title="memories.reloadList" data-i18n="memories.reloadList">Reload</button>
+            </div>
+          </header>
+          <p class="profile-section-hint" data-i18n="memories.subtitle">Long-term memories stored under ~/.clacky/memories/. Most recent first. Use "Curate" to let the assistant tidy a memory, or "Delete" to drop one.</p>
+          <div id="memories-list"></div>
+        </section>
       </div>
     </div>
 
@@ -823,6 +977,8 @@
 <script src="/onboard.js"></script>
 <script src="/brand.js"></script>
 <script src="/creator.js"></script>
+<script src="/trash.js"></script>
+<script src="/profile.js"></script>
 <script src="/version.js"></script>
 <script src="/app.js"></script>
 </body>
