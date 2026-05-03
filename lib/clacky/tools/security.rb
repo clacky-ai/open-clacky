@@ -120,10 +120,16 @@ module Clacky
           @safe_check_command = Clacky::Utils::Encoding.safe_check(command)
 
           case @safe_check_command
-          when /pkill.*clacky|killall.*clacky|kill\s+.*\bclacky\b/i
-            raise SecurityError, "Killing the clacky server process is not allowed. To restart, use: kill -USR1 $CLACKY_MASTER_PID"
-          when /clacky\s+server/
-            raise SecurityError, "Managing the clacky server from within a session is not allowed. To restart, use: kill -USR1 $CLACKY_MASTER_PID"
+          # Block attempts to terminate the clacky server process.
+          # IMPORTANT: each verb is anchored with \b so substrings like
+          # "Skill" (contains "kill") or "Bill Killalina" don't trigger
+          # false positives. We also require `clacky` to appear as a whole
+          # word AND within a reasonable distance (same logical command,
+          # not hundreds of chars later in an unrelated echo string).
+          when /\bpkill\b[^\n;|&]{0,80}\bclacky\b|\bkillall\b[^\n;|&]{0,80}\bclacky\b|\bkill\s+(?:-\S+\s+)*[^\n;|&]{0,40}\bclacky\b/i
+            raise SecurityError, "Killing the clacky server process is not allowed. To restart, use: #{restart_hint}"
+          when /\bclacky\s+server\b/
+            raise SecurityError, "Managing the clacky server from within a session is not allowed. To restart, use: #{restart_hint}"
           when /^chmod\s+x/
             replace_chmod_command(command)
           when /^curl.*\|\s*(sh|bash)/
@@ -175,6 +181,22 @@ module Clacky
 
         def allow_dev_null_redirect(command)
           command
+        end
+
+        # Build a copy-pasteable "how to restart clacky server" hint.
+        # When running inside a clacky server worker, `CLACKY_MASTER_PID` is
+        # injected by ServerMaster (see server_master.rb). We keep the
+        # variable name in the hint (so the AI / user learns the standard
+        # convention) AND append the resolved PID in parentheses so it's
+        # immediately actionable. When the variable isn't set (e.g. one-shot
+        # CLI invocation), we just show the variable name.
+        def restart_hint
+          pid = ENV["CLACKY_MASTER_PID"].to_s
+          if pid =~ /\A\d+\z/
+            "kill -USR1 $CLACKY_MASTER_PID  (current master PID: #{pid})"
+          else
+            "kill -USR1 $CLACKY_MASTER_PID"
+          end
         end
 
         # Relaxed validator for mv / cp / mkdir / touch / echo.
@@ -302,6 +324,7 @@ module Clacky
                 :allow_dev_null_redirect, :validate_and_allow,
                 :validate_general_command,
                 :validate_file_path, :validate_secret_write,
+                :restart_hint,
                 :log_replacement,
                 :log_warning, :write_log
       end
