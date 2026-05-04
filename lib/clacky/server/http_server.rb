@@ -2,6 +2,7 @@
 
 require "webrick"
 require "websocket"
+require "socket"
 require "json"
 require "thread"
 require "fileutils"
@@ -3203,11 +3204,111 @@ module Clacky
         ui&.deliver_confirmation(conf_id, result)
       end
 
+      # Interrupt a running agent session.
+      #
+      # Thread#raise alone is not reliable enough in practice — it's
+      # best-effort against blocked syscalls (socket writes, OpenSSL read,
+      # ConditionVariable#wait with a held mutex) and we've seen sessions
+      # that stay "running" forever even after multiple interrupt attempts.
+      #
+      # Strategy: three-tier escalation in a background watchdog Thread so
+      # the HTTP handler returns immediately.
+      #
+      #   Tier 1 (t=0): Thread#raise(AgentInterrupted).
+      #                 Unblocks most pure-Ruby waits and Faraday reads.
+      #                 Handles the common case.
+      #   Tier 2 (t=3): force-close this session's WebSocket connections
+      #                 so any send_raw stuck on socket write wakes up.
+      #                 Try Thread#raise again (idempotent).
+      #   Tier 3 (t=8): Thread#kill — last resort. Leaks any held
+      #                 resources but frees the session so the user can
+      #                 move on.
+      #
+      # Each transition is logged so that when users report "stuck
+      # sessions" we can see in the log whether tier 2/3 ever had to
+      # fire — that's our signal to dig deeper on the underlying block.
       def interrupt_session(session_id)
+        thread = nil
         @registry.with_session(session_id) do |s|
           s[:idle_timer]&.cancel
-          s[:thread]&.raise(Clacky::AgentInterrupted, "Interrupted by user")
+          thread = s[:thread]
+
+          next unless thread&.alive?
+
+          Clacky::Logger.info("[interrupt] session=#{session_id} tier=1 raise")
+          begin
+            thread.raise(Clacky::AgentInterrupted, "Interrupted by user")
+          rescue ThreadError => e
+            Clacky::Logger.warn("[interrupt] tier=1 raise failed: #{e.message}")
+          end
         end
+
+        return unless thread&.alive?
+
+        start_interrupt_watchdog(session_id, thread)
+      end
+
+      # Background watchdog: escalates from WebSocket force-close (tier 2)
+      # to Thread#kill (tier 3) if the agent thread refuses to die.
+      private def start_interrupt_watchdog(session_id, thread)
+        Thread.new do
+          Thread.current.name = "interrupt-watchdog[#{session_id}]" rescue nil
+
+          # Give the first Thread#raise a few seconds to unwind.
+          sleep 3
+          next unless thread.alive?
+
+          Clacky::Logger.warn(
+            "[interrupt] session=#{session_id} tier=2 raise failed after 3s, " \
+            "force-closing session resources"
+          )
+          force_close_session_sockets(session_id)
+          # Re-raise — sometimes the first raise was swallowed deep in a
+          # C-extension syscall; after we force-close the socket the
+          # syscall returns and the next raise sticks.
+          begin
+            thread.raise(Clacky::AgentInterrupted, "Interrupted by user (escalated)")
+          rescue ThreadError
+            # already dead between checks — fine
+          end
+
+          sleep 5
+          next unless thread.alive?
+
+          Clacky::Logger.error(
+            "[interrupt] session=#{session_id} tier=3 still alive after 8s, Thread#kill"
+          )
+          begin
+            thread.kill
+          rescue StandardError => e
+            Clacky::Logger.error("[interrupt] Thread#kill raised: #{e.class}: #{e.message}")
+          end
+
+          # Record the forced-kill so the UI can show a warning and operators
+          # can correlate with any backtrace dumps. The session is left in
+          # :idle state by run_agent_task's rescue clause; if the kill
+          # happened before the rescue could run, patch the state directly.
+          begin
+            @registry.update(session_id, status: :idle, error: "Force-killed (interrupt watchdog)")
+            broadcast_session_update(session_id)
+          rescue StandardError
+            # best effort
+          end
+        end
+      end
+
+      # Close every WebSocket connection bound to the given session. Used by
+      # the interrupt watchdog to unblock agent threads stuck in a WS write.
+      private def force_close_session_sockets(session_id)
+        conns = @ws_mutex.synchronize { (@ws_clients[session_id] || []).dup }
+        conns.each do |conn|
+          Clacky::Logger.warn(
+            "[interrupt] session=#{session_id} force-closing WS conn"
+          )
+          conn.force_close!
+        end
+      rescue StandardError => e
+        Clacky::Logger.error("[interrupt] force_close_session_sockets error: #{e.class}: #{e.message}")
       end
 
       # Start the pending task for a session.
@@ -3291,14 +3392,24 @@ module Clacky
       end
 
       # Broadcast an event to all clients subscribed to a session.
-      # Dead connections (broken pipe / closed socket) are removed automatically.
+      # Dead connections (broken pipe / closed socket / deadline exceeded) are
+      # removed automatically. Connections already marked closed are skipped
+      # upfront so one sluggish client can't delay delivery to healthy ones.
       def broadcast(session_id, event)
         clients = @ws_mutex.synchronize { (@ws_clients[session_id] || []).dup }
-        dead = clients.reject { |conn| conn.send_json(event) }
+        dead = []
+        clients.each do |conn|
+          if conn.closed?
+            dead << conn
+            next
+          end
+          dead << conn unless conn.send_json(event)
+        end
         return if dead.empty?
 
         @ws_mutex.synchronize do
           (@ws_clients[session_id] || []).reject! { |conn| dead.include?(conn) }
+          @all_ws_conns.reject! { |conn| dead.include?(conn) }
         end
       end
 
@@ -3306,7 +3417,14 @@ module Clacky
       # Dead connections are removed automatically.
       def broadcast_all(event)
         clients = @ws_mutex.synchronize { @all_ws_conns.dup }
-        dead = clients.reject { |conn| conn.send_json(event) }
+        dead = []
+        clients.each do |conn|
+          if conn.closed?
+            dead << conn
+            next
+          end
+          dead << conn unless conn.send_json(event)
+        end
         return if dead.empty?
 
         @ws_mutex.synchronize do
@@ -3550,19 +3668,47 @@ module Clacky
       # ── Inner classes ─────────────────────────────────────────────────────────
 
       # Wraps a raw TCP socket, providing thread-safe WebSocket frame sending.
+      #
+      # IMPORTANT: send_raw is called from the Agent thread via broadcast() →
+      # send_json(). A blocking socket write with no deadline can pin the Agent
+      # thread indefinitely when the client's receive buffer fills up (silent
+      # disconnects such as Wi-Fi handoff or NAT timeout, where TCP keepalive
+      # defaults are measured in hours). Thread#raise on blocking native socket
+      # writes is best-effort and unreliable, so instead we bound every write
+      # with an explicit deadline using IO.select + write_nonblock and declare
+      # the connection dead on timeout.
       class WebSocketConnection
         attr_accessor :session_id
+
+        # Maximum time a single send_raw call is allowed to spend writing.
+        # 5 seconds is generous for healthy LAN/Internet clients and short
+        # enough that a stuck Agent becomes responsive again quickly.
+        SEND_DEADLINE = 5.0
+
+        # Warn threshold — any individual send_raw that exceeds this is logged
+        # so we can spot sluggish clients before they fully hang.
+        SEND_SLOW_WARN = 1.0
 
         def initialize(socket, version)
           @socket     = socket
           @version    = version
           @send_mutex = Mutex.new
           @closed     = false
+          WebSocketConnection.apply_keepalive(socket)
         end
 
         # Returns true if the underlying socket has been detected as dead.
         def closed?
           @closed
+        end
+
+        # Force-close the connection (used by the interrupt watchdog when an
+        # Agent thread is stuck on an unresponsive socket write).
+        def force_close!
+          @closed = true
+          @socket.close
+        rescue StandardError
+          # best effort
         end
 
         # Send a JSON-serializable object over the WebSocket.
@@ -3575,8 +3721,14 @@ module Clacky
         end
 
         # Send a raw WebSocket frame.
-        # Returns true on success, false on broken/closed socket.
+        # Returns true on success, false on broken/closed/sluggish socket.
+        #
+        # Uses write_nonblock with an overall deadline so the caller (typically
+        # the Agent thread) never blocks longer than SEND_DEADLINE, even if the
+        # client silently stopped reading.
         def send_raw(type, data)
+          started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+
           @send_mutex.synchronize do
             return false if @closed
 
@@ -3585,7 +3737,30 @@ module Clacky
               data: data,
               type: type
             )
-            @socket.write(outgoing.to_s)
+            bytes = outgoing.to_s
+
+            unless write_with_deadline(bytes, SEND_DEADLINE)
+              # Deadline exceeded — treat as a dead connection so broadcast
+              # purges it and the Agent thread is freed immediately.
+              @closed = true
+              begin
+                @socket.close
+              rescue StandardError
+                # ignore
+              end
+              Clacky::Logger.warn(
+                "[WS] send_raw deadline exceeded — closing sluggish connection " \
+                "(bytes=#{bytes.bytesize}, deadline=#{SEND_DEADLINE}s)"
+              )
+              return false
+            end
+          end
+
+          elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started_at
+          if elapsed > SEND_SLOW_WARN
+            Clacky::Logger.warn(
+              "[WS] send_raw slow: #{elapsed.round(2)}s (type=#{type})"
+            )
           end
           true
         rescue Errno::EPIPE, Errno::ECONNRESET, IOError, Errno::EBADF => e
@@ -3596,6 +3771,70 @@ module Clacky
           @closed = true
           Clacky::Logger.debug("WS send_raw unexpected error: #{e.message}")
           false
+        end
+
+        # Write `data` to the underlying socket, bounded by `deadline` seconds
+        # of *total* wall time across partial writes. Returns true on full
+        # success, false on timeout.
+        private def write_with_deadline(data, deadline)
+          remaining = data
+          deadline_at = Process.clock_gettime(Process::CLOCK_MONOTONIC) + deadline
+
+          until remaining.empty?
+            time_left = deadline_at - Process.clock_gettime(Process::CLOCK_MONOTONIC)
+            return false if time_left <= 0
+
+            begin
+              written = @socket.write_nonblock(remaining, exception: false)
+            rescue Errno::EPIPE, Errno::ECONNRESET, IOError, Errno::EBADF
+              raise
+            end
+
+            case written
+            when :wait_writable
+              ready = IO.select(nil, [@socket], nil, [time_left, 0.25].min)
+              # Not ready → loop and re-check the overall deadline.
+              next unless ready
+            when Integer
+              remaining = remaining.byteslice(written, remaining.bytesize - written)
+            else
+              # Nil or unexpected — treat as dead.
+              return false
+            end
+          end
+
+          true
+        end
+
+        # Enable TCP keepalive on the underlying socket so silently dead
+        # peers are detected in minutes instead of the OS default of hours.
+        # Best-effort: any failure is logged at debug level and ignored.
+        def self.apply_keepalive(socket)
+          return unless socket.respond_to?(:setsockopt)
+
+          socket.setsockopt(Socket::SOL_SOCKET, Socket::SO_KEEPALIVE, true)
+
+          # TCP-level keepalive tuning — constants vary by platform and are
+          # only set when available. Values chosen to detect dead peers in
+          # roughly 60-90 seconds total.
+          if defined?(Socket::IPPROTO_TCP)
+            # Idle time before first probe (Linux: TCP_KEEPIDLE, macOS: TCP_KEEPALIVE)
+            idle_const = if Socket.const_defined?(:TCP_KEEPIDLE)
+                           Socket::TCP_KEEPIDLE
+                         elsif Socket.const_defined?(:TCP_KEEPALIVE)
+                           Socket::TCP_KEEPALIVE
+                         end
+            socket.setsockopt(Socket::IPPROTO_TCP, idle_const, 60) if idle_const
+
+            if Socket.const_defined?(:TCP_KEEPINTVL)
+              socket.setsockopt(Socket::IPPROTO_TCP, Socket::TCP_KEEPINTVL, 10)
+            end
+            if Socket.const_defined?(:TCP_KEEPCNT)
+              socket.setsockopt(Socket::IPPROTO_TCP, Socket::TCP_KEEPCNT, 3)
+            end
+          end
+        rescue StandardError => e
+          Clacky::Logger.debug("[WS] failed to set keepalive: #{e.class}: #{e.message}")
         end
       end
     end
