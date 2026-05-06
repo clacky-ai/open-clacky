@@ -105,8 +105,25 @@ module Clacky
         cache_write = usage[:cache_creation_input_tokens] || 0
         cache_read = usage[:cache_read_input_tokens] || 0
 
-        # Calculate token delta from previous iteration
-        delta_tokens = total_tokens - @previous_total_tokens
+        # Calculate token delta from previous iteration.
+        #
+        # Two conventions exist for total_tokens across providers:
+        #   - OpenAI (default):    cumulative per-request input+output (grows
+        #                          with history every turn). Delta = total - prev.
+        #   - Anthropic direct:    already the per-turn new compute
+        #                          (raw_input + cache_creation + output).
+        #                          The MessageFormat sets :total_is_per_turn so
+        #                          we use total_tokens directly as the delta.
+        #
+        # Without this branch, Anthropic's per-turn total would be treated as
+        # cumulative and produce negative / nonsensical deltas whenever cached
+        # prefixes make the per-turn new-compute smaller than the previous turn.
+        delta_tokens =
+          if usage[:total_is_per_turn]
+            total_tokens
+          else
+            total_tokens - @previous_total_tokens
+          end
         @previous_total_tokens = total_tokens  # Update for next iteration
 
         {

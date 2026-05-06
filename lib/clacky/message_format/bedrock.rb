@@ -118,11 +118,14 @@ module Clacky
         cache_write = usage["cacheWriteInputTokens"].to_i
 
         # Bedrock `inputTokens` = non-cached input only.
-        # Anthropic direct `input_tokens` = all input including cache_read.
-        # Normalise to Anthropic semantics so ModelPricing.calculate_cost works correctly:
+        # Anthropic direct `input_tokens` = ALSO non-cached input only
+        # (cache_read_input_tokens and cache_creation_input_tokens are reported
+        # separately and are disjoint from input_tokens — NOT included in it).
+        # Normalise to the OpenAI/Bedrock convention so ModelPricing.calculate_cost
+        # works correctly:
         #   prompt_tokens = inputTokens + cacheReadInputTokens
         # (calculate_cost subtracts cache_read_tokens from prompt_tokens to get
-        #  the billable non-cached portion; that arithmetic requires the Anthropic convention.)
+        #  the billable non-cached portion; cache_write is priced on top.)
         prompt_tokens = usage["inputTokens"].to_i + cache_read
 
         usage_data = {

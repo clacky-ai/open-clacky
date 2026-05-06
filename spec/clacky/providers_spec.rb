@@ -196,4 +196,66 @@ RSpec.describe Clacky::Providers do
       expect(described_class.resolve_provider(base_url: nil, api_key: nil)).to be_nil
     end
   end
+
+  describe ".api_type_for_model" do
+    it "returns the provider-level api when no overrides are defined" do
+      # openai preset has no model_api_overrides → always returns "openai-completions"
+      expect(described_class.api_type_for_model("openai", "gpt-5.5"))
+        .to eq("openai-completions")
+    end
+
+    it "returns nil for an unknown provider" do
+      expect(described_class.api_type_for_model("no-such-provider", "anything")).to be_nil
+    end
+
+    it "routes OpenRouter anthropic/* models to anthropic-messages" do
+      # This is the core fix: native Anthropic endpoint preserves cache_control
+      # byte-for-byte, avoiding ~10% prompt-cache misses through the OpenAI shim.
+      expect(described_class.api_type_for_model("openrouter", "anthropic/claude-sonnet-4-6"))
+        .to eq("anthropic-messages")
+      expect(described_class.api_type_for_model("openrouter", "anthropic/claude-opus-4-7"))
+        .to eq("anthropic-messages")
+    end
+
+    it "also matches bare claude-* aliases on OpenRouter" do
+      expect(described_class.api_type_for_model("openrouter", "claude-sonnet-4-6"))
+        .to eq("anthropic-messages")
+      expect(described_class.api_type_for_model("openrouter", "claude-3.5-haiku"))
+        .to eq("anthropic-messages")
+    end
+
+    it "keeps non-Claude OpenRouter models on the OpenAI shim" do
+      # Gemini, GPT, DeepSeek etc. are best served through /chat/completions.
+      expect(described_class.api_type_for_model("openrouter", "google/gemini-3-pro"))
+        .to eq("openai-responses")
+      expect(described_class.api_type_for_model("openrouter", "openai/gpt-5.5"))
+        .to eq("openai-responses")
+      expect(described_class.api_type_for_model("openrouter", "deepseek/deepseek-v4-pro"))
+        .to eq("openai-responses")
+    end
+
+    it "tolerates a nil model_name by returning the provider default" do
+      expect(described_class.api_type_for_model("openrouter", nil)).to eq("openai-responses")
+    end
+  end
+
+  describe ".anthropic_format_for_model?" do
+    it "is true for OpenRouter Claude models" do
+      expect(described_class.anthropic_format_for_model?("openrouter", "anthropic/claude-opus-4-7"))
+        .to be true
+    end
+
+    it "is false for OpenRouter non-Claude models" do
+      expect(described_class.anthropic_format_for_model?("openrouter", "google/gemini-3-pro"))
+        .to be false
+    end
+
+    it "is false for providers without an anthropic-messages override" do
+      expect(described_class.anthropic_format_for_model?("openai", "gpt-5.5")).to be false
+    end
+
+    it "is false for unknown providers" do
+      expect(described_class.anthropic_format_for_model?("ghost-provider", "any-model")).to be false
+    end
+  end
 end
