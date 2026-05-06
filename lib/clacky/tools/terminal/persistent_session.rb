@@ -125,15 +125,16 @@ module Clacky
         end
 
         # Put a session back into the persistent slot after a successful
-        # command. If the slot is already filled (concurrent call built
-        # another one), we just discard the extra to avoid leaks.
+        # command. Returns true if stored (caller keeps the session),
+        # false if the slot was already filled or the session is unhealthy
+        # (caller MUST clean up the session — fds and process — itself).
         def release(session)
           @mutex.synchronize do
             if @session.nil? && session_healthy?(session)
               @session = session
+              true
             else
-              # Either we already have one, or this one looks unhealthy.
-              # Let the caller's cleanup_session path handle teardown.
+              false
             end
           end
         end
@@ -156,6 +157,7 @@ module Clacky
             rescue StandardError
               # ignore
             end
+            close_fds(sess)
           end
         end
 
@@ -168,10 +170,19 @@ module Clacky
           rescue StandardError
             # ignore
           end
+          close_fds(sess)
           SessionManager.forget(sess.id)
         end
 
         private :drop_locked
+
+        # Close all open file descriptors on a session struct. Safe to call
+        # multiple times (all closes are rescue-wrapped).
+        private def close_fds(session)
+          session.log_io&.close rescue nil
+          session.writer&.close rescue nil
+          session.reader&.close rescue nil
+        end
 
         def session_healthy?(session)
           return false unless session

@@ -1,7 +1,7 @@
 PATH
   remote: .
   specs:
-    openclacky (1.0.0)
+    openclacky (1.0.1)
       artii (~> 2.1)
       base64 (>= 0.1.0)
       chunky_png (~> 1.4)

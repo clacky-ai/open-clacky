@@ -2,6 +2,7 @@
 
 require "webrick"
 require "websocket"
+require "socket"
 require "json"
 require "thread"
 require "fileutils"
@@ -9,6 +10,8 @@ require "tmpdir"
 require "uri"
 require "securerandom"
 require "timeout"
+require "yaml"
+require "date"
 require_relative "session_registry"
 require_relative "web_ui_controller"
 require_relative "scheduler"
@@ -392,6 +395,13 @@ module Clacky
         when ["GET",    "/api/brand/skills"]      then api_brand_skills(res)
         when ["GET",    "/api/brand"]             then api_brand_info(res)
         when ["GET",    "/api/creator/skills"]    then api_creator_skills(res)
+        when ["GET",    "/api/trash"]     then api_trash(req, res)
+        when ["POST",   "/api/trash/restore"] then api_trash_restore(req, res)
+        when ["DELETE", "/api/trash"]     then api_trash_delete(req, res)
+        when ["GET",    "/api/profile"]   then api_profile_get(res)
+        when ["PUT",    "/api/profile"]   then api_profile_put(req, res)
+        when ["GET",    "/api/memories"]  then api_memories_list(res)
+        when ["POST",   "/api/memories"]  then api_memories_create(req, res)
         when ["GET",    "/api/channels"]          then api_list_channels(res)
         when ["POST",   "/api/tool/browser"]      then api_tool_browser(req, res)
         when ["POST",   "/api/upload"]            then api_upload_file(req, res)
@@ -462,6 +472,15 @@ module Clacky
           elsif method == "POST" && path.match?(%r{^/api/my-skills/[^/]+/publish$})
             name = URI.decode_www_form_component(path.sub("/api/my-skills/", "").sub("/publish", ""))
             api_publish_my_skill(name, req, res)
+          elsif method == "GET" && path.match?(%r{^/api/memories/[^/]+$})
+            filename = URI.decode_www_form_component(path.sub("/api/memories/", ""))
+            api_memories_get(filename, res)
+          elsif method == "PUT" && path.match?(%r{^/api/memories/[^/]+$})
+            filename = URI.decode_www_form_component(path.sub("/api/memories/", ""))
+            api_memories_update(filename, req, res)
+          elsif method == "DELETE" && path.match?(%r{^/api/memories/[^/]+$})
+            filename = URI.decode_www_form_component(path.sub("/api/memories/", ""))
+            api_memories_delete(filename, res)
           else
             not_found(res)
           end
@@ -1449,6 +1468,10 @@ module Clacky
         path = parse_json_body(req)["path"]
         return json_response(res, 400, { error: "path is required" }) unless path && !path.empty?
 
+        # Expand ~ to the user's home directory (e.g. "~/Desktop/file.pdf").
+        # Ruby's File.exist? does NOT automatically expand ~ — that's a shell feature.
+        path = File.expand_path(path)
+
         # On WSL the file may be specified as a Windows path (e.g. "C:/Users/…").
         # Convert it to the Linux-side path so File.exist? works.
         linux_path = Utils::EnvironmentDetector.win_to_linux_path(path)
@@ -1885,6 +1908,469 @@ module Clacky
           local_skills:         local_skills,
           platform_fetch_error: platform_result[:success] ? nil : platform_result[:error]
         })
+      end
+
+      # GET /api/trash[?project=<path>]
+      # Lists recently deleted files in the AI trash.
+      #
+      # The trash is organized by project_root; each project gets its own
+      # hashed subdirectory under ~/.clacky/trash/ (see TrashDirectory).
+      # Returns ALL projects' deletions by default, with a per-file
+      # project_root field so the UI can group or filter.
+      #
+      # Optional ?project=<absolute-path> restricts to a single project.
+      # Response:
+      #   { ok: true,
+      #     files: [ { original_path, deleted_at, file_size, file_type,
+      #                project_root, project_name, trash_file } ],
+      #     projects: [ { project_root, project_name, file_count, total_size } ],
+      #     total_count, total_size }
+      private def api_trash(req, res)
+        query = URI.decode_www_form(req.query_string.to_s).to_h
+        filter_project = query["project"].to_s.strip
+        filter_project = nil if filter_project.empty?
+
+        projects =
+          if filter_project
+            [{ project_root: File.expand_path(filter_project),
+               project_name: File.basename(File.expand_path(filter_project)),
+               trash_dir:    Clacky::TrashDirectory.new(filter_project).trash_dir }]
+          else
+            Clacky::TrashDirectory.all_projects
+          end
+
+        all_files    = []
+        project_rows = []
+
+        projects.each do |p|
+          files = _trash_files_in(p[:trash_dir], p[:project_root])
+          next if files.empty? && filter_project.nil?
+
+          total_size = files.sum { |f| f[:file_size].to_i }
+          project_rows << {
+            project_root: p[:project_root],
+            project_name: p[:project_name],
+            file_count:   files.size,
+            total_size:   total_size
+          }
+
+          files.each do |f|
+            all_files << f.merge(
+              project_root: p[:project_root],
+              project_name: p[:project_name]
+            )
+          end
+        end
+
+        all_files.sort_by! { |f| f[:deleted_at].to_s }.reverse!
+
+        json_response(res, 200, {
+          ok:           true,
+          files:        all_files,
+          projects:     project_rows,
+          total_count:  all_files.size,
+          total_size:   all_files.sum { |f| f[:file_size].to_i }
+        })
+      end
+
+      # POST /api/trash/restore
+      # Body: { project_root: "...", original_path: "..." }
+      # Restores a single file from trash back to its original location.
+      # Refuses if the target already exists on disk.
+      private def api_trash_restore(req, res)
+        data           = parse_json_body(req)
+        project_root   = data["project_root"].to_s.strip
+        original_path  = data["original_path"].to_s.strip
+
+        if project_root.empty? || original_path.empty?
+          json_response(res, 400, { ok: false, error: "project_root and original_path are required" })
+          return
+        end
+
+        tool   = Clacky::Tools::TrashManager.new
+        result = tool.execute(action: "restore",
+                              file_path: original_path,
+                              working_dir: project_root)
+
+        if result[:success]
+          json_response(res, 200, { ok: true, restored_file: result[:restored_file], message: result[:message] })
+        else
+          json_response(res, 422, { ok: false, error: result[:message] })
+        end
+      end
+
+      # DELETE /api/trash[?project=<path>][&days_old=<n>][&file=<original_path>]
+      # Three modes:
+      #   ?file=<original_path>&project=<root>  → permanently delete one file
+      #   ?project=<root>[&days_old=0]          → empty that project's trash
+      #   (no project, days_old required)       → empty ALL projects older than N days
+      private def api_trash_delete(req, res)
+        query         = URI.decode_www_form(req.query_string.to_s).to_h
+        project_root  = query["project"].to_s.strip
+        days_old      = query["days_old"].to_s.strip
+        file_path     = query["file"].to_s.strip
+
+        project_root = nil if project_root.empty?
+        file_path    = nil if file_path.empty?
+
+        # Mode 1: single-file permanent delete
+        if file_path
+          unless project_root
+            json_response(res, 400, { ok: false, error: "project is required when file is given" })
+            return
+          end
+          deleted = _trash_delete_single(project_root, file_path)
+          if deleted
+            json_response(res, 200, { ok: true, deleted_count: 1, freed_size: deleted[:file_size].to_i })
+          else
+            json_response(res, 404, { ok: false, error: "File not found in trash: #{file_path}" })
+          end
+          return
+        end
+
+        # Mode 2 & 3: bulk empty (optionally scoped to one project, optionally by age)
+        days_i = days_old.empty? ? 0 : days_old.to_i
+        tool   = Clacky::Tools::TrashManager.new
+
+        targets =
+          if project_root
+            [project_root]
+          else
+            Clacky::TrashDirectory.all_projects.map { |p| p[:project_root] }
+          end
+
+        total_deleted = 0
+        total_freed   = 0
+        targets.each do |root|
+          result = tool.execute(action: "empty", days_old: days_i, working_dir: root)
+          next unless result[:success]
+          total_deleted += result[:deleted_count].to_i
+          total_freed   += result[:freed_size].to_i
+        end
+
+        json_response(res, 200, {
+          ok:            true,
+          deleted_count: total_deleted,
+          freed_size:    total_freed,
+          days_old:      days_i
+        })
+      end
+
+      # ── Trash helpers (private) ─────────────────────────────────────
+      # Reads all metadata sidecars in `trash_dir` and returns enriched
+      # file records. Silently skips sidecars whose payload file has
+      # already been purged from disk.
+      private def _trash_files_in(trash_dir, project_root)
+        return [] unless trash_dir && Dir.exist?(trash_dir)
+
+        files = []
+        Dir.glob(File.join(trash_dir, "*.metadata.json")).each do |meta_path|
+          begin
+            meta  = JSON.parse(File.read(meta_path))
+            trash = meta_path.sub(/\.metadata\.json\z/, "")
+            next unless File.exist?(trash)
+            files << {
+              original_path: meta["original_path"],
+              deleted_at:    meta["deleted_at"],
+              deleted_by:    meta["deleted_by"],
+              file_size:     meta["file_size"].to_i,
+              file_type:     meta["file_type"],
+              file_mode:     meta["file_mode"],
+              trash_file:    trash
+            }
+          rescue StandardError
+            # Corrupt or partial metadata — skip.
+          end
+        end
+        files
+      end
+
+      # Permanently deletes the single trash entry whose original_path
+      # matches inside `project_root`'s trash. Returns the removed
+      # metadata hash, or nil if not found.
+      private def _trash_delete_single(project_root, original_path)
+        trash_dir = Clacky::TrashDirectory.new(project_root).trash_dir
+        expanded  = File.expand_path(original_path, project_root)
+        entry     = _trash_files_in(trash_dir, project_root).find do |f|
+          f[:original_path] == expanded
+        end
+        return nil unless entry
+
+        File.delete(entry[:trash_file])                       if File.exist?(entry[:trash_file])
+        File.delete("#{entry[:trash_file]}.metadata.json")    if File.exist?("#{entry[:trash_file]}.metadata.json")
+        entry
+      rescue StandardError
+        nil
+      end
+
+      # ── Profile API (USER.md / SOUL.md) ──────────────────────────────
+      #
+      # User can override the built-in defaults by writing their own
+      # ~/.clacky/agents/USER.md and ~/.clacky/agents/SOUL.md. These
+      # endpoints let the Web UI read and edit those files.
+
+      PROFILE_USER_AGENTS_DIR  = File.expand_path("~/.clacky/agents").freeze
+      PROFILE_DEFAULT_AGENTS_DIR = File.expand_path("../../default_agents", __dir__).freeze
+      PROFILE_MAX_BYTES = 50_000  # Hard limit; prevents runaway content.
+
+      # GET /api/profile
+      # Returns { ok:, user: { path, content, is_default }, soul: { ... } }
+      private def api_profile_get(res)
+        json_response(res, 200, {
+          ok:   true,
+          user: _profile_read_file("USER.md"),
+          soul: _profile_read_file("SOUL.md")
+        })
+      end
+
+      # PUT /api/profile
+      # Body: { kind: "user"|"soul", content: "..." }
+      # Writes the file to ~/.clacky/agents/<KIND>.md. Empty content
+      # deletes the override so the built-in default is used again.
+      private def api_profile_put(req, res)
+        data    = parse_json_body(req)
+        kind    = data["kind"].to_s.downcase
+        content = data["content"].to_s
+
+        filename = case kind
+                   when "user" then "USER.md"
+                   when "soul" then "SOUL.md"
+                   else
+                     json_response(res, 400, { ok: false, error: "kind must be 'user' or 'soul'" })
+                     return
+                   end
+
+        if content.bytesize > PROFILE_MAX_BYTES
+          json_response(res, 413, { ok: false, error: "Content too large (max #{PROFILE_MAX_BYTES} bytes)" })
+          return
+        end
+
+        FileUtils.mkdir_p(PROFILE_USER_AGENTS_DIR)
+        target = File.join(PROFILE_USER_AGENTS_DIR, filename)
+
+        # Treat whitespace-only payload as "reset to built-in default":
+        # delete the override file so AgentProfile falls back to default.
+        if content.strip.empty?
+          File.delete(target) if File.exist?(target)
+          json_response(res, 200, { ok: true, reset: true, file: _profile_read_file(filename) })
+          return
+        end
+
+        File.write(target, content)
+        json_response(res, 200, { ok: true, file: _profile_read_file(filename) })
+      rescue StandardError => e
+        json_response(res, 500, { ok: false, error: e.message })
+      end
+
+      # Read a profile file — user override if present, else built-in default.
+      # Returns { path:, content:, is_default:, writable: }.
+      private def _profile_read_file(filename)
+        user_path    = File.join(PROFILE_USER_AGENTS_DIR, filename)
+        default_path = File.join(PROFILE_DEFAULT_AGENTS_DIR, filename)
+
+        if File.exist?(user_path) && !File.zero?(user_path)
+          {
+            path:       user_path,
+            content:    File.read(user_path),
+            is_default: false
+          }
+        elsif File.exist?(default_path)
+          {
+            path:       default_path,
+            content:    File.read(default_path),
+            is_default: true
+          }
+        else
+          {
+            path:       user_path,  # Where it WILL be written
+            content:    "",
+            is_default: true
+          }
+        end
+      rescue StandardError => e
+        { path: "", content: "", is_default: true, error: e.message }
+      end
+
+      # ── Memories API (~/.clacky/memories/*.md) ───────────────────────
+      #
+      # Long-term memories are plain Markdown files with YAML frontmatter
+      # stored under ~/.clacky/memories/. These endpoints let the user
+      # inspect, edit, create, and delete them from the Web UI.
+
+      MEMORIES_DIR    = File.expand_path("~/.clacky/memories").freeze
+      MEMORY_MAX_BYTES = 50_000
+
+      # GET /api/memories
+      # Returns { ok:, dir:, memories: [ { filename, topic, description, updated_at, size, preview } ] }
+      # Sorted by updated_at (YAML frontmatter) descending, falling back to file mtime.
+      private def api_memories_list(res)
+        FileUtils.mkdir_p(MEMORIES_DIR)
+        memories = Dir.glob(File.join(MEMORIES_DIR, "*.md")).map do |path|
+          _memory_summary(path)
+        end.compact
+
+        # Sort key: prefer updated_at string (ISO-ish sorts correctly), fall back to mtime.
+        # `mtime` is always present in the summary (ISO 8601), so we use it as the
+        # ultimate tiebreaker. Negate by reversing after sort for descending order.
+        memories.sort_by! do |m|
+          key = m[:updated_at].to_s
+          key = m[:mtime].to_s if key.empty?
+          key
+        end
+        memories.reverse!
+
+        json_response(res, 200, { ok: true, dir: MEMORIES_DIR, memories: memories })
+      end
+
+      # GET /api/memories/:filename
+      # Returns { ok:, filename:, path:, content: }
+      private def api_memories_get(filename, res)
+        safe = _memory_safe_filename(filename)
+        unless safe
+          json_response(res, 400, { ok: false, error: "Invalid filename" })
+          return
+        end
+        path = File.join(MEMORIES_DIR, safe)
+        unless File.exist?(path)
+          json_response(res, 404, { ok: false, error: "Memory not found" })
+          return
+        end
+        json_response(res, 200, {
+          ok:       true,
+          filename: safe,
+          path:     path,
+          content:  File.read(path)
+        })
+      end
+
+      # POST /api/memories
+      # Body: { filename: "topic.md", content: "..." }
+      # Create a new memory file. Refuses to overwrite existing.
+      private def api_memories_create(req, res)
+        data     = parse_json_body(req)
+        filename = _memory_safe_filename(data["filename"].to_s)
+        content  = data["content"].to_s
+
+        unless filename
+          json_response(res, 400, { ok: false, error: "Invalid filename (must end in .md, no path separators)" })
+          return
+        end
+        if content.bytesize > MEMORY_MAX_BYTES
+          json_response(res, 413, { ok: false, error: "Content too large (max #{MEMORY_MAX_BYTES} bytes)" })
+          return
+        end
+
+        FileUtils.mkdir_p(MEMORIES_DIR)
+        path = File.join(MEMORIES_DIR, filename)
+        if File.exist?(path)
+          json_response(res, 409, { ok: false, error: "Memory '#{filename}' already exists" })
+          return
+        end
+
+        File.write(path, content)
+        json_response(res, 201, { ok: true, memory: _memory_summary(path) })
+      rescue StandardError => e
+        json_response(res, 500, { ok: false, error: e.message })
+      end
+
+      # PUT /api/memories/:filename
+      # Body: { content: "..." }
+      private def api_memories_update(filename, req, res)
+        safe = _memory_safe_filename(filename)
+        unless safe
+          json_response(res, 400, { ok: false, error: "Invalid filename" })
+          return
+        end
+        data    = parse_json_body(req)
+        content = data["content"].to_s
+        if content.bytesize > MEMORY_MAX_BYTES
+          json_response(res, 413, { ok: false, error: "Content too large (max #{MEMORY_MAX_BYTES} bytes)" })
+          return
+        end
+
+        path = File.join(MEMORIES_DIR, safe)
+        unless File.exist?(path)
+          json_response(res, 404, { ok: false, error: "Memory not found" })
+          return
+        end
+
+        File.write(path, content)
+        json_response(res, 200, { ok: true, memory: _memory_summary(path) })
+      rescue StandardError => e
+        json_response(res, 500, { ok: false, error: e.message })
+      end
+
+      # DELETE /api/memories/:filename
+      private def api_memories_delete(filename, res)
+        safe = _memory_safe_filename(filename)
+        unless safe
+          json_response(res, 400, { ok: false, error: "Invalid filename" })
+          return
+        end
+        path = File.join(MEMORIES_DIR, safe)
+        unless File.exist?(path)
+          json_response(res, 404, { ok: false, error: "Memory not found" })
+          return
+        end
+        File.delete(path)
+        json_response(res, 200, { ok: true, filename: safe })
+      rescue StandardError => e
+        json_response(res, 500, { ok: false, error: e.message })
+      end
+
+      # Returns nil if the filename is unsafe. Must end in .md, contain
+      # no path separators or shell metacharacters, and be non-empty.
+      private def _memory_safe_filename(name)
+        s = name.to_s.strip
+        return nil if s.empty?
+        return nil if s.include?("/") || s.include?("\\")
+        return nil if s.start_with?(".")
+        return nil unless s.end_with?(".md")
+        return nil unless s.match?(/\A[A-Za-z0-9._\-]+\z/)
+        s
+      end
+
+      # Build a summary record for a memory file. Parses YAML frontmatter
+      # if present; otherwise falls back to filename-derived topic.
+      # Returns nil if the file can't be read.
+      private def _memory_summary(path)
+        content = File.read(path)
+        stat    = File.stat(path)
+
+        topic       = File.basename(path, ".md")
+        description = ""
+        updated_at  = stat.mtime.strftime("%Y-%m-%d")
+
+        # Parse YAML frontmatter: --- ... --- at the top of the file.
+        if content.start_with?("---")
+          if (m = content.match(/\A---\s*\n(.*?)\n---\s*\n/m))
+            begin
+              # permitted_classes: Date so YAML `updated_at: 2026-05-01`
+              # parses to a Date instance instead of raising DisallowedClass.
+              fm = YAML.safe_load(m[1], permitted_classes: [Date, Time]) || {}
+              topic       = fm["topic"].to_s       unless fm["topic"].to_s.strip.empty?
+              description = fm["description"].to_s
+              updated_at  = fm["updated_at"].to_s  unless fm["updated_at"].to_s.strip.empty?
+            rescue StandardError
+              # Bad frontmatter — fall back to defaults above.
+            end
+          end
+        end
+
+        preview = content.sub(/\A---.*?---\s*\n/m, "").strip[0, 200]
+
+        {
+          filename:    File.basename(path),
+          path:        path,
+          topic:       topic,
+          description: description,
+          updated_at:  updated_at,
+          size:        stat.size,
+          mtime:       stat.mtime.iso8601,
+          preview:     preview
+        }
+      rescue StandardError
+        nil
       end
 
       # Auto-packages the named skill directory into a ZIP and uploads it to the
@@ -2626,6 +3112,11 @@ module Clacky
             conn.session_id = session_id
             subscribe(session_id, conn)
             conn.send_json(type: "subscribed", session_id: session_id)
+            # Push a fresh snapshot so a reconnecting tab sees the true current
+            # status (it may have missed session_update events while offline).
+            if (snap = @registry.snapshot(session_id))
+              conn.send_json(type: "session_update", session: snap)
+            end
             # If a shell command is still running, replay progress + buffered stdout
             # to the newly subscribed tab so it sees the live state it may have missed.
             @registry.with_session(session_id) { |s| s[:ui]&.replay_live_state }
@@ -2726,11 +3217,111 @@ module Clacky
         ui&.deliver_confirmation(conf_id, result)
       end
 
+      # Interrupt a running agent session.
+      #
+      # Thread#raise alone is not reliable enough in practice — it's
+      # best-effort against blocked syscalls (socket writes, OpenSSL read,
+      # ConditionVariable#wait with a held mutex) and we've seen sessions
+      # that stay "running" forever even after multiple interrupt attempts.
+      #
+      # Strategy: three-tier escalation in a background watchdog Thread so
+      # the HTTP handler returns immediately.
+      #
+      #   Tier 1 (t=0): Thread#raise(AgentInterrupted).
+      #                 Unblocks most pure-Ruby waits and Faraday reads.
+      #                 Handles the common case.
+      #   Tier 2 (t=3): force-close this session's WebSocket connections
+      #                 so any send_raw stuck on socket write wakes up.
+      #                 Try Thread#raise again (idempotent).
+      #   Tier 3 (t=8): Thread#kill — last resort. Leaks any held
+      #                 resources but frees the session so the user can
+      #                 move on.
+      #
+      # Each transition is logged so that when users report "stuck
+      # sessions" we can see in the log whether tier 2/3 ever had to
+      # fire — that's our signal to dig deeper on the underlying block.
       def interrupt_session(session_id)
+        thread = nil
         @registry.with_session(session_id) do |s|
           s[:idle_timer]&.cancel
-          s[:thread]&.raise(Clacky::AgentInterrupted, "Interrupted by user")
+          thread = s[:thread]
+
+          next unless thread&.alive?
+
+          Clacky::Logger.info("[interrupt] session=#{session_id} tier=1 raise")
+          begin
+            thread.raise(Clacky::AgentInterrupted, "Interrupted by user")
+          rescue ThreadError => e
+            Clacky::Logger.warn("[interrupt] tier=1 raise failed: #{e.message}")
+          end
         end
+
+        return unless thread&.alive?
+
+        start_interrupt_watchdog(session_id, thread)
+      end
+
+      # Background watchdog: escalates from WebSocket force-close (tier 2)
+      # to Thread#kill (tier 3) if the agent thread refuses to die.
+      private def start_interrupt_watchdog(session_id, thread)
+        Thread.new do
+          Thread.current.name = "interrupt-watchdog[#{session_id}]" rescue nil
+
+          # Give the first Thread#raise a few seconds to unwind.
+          sleep 3
+          next unless thread.alive?
+
+          Clacky::Logger.warn(
+            "[interrupt] session=#{session_id} tier=2 raise failed after 3s, " \
+            "force-closing session resources"
+          )
+          force_close_session_sockets(session_id)
+          # Re-raise — sometimes the first raise was swallowed deep in a
+          # C-extension syscall; after we force-close the socket the
+          # syscall returns and the next raise sticks.
+          begin
+            thread.raise(Clacky::AgentInterrupted, "Interrupted by user (escalated)")
+          rescue ThreadError
+            # already dead between checks — fine
+          end
+
+          sleep 5
+          next unless thread.alive?
+
+          Clacky::Logger.error(
+            "[interrupt] session=#{session_id} tier=3 still alive after 8s, Thread#kill"
+          )
+          begin
+            thread.kill
+          rescue StandardError => e
+            Clacky::Logger.error("[interrupt] Thread#kill raised: #{e.class}: #{e.message}")
+          end
+
+          # Record the forced-kill so the UI can show a warning and operators
+          # can correlate with any backtrace dumps. The session is left in
+          # :idle state by run_agent_task's rescue clause; if the kill
+          # happened before the rescue could run, patch the state directly.
+          begin
+            @registry.update(session_id, status: :idle, error: "Force-killed (interrupt watchdog)")
+            broadcast_session_update(session_id)
+          rescue StandardError
+            # best effort
+          end
+        end
+      end
+
+      # Close every WebSocket connection bound to the given session. Used by
+      # the interrupt watchdog to unblock agent threads stuck in a WS write.
+      private def force_close_session_sockets(session_id)
+        conns = @ws_mutex.synchronize { (@ws_clients[session_id] || []).dup }
+        conns.each do |conn|
+          Clacky::Logger.warn(
+            "[interrupt] session=#{session_id} force-closing WS conn"
+          )
+          conn.force_close!
+        end
+      rescue StandardError => e
+        Clacky::Logger.error("[interrupt] force_close_session_sockets error: #{e.class}: #{e.message}")
       end
 
       # Start the pending task for a session.
@@ -2814,14 +3405,24 @@ module Clacky
       end
 
       # Broadcast an event to all clients subscribed to a session.
-      # Dead connections (broken pipe / closed socket) are removed automatically.
+      # Dead connections (broken pipe / closed socket / deadline exceeded) are
+      # removed automatically. Connections already marked closed are skipped
+      # upfront so one sluggish client can't delay delivery to healthy ones.
       def broadcast(session_id, event)
         clients = @ws_mutex.synchronize { (@ws_clients[session_id] || []).dup }
-        dead = clients.reject { |conn| conn.send_json(event) }
+        dead = []
+        clients.each do |conn|
+          if conn.closed?
+            dead << conn
+            next
+          end
+          dead << conn unless conn.send_json(event)
+        end
         return if dead.empty?
 
         @ws_mutex.synchronize do
           (@ws_clients[session_id] || []).reject! { |conn| dead.include?(conn) }
+          @all_ws_conns.reject! { |conn| dead.include?(conn) }
         end
       end
 
@@ -2829,7 +3430,14 @@ module Clacky
       # Dead connections are removed automatically.
       def broadcast_all(event)
         clients = @ws_mutex.synchronize { @all_ws_conns.dup }
-        dead = clients.reject { |conn| conn.send_json(event) }
+        dead = []
+        clients.each do |conn|
+          if conn.closed?
+            dead << conn
+            next
+          end
+          dead << conn unless conn.send_json(event)
+        end
         return if dead.empty?
 
         @ws_mutex.synchronize do
@@ -2841,7 +3449,7 @@ module Clacky
       # Broadcast a session_update event to all clients so they can patch their
       # local session list without needing a full session_list refresh.
       def broadcast_session_update(session_id)
-        session = @registry.list(limit: 200).find { |s| s[:id] == session_id }
+        session = @registry.snapshot(session_id)
         return unless session
 
         broadcast_all(type: "session_update", session: session)
@@ -3073,19 +3681,47 @@ module Clacky
       # ── Inner classes ─────────────────────────────────────────────────────────
 
       # Wraps a raw TCP socket, providing thread-safe WebSocket frame sending.
+      #
+      # IMPORTANT: send_raw is called from the Agent thread via broadcast() →
+      # send_json(). A blocking socket write with no deadline can pin the Agent
+      # thread indefinitely when the client's receive buffer fills up (silent
+      # disconnects such as Wi-Fi handoff or NAT timeout, where TCP keepalive
+      # defaults are measured in hours). Thread#raise on blocking native socket
+      # writes is best-effort and unreliable, so instead we bound every write
+      # with an explicit deadline using IO.select + write_nonblock and declare
+      # the connection dead on timeout.
       class WebSocketConnection
         attr_accessor :session_id
+
+        # Maximum time a single send_raw call is allowed to spend writing.
+        # 5 seconds is generous for healthy LAN/Internet clients and short
+        # enough that a stuck Agent becomes responsive again quickly.
+        SEND_DEADLINE = 5.0
+
+        # Warn threshold — any individual send_raw that exceeds this is logged
+        # so we can spot sluggish clients before they fully hang.
+        SEND_SLOW_WARN = 1.0
 
         def initialize(socket, version)
           @socket     = socket
           @version    = version
           @send_mutex = Mutex.new
           @closed     = false
+          WebSocketConnection.apply_keepalive(socket)
         end
 
         # Returns true if the underlying socket has been detected as dead.
         def closed?
           @closed
+        end
+
+        # Force-close the connection (used by the interrupt watchdog when an
+        # Agent thread is stuck on an unresponsive socket write).
+        def force_close!
+          @closed = true
+          @socket.close
+        rescue StandardError
+          # best effort
         end
 
         # Send a JSON-serializable object over the WebSocket.
@@ -3098,8 +3734,14 @@ module Clacky
         end
 
         # Send a raw WebSocket frame.
-        # Returns true on success, false on broken/closed socket.
+        # Returns true on success, false on broken/closed/sluggish socket.
+        #
+        # Uses write_nonblock with an overall deadline so the caller (typically
+        # the Agent thread) never blocks longer than SEND_DEADLINE, even if the
+        # client silently stopped reading.
         def send_raw(type, data)
+          started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+
           @send_mutex.synchronize do
             return false if @closed
 
@@ -3108,7 +3750,30 @@ module Clacky
               data: data,
               type: type
             )
-            @socket.write(outgoing.to_s)
+            bytes = outgoing.to_s
+
+            unless write_with_deadline(bytes, SEND_DEADLINE)
+              # Deadline exceeded — treat as a dead connection so broadcast
+              # purges it and the Agent thread is freed immediately.
+              @closed = true
+              begin
+                @socket.close
+              rescue StandardError
+                # ignore
+              end
+              Clacky::Logger.warn(
+                "[WS] send_raw deadline exceeded — closing sluggish connection " \
+                "(bytes=#{bytes.bytesize}, deadline=#{SEND_DEADLINE}s)"
+              )
+              return false
+            end
+          end
+
+          elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started_at
+          if elapsed > SEND_SLOW_WARN
+            Clacky::Logger.warn(
+              "[WS] send_raw slow: #{elapsed.round(2)}s (type=#{type})"
+            )
           end
           true
         rescue Errno::EPIPE, Errno::ECONNRESET, IOError, Errno::EBADF => e
@@ -3119,6 +3784,70 @@ module Clacky
           @closed = true
           Clacky::Logger.debug("WS send_raw unexpected error: #{e.message}")
           false
+        end
+
+        # Write `data` to the underlying socket, bounded by `deadline` seconds
+        # of *total* wall time across partial writes. Returns true on full
+        # success, false on timeout.
+        private def write_with_deadline(data, deadline)
+          remaining = data
+          deadline_at = Process.clock_gettime(Process::CLOCK_MONOTONIC) + deadline
+
+          until remaining.empty?
+            time_left = deadline_at - Process.clock_gettime(Process::CLOCK_MONOTONIC)
+            return false if time_left <= 0
+
+            begin
+              written = @socket.write_nonblock(remaining, exception: false)
+            rescue Errno::EPIPE, Errno::ECONNRESET, IOError, Errno::EBADF
+              raise
+            end
+
+            case written
+            when :wait_writable
+              ready = IO.select(nil, [@socket], nil, [time_left, 0.25].min)
+              # Not ready → loop and re-check the overall deadline.
+              next unless ready
+            when Integer
+              remaining = remaining.byteslice(written, remaining.bytesize - written)
+            else
+              # Nil or unexpected — treat as dead.
+              return false
+            end
+          end
+
+          true
+        end
+
+        # Enable TCP keepalive on the underlying socket so silently dead
+        # peers are detected in minutes instead of the OS default of hours.
+        # Best-effort: any failure is logged at debug level and ignored.
+        def self.apply_keepalive(socket)
+          return unless socket.respond_to?(:setsockopt)
+
+          socket.setsockopt(Socket::SOL_SOCKET, Socket::SO_KEEPALIVE, true)
+
+          # TCP-level keepalive tuning — constants vary by platform and are
+          # only set when available. Values chosen to detect dead peers in
+          # roughly 60-90 seconds total.
+          if defined?(Socket::IPPROTO_TCP)
+            # Idle time before first probe (Linux: TCP_KEEPIDLE, macOS: TCP_KEEPALIVE)
+            idle_const = if Socket.const_defined?(:TCP_KEEPIDLE)
+                           Socket::TCP_KEEPIDLE
+                         elsif Socket.const_defined?(:TCP_KEEPALIVE)
+                           Socket::TCP_KEEPALIVE
+                         end
+            socket.setsockopt(Socket::IPPROTO_TCP, idle_const, 60) if idle_const
+
+            if Socket.const_defined?(:TCP_KEEPINTVL)
+              socket.setsockopt(Socket::IPPROTO_TCP, Socket::TCP_KEEPINTVL, 10)
+            end
+            if Socket.const_defined?(:TCP_KEEPCNT)
+              socket.setsockopt(Socket::IPPROTO_TCP, Socket::TCP_KEEPCNT, 3)
+            end
+          end
+        rescue StandardError => e
+          Clacky::Logger.debug("[WS] failed to set keepalive: #{e.class}: #{e.message}")
         end
       end
     end

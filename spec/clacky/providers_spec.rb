@@ -97,6 +97,40 @@ RSpec.describe Clacky::Providers do
       end
     end
 
+    context "for OpenAI (GPT) provider" do
+      it "returns true for vision (GPT-5.x and o-series are multimodal)" do
+        expect(described_class.supports?("openai", :vision)).to be true
+        expect(described_class.supports?("openai", :vision, model_name: "gpt-5.5")).to be true
+        expect(described_class.supports?("openai", :vision, model_name: "gpt-5.4")).to be true
+        expect(described_class.supports?("openai", :vision, model_name: "gpt-5.4-mini")).to be true
+        expect(described_class.supports?("openai", :vision, model_name: "o4-mini")).to be true
+      end
+
+      it "resolves default model to gpt-5.5" do
+        expect(described_class.default_model("openai")).to eq("gpt-5.5")
+      end
+
+      it "returns correct lite model mappings" do
+        expect(described_class.lite_model("openai", "gpt-5.5")).to eq("gpt-5.4-mini")
+        expect(described_class.lite_model("openai", "gpt-5.4")).to eq("gpt-5.4-mini")
+      end
+
+      it "returns nil lite for models without lite pairing" do
+        expect(described_class.lite_model("openai", "o4-mini")).to be_nil
+        expect(described_class.lite_model("openai", "o3")).to be_nil
+        expect(described_class.lite_model("openai", "gpt-5.4-nano")).to be_nil
+      end
+
+      it "has correct base_url and api type" do
+        expect(described_class.base_url("openai")).to eq("https://api.openai.com/v1")
+        expect(described_class.api_type("openai")).to eq("openai-completions")
+      end
+
+      it "includes expected models" do
+        expect(described_class.models("openai")).to include("gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano", "o4-mini", "o3")
+      end
+    end
+
     context "conservative default (unknown or undeclared)" do
       it "returns true for an unknown provider_id" do
         # Custom base_urls map to nil provider_id; assume capability supported
@@ -150,6 +184,12 @@ RSpec.describe Clacky::Providers do
       expect(described_class.resolve_provider(
                base_url: "http://localhost:9999", api_key: ""
              )).to be_nil
+    end
+
+    it "resolves openai by base_url" do
+      expect(described_class.resolve_provider(
+               base_url: "https://api.openai.com/v1", api_key: nil
+             )).to eq("openai")
     end
 
     it "returns nil when both base_url and api_key are missing" do
@@ -262,6 +302,68 @@ RSpec.describe Clacky::Providers do
       # Anthropic has no endpoint_variants — should behave exactly as before.
       expect(described_class.find_by_base_url("https://api.anthropic.com"))
         .to eq("anthropic")
+    end
+  end
+
+  describe ".api_type_for_model" do
+    it "returns the provider-level api when no overrides are defined" do
+      # openai preset has no model_api_overrides → always returns "openai-completions"
+      expect(described_class.api_type_for_model("openai", "gpt-5.5"))
+        .to eq("openai-completions")
+    end
+
+    it "returns nil for an unknown provider" do
+      expect(described_class.api_type_for_model("no-such-provider", "anything")).to be_nil
+    end
+
+    it "routes OpenRouter anthropic/* models to anthropic-messages" do
+      # This is the core fix: native Anthropic endpoint preserves cache_control
+      # byte-for-byte, avoiding ~10% prompt-cache misses through the OpenAI shim.
+      expect(described_class.api_type_for_model("openrouter", "anthropic/claude-sonnet-4-6"))
+        .to eq("anthropic-messages")
+      expect(described_class.api_type_for_model("openrouter", "anthropic/claude-opus-4-7"))
+        .to eq("anthropic-messages")
+    end
+
+    it "also matches bare claude-* aliases on OpenRouter" do
+      expect(described_class.api_type_for_model("openrouter", "claude-sonnet-4-6"))
+        .to eq("anthropic-messages")
+      expect(described_class.api_type_for_model("openrouter", "claude-3.5-haiku"))
+        .to eq("anthropic-messages")
+    end
+
+    it "keeps non-Claude OpenRouter models on the OpenAI shim" do
+      # Gemini, GPT, DeepSeek etc. are best served through /chat/completions.
+      expect(described_class.api_type_for_model("openrouter", "google/gemini-3-pro"))
+        .to eq("openai-responses")
+      expect(described_class.api_type_for_model("openrouter", "openai/gpt-5.5"))
+        .to eq("openai-responses")
+      expect(described_class.api_type_for_model("openrouter", "deepseek/deepseek-v4-pro"))
+        .to eq("openai-responses")
+    end
+
+    it "tolerates a nil model_name by returning the provider default" do
+      expect(described_class.api_type_for_model("openrouter", nil)).to eq("openai-responses")
+    end
+  end
+
+  describe ".anthropic_format_for_model?" do
+    it "is true for OpenRouter Claude models" do
+      expect(described_class.anthropic_format_for_model?("openrouter", "anthropic/claude-opus-4-7"))
+        .to be true
+    end
+
+    it "is false for OpenRouter non-Claude models" do
+      expect(described_class.anthropic_format_for_model?("openrouter", "google/gemini-3-pro"))
+        .to be false
+    end
+
+    it "is false for providers without an anthropic-messages override" do
+      expect(described_class.anthropic_format_for_model?("openai", "gpt-5.5")).to be false
+    end
+
+    it "is false for unknown providers" do
+      expect(described_class.anthropic_format_for_model?("ghost-provider", "any-model")).to be false
     end
   end
 end

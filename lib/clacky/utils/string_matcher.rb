@@ -20,6 +20,14 @@ module Clacky
       # @return [Hash, nil] { matched_string: String, occurrences: Integer }
       #   or nil when nothing matches
       def self.find_match(content, old_string)
+        # Defensive: if either side contains invalid UTF-8 bytes (binary files,
+        # mixed-encoding content, etc.), Regexp#scan / String#include? with a
+        # UTF-8-tagged candidate can raise `ArgumentError: invalid byte sequence
+        # in UTF-8`. Scrub once at the entry point so every matching layer —
+        # including callers like the edit preview — is safe.
+        content    = Clacky::Utils::Encoding.to_utf8(content)    unless content.nil?
+        old_string = Clacky::Utils::Encoding.to_utf8(old_string) unless old_string.nil?
+
         candidates = generate_candidates(old_string)
 
         # Simple string matching for each candidate
@@ -29,13 +37,27 @@ module Clacky
           if content.include?(candidate)
             return {
               matched_string: candidate,
-              occurrences: content.scan(Regexp.quote(candidate)).length
+              occurrences: count_occurrences(content, candidate)
             }
           end
         end
 
         # Fall back to smart line-by-line matching (tabs vs spaces, etc.)
         try_smart_match(content, old_string)
+      end
+
+      # Count non-overlapping occurrences of `needle` in `haystack` without
+      # going through Regexp (safer on mixed-encoding strings and avoids an
+      # extra escape step).
+      def self.count_occurrences(haystack, needle)
+        return 0 if needle.empty?
+        count = 0
+        offset = 0
+        while (idx = haystack.index(needle, offset))
+          count += 1
+          offset = idx + needle.length
+        end
+        count
       end
 
       # Generate candidate strings by applying different transformations.

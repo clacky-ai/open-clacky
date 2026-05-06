@@ -78,7 +78,6 @@ module Clacky
       @cost_source = :estimated  # Track whether cost is from API or estimated
       @task_cost_source = :estimated  # Track cost source for current task
       @previous_total_tokens = 0  # Track tokens from previous iteration for delta calculation
-      @interrupted = false  # Flag for user interrupt
       @latest_latency = nil  # Most recent LLM call's latency metrics (see Client#send_messages_with_tools)
       @ui = ui  # UIController for direct UI interaction
       @debug_logs = []  # Debug logs for troubleshooting
@@ -360,9 +359,6 @@ module Clacky
         task_interrupted = false
 
         loop do
-
-          break if should_stop?
-
           @iterations += 1
           @hooks.trigger(:on_iteration, @iterations)
 
@@ -929,12 +925,6 @@ module Clacky
       end
     end
 
-    # Interrupt the agent's current run
-    # Called when user presses Ctrl+C during agent execution
-    def interrupt!
-      @interrupted = true
-    end
-
     # Enqueue an inline skill injection to be flushed after observe().
     # Called by InvokeSkill#execute to avoid injecting during tool execution,
     # which would break Bedrock's toolUse/toolResult pairing requirement.
@@ -1001,16 +991,7 @@ module Clacky
 
     # Check if agent is currently running
     def running?
-      @start_time != nil && !should_stop?
-    end
-
-    private def should_stop?
-      if @interrupted
-        @interrupted = false  # Reset for next run
-        return true
-      end
-
-      false
+      !@start_time.nil?
     end
 
     private def build_result(status = :success, error: nil)

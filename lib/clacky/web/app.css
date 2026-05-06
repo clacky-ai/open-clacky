@@ -6154,6 +6154,394 @@ body.setup-mode[data-theme="dark"] {
 
 
 
+/* ── Profile / My Data Panel ───────────────────────────────────────────────
+ *
+ * Assistant Memory is a 3-tab read-only window:
+ *   🧬 Soul      – SOUL.md  + "Have the assistant curate this"   → /onboard scope:soul
+ *   👤 User      – USER.md  + "Have the assistant update this"   → /onboard scope:user
+ *   🧠 Memories  – cards with Curate + Delete (→ File Recall)    → /onboard path:<abs>
+ *
+ * All mutations go through agent sessions; there are no inline editors.
+ * All colours use design tokens from :root / [data-theme="dark"] above —
+ * no hardcoded fallbacks so the panel looks correct in both light and dark.
+ * ═════════════════════════════════════════════════════════════════════════ */
+
+#profile-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-width: 0;
+}
+
+#profile-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 28px 36px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: var(--color-bg-secondary);
+}
+
+/* ── Tab bar ─────────────────────────────────────────────────────────── */
+.profile-tabs {
+  display: flex;
+  gap: 4px;
+  margin: 18px 0 16px;
+  border-bottom: 1px solid var(--color-border-primary);
+}
+
+.profile-tab {
+  padding: 10px 18px;
+  border: none;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.profile-tab:hover:not(.active) {
+  color: var(--color-text-primary);
+}
+
+.profile-tab.active {
+  color: var(--color-text-primary);
+  border-bottom-color: var(--color-accent-primary);
+}
+
+/* ── Tab panel ───────────────────────────────────────────────────────── */
+.profile-tab-panel {
+  padding: 14px 2px 20px;
+}
+
+/* ── Section heading (shared across panels) ──────────────────────────── */
+.profile-section-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--color-border-primary);
+}
+
+.profile-section-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  margin: 0;
+}
+
+.profile-section-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+
+.profile-section-hint {
+  font-size: 12px;
+  color: var(--color-text-muted);
+  margin: 0 0 12px 0;
+}
+
+.profile-path {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 320px;
+}
+
+.profile-status {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  flex-shrink: 0;
+}
+
+.profile-status-default {
+  background: var(--color-bg-hover);
+  color: var(--color-text-muted);
+}
+
+.profile-status-custom {
+  background: var(--color-success-bg);
+  color: var(--color-success);
+}
+
+.profile-empty {
+  padding: 14px 0;
+  text-align: center;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  font-style: italic;
+}
+
+/* ── Per-tab curate footer (SOUL / USER) ─────────────────────────────── */
+.profile-pane-footer {
+  margin-top: 22px;
+  padding-top: 16px;
+  border-top: 1px dashed var(--color-border-primary);
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.profile-pane-footer-hint {
+  flex: 1;
+  min-width: 200px;
+  font-size: 12px;
+  color: var(--color-text-muted);
+  margin: 0;
+}
+
+.btn-profile-update {
+  padding: 8px 18px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: var(--color-button-primary);
+  color: var(--color-button-primary-text);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: opacity 0.15s, background 0.15s;
+}
+
+.btn-profile-update:hover:not(:disabled) {
+  background: var(--color-button-primary-hover);
+  opacity: 0.92;
+}
+.btn-profile-update:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
+/* ── Minimal-Markdown rendered body ───────────────────────────────────── */
+.profile-markdown {
+  font-size: 13.5px;
+  line-height: 1.65;
+  color: var(--color-text-primary);
+}
+
+.profile-markdown h1,
+.profile-markdown h2,
+.profile-markdown h3 {
+  margin: 14px 0 8px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.profile-markdown h1 { font-size: 18px; }
+.profile-markdown h2 { font-size: 15px; }
+.profile-markdown h3 { font-size: 13.5px; }
+
+.profile-markdown p {
+  margin: 8px 0;
+}
+
+.profile-markdown ul,
+.profile-markdown ol {
+  margin: 6px 0 10px 20px;
+  padding: 0;
+}
+
+.profile-markdown li {
+  margin: 3px 0;
+}
+
+.profile-markdown code {
+  background: var(--color-bg-hover);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+}
+
+.profile-markdown strong { font-weight: 600; }
+.profile-markdown em     { font-style: italic; }
+
+/* ── Memories list (cards) ───────────────────────────────────────────── */
+.memories-summary {
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.btn-memories-mini {
+  padding: 4px 10px;
+  border-radius: 5px;
+  border: 1px solid var(--color-border-primary);
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.btn-memories-mini:hover {
+  border-color: var(--color-text-muted);
+  color: var(--color-text-primary);
+}
+
+#memories-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.memory-card {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--color-border-primary);
+  border-radius: 8px;
+  background: var(--color-bg-secondary);
+  transition: border-color 0.15s;
+  overflow: hidden;
+}
+
+.memory-card:hover { border-color: var(--color-text-muted); }
+
+.memory-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+}
+
+.memory-card-info {
+  flex: 1;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.memory-card-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  margin-bottom: 3px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.memory-card-desc {
+  font-size: 12px;
+  color: var(--color-text-muted);
+  margin-bottom: 6px;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.memory-card-meta {
+  display: flex;
+  gap: 10px;
+  font-size: 11px;
+  color: var(--color-text-muted);
+  flex-wrap: wrap;
+}
+
+.memory-filename {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+.memory-card-actions {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+/* Shared base for per-card buttons. */
+.btn-memory-curate,
+.btn-memory-delete,
+.btn-memory-expand {
+  padding: 5px 10px;
+  border-radius: 5px;
+  border: 1px solid var(--color-border-primary);
+  background: transparent;
+  color: var(--color-text-primary);
+  font-size: 11px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.btn-memory-curate:hover {
+  border-color: var(--color-text-primary);
+  background: var(--color-bg-hover);
+}
+
+.btn-memory-delete {
+  color: var(--color-text-primary);
+}
+.btn-memory-delete:hover {
+  border-color: var(--color-error);
+  color: var(--color-error);
+  background: var(--color-error-bg);
+}
+
+.btn-memory-expand {
+  min-width: 28px;
+  justify-content: center;
+  color: var(--color-text-muted);
+}
+
+.btn-memory-expand:hover { color: var(--color-text-primary); }
+.btn-memory-expand.expanded svg { transform: rotate(180deg); }
+.btn-memory-expand svg           { transition: transform 0.2s; }
+
+.memory-card-body {
+  padding: 4px 16px 14px 16px;
+  border-top: 1px solid var(--color-border-primary);
+  background: var(--color-bg-secondary);
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--color-text-primary);
+}
+
+.memory-card-body h1,
+.memory-card-body h2,
+.memory-card-body h3 {
+  margin: 10px 0 6px;
+  font-weight: 600;
+}
+
+.memory-card-body p  { margin: 6px 0; }
+.memory-card-body ul,
+.memory-card-body ol { margin: 4px 0 8px 20px; padding: 0; }
+.memory-card-body li { margin: 2px 0; }
+.memory-card-body code {
+  background: var(--color-bg-hover);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+}
+
+.memory-card-loading {
+  padding: 10px 0;
+  text-align: center;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  font-style: italic;
+}
+
+
 /* ── Mobile responsive (≤768px) ─────────────────────────────────────────── */
 @media (max-width: 768px) {
   /* Sidebar becomes a fixed drawer on top of content */
@@ -6441,6 +6829,16 @@ body.setup-mode[data-theme="dark"] {
     flex-wrap: wrap;
     gap: 6px;
   }
+
+  /* ── Profile / My Data page ── */
+  #profile-body            { padding: 16px 14px; }
+  .profile-tab             { padding: 9px 12px; font-size: 12px; }
+  .profile-section-head    { flex-wrap: wrap; }
+  .profile-path            { max-width: 100%; }
+  .memory-card-head        { flex-wrap: wrap; }
+  .memory-card-actions     { margin-top: 6px; flex-wrap: wrap; }
+  .btn-memory-curate span,
+  .btn-memory-delete span  { display: none; }  /* icon-only on narrow screens */
 }
 
 
@@ -6817,5 +7215,181 @@ body.setup-mode[data-theme="dark"] {
   border: 1px solid rgba(250, 173, 20, 0.3);
 }
 [data-theme="dark"] .creator-notice-warn { color: #f5c842; }
+
+/* ── Trash panel · Recently Deleted ────────────────────────────────── */
+.trash-summary {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  margin-right: auto;
+}
+.trash-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+.btn-trash-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  padding: 4px 8px;
+  border-radius: 5px;
+  border: 1px solid var(--color-border-primary);
+  background: var(--color-bg-secondary);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: all .15s;
+}
+.btn-trash-action:hover:not(:disabled) {
+  background: var(--color-bg-hover, rgba(127,127,127,.08));
+  border-color: var(--color-text-muted);
+  color: var(--color-text-primary);
+}
+.btn-trash-action:disabled {
+  opacity: .4;
+  cursor: not-allowed;
+}
+.btn-trash-danger:hover:not(:disabled) {
+  color: var(--color-error, #ef4444);
+  border-color: var(--color-error, #ef4444);
+}
+
+/* Trash card — standalone layout matching channel card tone */
+.trash-card {
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border-primary);
+  border-radius: 10px;
+  padding: 12px 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  transition: border-color .15s, background .15s;
+}
+.trash-card:hover {
+  border-color: var(--color-text-muted);
+}
+.trash-card-info {
+  flex: 1;
+  min-width: 0;
+}
+.trash-card-title {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-bottom: 4px;
+}
+.trash-card-path {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 11px;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl;    /* keep the right side (filename) visible when truncating */
+  text-align: left;
+  margin-bottom: 4px;
+}
+.trash-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+.trash-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.trash-project {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--color-text-muted);
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.trash-missing {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  color: var(--color-warning, #d97706);
+  background: rgba(217, 119, 6, .1);
+  border: 1px solid rgba(217, 119, 6, .3);
+}
+
+.btn-trash-restore,
+.btn-trash-delete {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  padding: 5px 9px;
+  border-radius: 5px;
+  border: 1px solid var(--color-border-primary);
+  background: var(--color-bg-tertiary, var(--color-bg-primary));
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: all .15s;
+}
+.btn-trash-restore:hover:not(:disabled) {
+  background: var(--color-bg-hover, rgba(127,127,127,.08));
+  color: var(--color-success, #10b981);
+  border-color: var(--color-success, #10b981);
+}
+.btn-trash-delete {
+  padding: 5px 8px;
+}
+.btn-trash-delete:hover:not(:disabled) {
+  color: var(--color-error, #ef4444);
+  border-color: var(--color-error, #ef4444);
+}
+.btn-trash-restore:disabled,
+.btn-trash-delete:disabled {
+  opacity: .5;
+  cursor: not-allowed;
+}
+
+/* Trash panel — matches Channels layout for visual consistency */
+#trash-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+#trash-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 28px 36px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+.trash-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border: 1px solid var(--color-border-primary);
+  border-radius: 10px;
+  background: var(--color-bg-secondary);
+}
+#trash-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
 
 

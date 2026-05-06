@@ -17,6 +17,13 @@ module Clacky
     #   { "<model_name>" => { "<cap>" => bool, ... } }. Use this when a
     #   single provider hosts models with different capabilities (e.g.
     #   openclacky hosts both vision-capable Claude and text-only DeepSeek).
+    # - model_api_overrides (optional): per-model API-type override map,
+    #   { <Regexp|String> => "anthropic-messages" | "openai-completions" | ... }.
+    #   Keys can be a plain model name or a Regexp matched against the model.
+    #   The first key that matches wins; if none match, the provider's top-level
+    #   "api" is used. Used so e.g. OpenRouter can keep "openai-responses" as
+    #   its default while routing Claude models through the native Anthropic
+    #   endpoint (which preserves cache_control fidelity).
     PRESETS = {
       "openclacky" => {
         "name" => "OpenClacky",
@@ -74,6 +81,19 @@ module Clacky
         "api" => "openai-responses",
         "default_model" => "anthropic/claude-sonnet-4-6",
         "models" => [],  # Dynamic - fetched from API
+        # Per-model API type overrides. Matched by Regexp against the model name.
+        # Why this exists: OpenRouter proxies Claude via both its OpenAI-compatible
+        # /chat/completions endpoint AND a native Anthropic /v1/messages endpoint.
+        # The OpenAI shim is lossy for Claude's cache_control semantics — prefix
+        # rewrites inside the proxy cause ~10% prompt-cache misses. Pinning
+        # "anthropic/*" (and any direct "claude-*" alias) to the native Anthropic
+        # endpoint preserves cache_control byte-for-byte and matches what Claude
+        # Code CLI does internally. Non-Claude models (Gemini, GPT, etc.) keep
+        # the OpenAI shim — that's what OpenRouter documents as their primary.
+        "model_api_overrides" => {
+          /\Aanthropic\// => "anthropic-messages",
+          /\Aclaude[-.]/  => "anthropic-messages"
+        }.freeze,
         "website_url" => "https://openrouter.ai/keys"
       }.freeze,
 
@@ -218,6 +238,30 @@ module Clacky
           "glm-5v-turbo" => { "vision" => true }.freeze
         }.freeze,
         "website_url" => "https://open.bigmodel.cn/usercenter/apikeys"
+      }.freeze,
+
+      "openai" => {
+        "name" => "OpenAI (GPT)",
+        "base_url" => "https://api.openai.com/v1",
+        "api" => "openai-completions",
+        "default_model" => "gpt-5.5",
+        "models" => [
+          "gpt-5.5",
+          "gpt-5.4",
+          "gpt-5.4-mini",
+          "gpt-5.4-nano",
+          "o4-mini",
+          "o3"
+        ],
+        # GPT-5.x and o-series models are multimodal (text + image input).
+        "capabilities" => { "vision" => true }.freeze,
+        # Per-primary lite pairing: subagents use mini/nano for cheap/fast work.
+        # o4-mini and o3 are reasoning models without a lite-tier sibling here.
+        "lite_models" => {
+          "gpt-5.5" => "gpt-5.4-mini",
+          "gpt-5.4" => "gpt-5.4-mini"
+        },
+        "website_url" => "https://platform.openai.com/api-keys"
       }.freeze
 
     }.freeze
@@ -259,6 +303,51 @@ module Clacky
       def api_type(provider_id)
         preset = PRESETS[provider_id]
         preset&.dig("api")
+      end
+
+      # Resolve the API type for a specific provider+model pair.
+      #
+      # Resolution order:
+      #   1. PRESETS[provider_id]["model_api_overrides"] — first key (String or
+      #      Regexp) that matches the model name wins.
+      #   2. PRESETS[provider_id]["api"] — the provider-wide default.
+      #   3. nil — unknown provider.
+      #
+      # Use this instead of api_type when you need the precise transport for a
+      # given model (e.g. routing OpenRouter's Claude requests to the native
+      # /v1/messages endpoint to preserve prompt-cache fidelity).
+      #
+      # @param provider_id [String] The provider identifier
+      # @param model_name [String, nil] The specific model name
+      # @return [String, nil] The API type (e.g. "anthropic-messages")
+      def api_type_for_model(provider_id, model_name)
+        preset = PRESETS[provider_id]
+        return nil unless preset
+
+        overrides = preset["model_api_overrides"]
+        if overrides.is_a?(Hash) && model_name
+          name = model_name.to_s
+          matched = overrides.find do |pattern, _api|
+            case pattern
+            when Regexp then pattern.match?(name)
+            when String then pattern == name
+            else false
+            end
+          end
+          return matched[1] if matched
+        end
+
+        preset["api"]
+      end
+
+      # Returns true when the provider+model should be talked to using the
+      # native Anthropic /v1/messages format. This is the single source of
+      # truth for deciding anthropic_format at Client construction time.
+      # @param provider_id [String] The provider identifier
+      # @param model_name [String, nil] The specific model name
+      # @return [Boolean]
+      def anthropic_format_for_model?(provider_id, model_name)
+        api_type_for_model(provider_id, model_name) == "anthropic-messages"
       end
 
       # List all available provider IDs

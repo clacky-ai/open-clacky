@@ -598,7 +598,7 @@ module Clacky
 
           @progress_stack.push(handle)
           entry_id = append_output(render_for(handle))
-          update_sessionbar(status: 'working') if handle.style == :primary
+          recompute_sessionbar_status
           entry_id
         end
       end
@@ -625,13 +625,12 @@ module Clacky
           if (restored = @progress_stack.last)
             new_id = append_output(render_for(restored))
             restored.__reattach_entry!(new_id)
-          else
-            # No more progress handles — clear the "working" sessionbar.
-            # We only flip to idle if the handle that just finished was
-            # the one that brought us to working (style :primary). A quiet
-            # handle finishing never touches the sessionbar.
-            update_sessionbar(status: 'idle') if handle.style == :primary
           end
+
+          # Recompute sessionbar status from whatever remains on the stack.
+          # This handles: (a) empty stack → idle, (b) mixed stack (e.g. a
+          # long-running quiet tool still active underneath) → working.
+          recompute_sessionbar_status
         end
       end
 
@@ -654,6 +653,11 @@ module Clacky
             @renderer.render_working(decorated) :
             @renderer.render_progress(decorated)
           update_entry(handle.entry_id, painted)
+
+          # Re-evaluate sessionbar: a quiet handle that crosses the fast-finish
+          # threshold should upgrade the status bar to "working" so long-running
+          # tools (terminal running a build, web_fetch) visibly reflect activity.
+          recompute_sessionbar_status
         end
       end
 
@@ -670,6 +674,41 @@ module Clacky
         handle.style == :primary ?
           @renderer.render_working(decorated) :
           @renderer.render_progress(decorated)
+      end
+
+      # Derive the sessionbar workspace status from the live progress stack.
+      #
+      # Rules:
+      #   - Any :primary handle alive  → "working" (fast path for LLM thinking)
+      #   - Any :quiet handle that has been alive longer than
+      #     FAST_FINISH_THRESHOLD_SECONDS → "working" (so long tools like
+      #     `terminal` running a build or test suite correctly flip the bar
+      #     to working instead of staying on "idle" for minutes)
+      #   - Otherwise → "idle"
+      #
+      # Must be called with @progress_mutex held. Emits update_sessionbar
+      # only when the computed status differs from the last one we wrote,
+      # avoiding pointless re-renders on every tick.
+      private def recompute_sessionbar_status
+        new_status = compute_sessionbar_status
+        return if @last_sessionbar_status == new_status
+        @last_sessionbar_status = new_status
+        update_sessionbar(status: new_status)
+      end
+
+      private def compute_sessionbar_status
+        return 'idle' if @progress_stack.empty?
+
+        threshold = ProgressHandle::FAST_FINISH_THRESHOLD_SECONDS
+        now       = Time.now
+        @progress_stack.each do |h|
+          return 'working' if h.style == :primary
+          # Quiet handles only "count" once they've been alive long enough
+          # that a user would naturally expect a busy indicator.
+          start = h.start_time
+          return 'working' if start && (now - start) >= threshold
+        end
+        'idle'
       end
 
       # ---------------------------------------------------------------------
@@ -783,6 +822,7 @@ module Clacky
         close_leaked_legacy_progress_handles
 
         update_sessionbar(status: 'idle')
+        @last_sessionbar_status = 'idle'
         # Clear user tip when agent stops working
         @input_area.clear_user_tip
         @layout.render_input

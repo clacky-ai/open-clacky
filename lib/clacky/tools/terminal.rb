@@ -5,6 +5,7 @@ require "securerandom"
 require "fileutils"
 require_relative "base"
 require_relative "security"
+require_relative "../utils/trash_directory"
 require_relative "terminal/session_manager"
 require_relative "terminal/output_cleaner"
 require_relative "terminal/persistent_session"
@@ -52,9 +53,12 @@ module Clacky
     # Every new `command` is routed through Clacky::Tools::Security before
     # being handed to the shell. This:
     #   - Blocks sudo / pkill clacky / eval / curl|bash / etc.
-    #   - Rewrites `rm` into `mv <trash>` so deletions are recoverable.
     #   - Rewrites `curl ... | bash` into "download & review".
     #   - Protects Gemfile / .env / .ssh / etc. from writes.
+    # `rm` is additionally intercepted at runtime by a shell function
+    # installed in each PTY session (see SAFE_RM_BASH): it moves files
+    # into the per-project trash at $CLACKY_TRASH_DIR instead of
+    # deleting them. See trash_manager for list/restore.
     # `input` is NOT subject to these rules (it is a reply to an already-
     # running program, not a fresh command).
     class Terminal < Base
@@ -69,6 +73,8 @@ module Clacky
           {session_id, kill:true}         stop
 
         Response: exit_code = done; session_id = running (state: waiting/background/timeout).
+        If output exceeds the limit, `output` is truncated and `full_output_file` points
+        at a file on disk — use terminal(command: "grep ... <path>") to search it.
         input supports byte escapes: \x03 Ctrl-C, \x04 Ctrl-D, \t Tab, \x1b Esc.
       DESC
       self.tool_category = "system"
@@ -86,7 +92,23 @@ module Clacky
         }
       }
 
-      MAX_LLM_OUTPUT_CHARS = 8_000
+      # Hard ceiling on the raw `output:` string we send back to the LLM.
+      # 4000 chars ≈ 1000 tokens — matches the value the legacy safe_shell
+      # tool used, which was empirically tuned to keep tool-call turns cheap.
+      # When real output exceeds this we SPILL the full cleaned text to a
+      # dedicated overflow file and only return the first portion — see
+      # OVERFLOW_PREVIEW_CHARS / spill_overflow_file below.
+      MAX_LLM_OUTPUT_CHARS = 4_000
+      # When output overflows, the preview we keep in-context is slightly
+      # shorter than the hard ceiling so the "full output at: /tmp/..."
+      # notice + path still fits under MAX_LLM_OUTPUT_CHARS.
+      OVERFLOW_PREVIEW_CHARS = 3_800
+      # Per-line cap applied at write-time (inside the cleaning pipeline).
+      # Prevents a single minified JSON / CSS / JS blob from eating the
+      # entire 4 KB budget in one go. 500 chars is long enough to preserve
+      # real error messages (including stack frames) but short enough to
+      # survive dozens of lines inside 4 KB.
+      MAX_LINE_CHARS = 500
       # Max seconds we keep a single tool call blocked inside the shell.
       # Raised from 15s → 60s so long-running installs/builds (bundle install,
       # gem install, npm install, docker build, rails new, ...) produce far
@@ -95,23 +117,99 @@ module Clacky
       DEFAULT_TIMEOUT = 60
       # How long output must be quiet before we assume the foreground command
       # is waiting for user input and return control to the LLM.
-      # Raised from 500ms → 3000ms: real shell prompts stay quiet forever
-      # (so 3s is still instant for them), but long builds have frequent
-      # sub-second quiet windows between phases — a small idle threshold
-      # shredded those runs into 20+ polls for no real benefit.
-      DEFAULT_IDLE_MS = 3_000
+      # Raised from 500ms → 3000ms → 10_000ms: real shell prompts (sudo,
+      # REPL, [Y/n] confirmations) stay quiet forever, so 10s still feels
+      # instant for them; long builds / test runs frequently have multi-
+      # second gaps between phases (compilation ↔ linking, spec file
+      # transitions), and anything below 10s split those into multiple
+      # polls — each poll replays the whole LLM context, which is expensive.
+      DEFAULT_IDLE_MS = 10_000
       # Background commands collect this many seconds of startup output so
       # the agent can see crashes / readiness before getting the session_id.
       BACKGROUND_COLLECT_SECONDS = 2
       # Sentinel: when passed as idle_ms, disables idle early-return.
       DISABLED_IDLE_MS = 10_000_000
 
+      # Commands that we know take a long time and produce bursty output
+      # (quiet gaps between test files, compile phases, download batches,
+      # etc.). When the command line STARTS WITH or CONTAINS any of these
+      # tokens, we auto-extend the timeout to SLOW_COMMAND_TIMEOUT and
+      # disable idle-return entirely — otherwise the LLM ends up polling
+      # the same long-running job 5-10x, replaying full context each time.
+      # Taken verbatim from the legacy shell.rb list.
+      SLOW_COMMAND_PATTERNS = [
+        "bundle install",
+        "bundle update",
+        "bundle exec rspec",
+        "npm install",
+        "npm run build",
+        "npm run test",
+        "yarn install",
+        "yarn build",
+        "pnpm install",
+        "pnpm build",
+        "rspec",
+        "rake test",
+        "rails test",
+        "cargo build",
+        "cargo test",
+        "go build",
+        "go test",
+        "mvn test",
+        "mvn package",
+        "gradle build",
+        "pytest",
+        "pip install",
+        "docker build",
+        "docker-compose build"
+      ].freeze
+      # Timeout granted to commands matched by SLOW_COMMAND_PATTERNS.
+      # 180s matches the legacy safe_shell "hard_timeout" for slow commands.
+      SLOW_COMMAND_TIMEOUT = 180
+
+      # Absolute path to the safe-rm shell snippet shipped with the gem.
+      # Sourced by every interactive PTY session to install a `rm` shell
+      # function that moves files to $CLACKY_TRASH_DIR instead of
+      # deleting them.
+      #
+      # Why source-from-file instead of writing the function body into
+      # the PTY directly?
+      #   Writing a multi-line function definition into `zsh -l -i` is
+      #   unreliable — ZLE (Zsh Line Editor) treats multi-line input as
+      #   interactive editing and garbles the body. Loading from a file
+      #   via a single `source` line avoids ZLE entirely.
+      #
+      # Why a shell function (instead of a Ruby-side text rewrite)?
+      #   A function defers parsing to the shell itself, so heredocs,
+      #   multi-line commands, globs, and variable expansion are all
+      #   handled correctly. The previous Ruby rewriter mis-parsed any
+      #   command containing a heredoc body with "rm" in it.
+      #
+      # Coverage:
+      #   Intercepts  — direct `rm …` in the interactive shell (incl.
+      #                 multi-line, heredoc, glob, env-var expansion).
+      #   Bypassed by — `command rm`, `/bin/rm`, `xargs rm`, `find -exec rm`,
+      #                 child scripts. Same coverage as the old rewriter.
+      SAFE_RM_PATH = File.expand_path("terminal/safe_rm.sh", __dir__).freeze
       # ---------------------------------------------------------------------
       # Public entrypoint — dispatches on parameter shape
       # ---------------------------------------------------------------------
       def execute(command: nil, session_id: nil, input: nil, background: false,
                   cwd: nil, env: nil, timeout: nil, kill: nil, idle_ms: nil,
                   working_dir: nil, **_ignored)
+        # Auto-tune: if the caller didn't explicitly set a timeout/idle_ms
+        # AND the command is a well-known long-runner (rspec, bundle install,
+        # cargo build, etc.), we stretch the budget AND disable idle-return.
+        # This collapses what would otherwise be 5-10 "is it still running?"
+        # LLM round-trips into a single synchronous call. Background flag and
+        # session-continuation calls are NOT auto-tuned — background already
+        # returns quickly by design, and continuing a session uses whatever
+        # budget the caller requests.
+        if command && !background && !session_id && slow_command?(command)
+          timeout ||= SLOW_COMMAND_TIMEOUT
+          idle_ms ||= DISABLED_IDLE_MS
+        end
+
         timeout = (timeout || DEFAULT_TIMEOUT).to_i
         idle_ms = (idle_ms || DEFAULT_IDLE_MS).to_i
         cwd ||= working_dir
@@ -347,16 +445,37 @@ module Clacky
         cleaned = OutputCleaner.clean(raw)
         cleaned = cleaned.sub(session.marker_regex, "").rstrip if session.marker_regex
         cleaned = strip_command_echo(cleaned, marker_token: session.marker_token)
+        # Per-line cap first: one minified JSON blob shouldn't blow the
+        # whole 4 KB budget. MUST run before overflow spill so the file
+        # on disk also has the long lines shortened (otherwise grep-ing
+        # the spill file returns thousand-char lines the LLM chokes on).
+        cleaned = truncate_long_lines(cleaned)
         truncated = false
+        overflow_file = nil
+        total_chars = cleaned.bytesize
         if cleaned.bytesize > MAX_LLM_OUTPUT_CHARS
+          # Spill the FULL cleaned output to a sidecar file before we chop,
+          # so the LLM can cat/grep/tail it in a follow-up tool call.
+          overflow_file = spill_overflow_file(cleaned, session_id: session.id)
+
           # byteslice may cut through the middle of a multi-byte char, which
           # leaves the result as invalid UTF-8. Re-scrub after truncation so
           # everything downstream (JSON.generate, format_result, UI) gets a
           # guaranteed-valid UTF-8 string.
-          cleaned = cleaned.byteslice(0, MAX_LLM_OUTPUT_CHARS)
-          cleaned.force_encoding(Encoding::UTF_8)
-          cleaned = cleaned.scrub("?") unless cleaned.valid_encoding?
-          cleaned += "\n...[output truncated]"
+          preview = cleaned.byteslice(0, OVERFLOW_PREVIEW_CHARS)
+          preview.force_encoding(Encoding::UTF_8)
+          preview = preview.scrub("?") unless preview.valid_encoding?
+
+          notice = if overflow_file
+            "\n\n...[Output truncated for LLM: showing first #{OVERFLOW_PREVIEW_CHARS} " \
+              "of #{total_chars} chars. Full output saved to: #{overflow_file} — " \
+              "use `grep`, `head`, or `tail` on this path to search the rest.]"
+          else
+            "\n\n...[output truncated at #{OVERFLOW_PREVIEW_CHARS} chars " \
+              "(overflow file unavailable; total was #{total_chars} chars)]"
+          end
+
+          cleaned = preview + notice
           truncated = true
         end
         SessionManager.advance_offset(session.id, new_offset)
@@ -370,7 +489,8 @@ module Clacky
           if persistent && state == :matched && session_healthy?(session)
             # Command finished cleanly — return the shell to the pool so
             # the next call reuses it (no cold-start cost).
-            PersistentSessionPool.instance.release(session)
+            stored = PersistentSessionPool.instance.release(session)
+            cleanup_session(session) unless stored
           else
             cleanup_session(session)
           end
@@ -379,6 +499,7 @@ module Clacky
             exit_code: exit_code,
             bytes_read: new_offset - start_offset,
             output_truncated: truncated,
+            full_output_file: overflow_file,
             security_rewrite: rewrite_note
           }.compact
         when :idle, :timeout
@@ -393,6 +514,7 @@ module Clacky
             state: background ? "background" : (state == :idle ? "waiting" : "timeout"),
             bytes_read: new_offset - start_offset,
             output_truncated: truncated,
+            full_output_file: overflow_file,
             security_rewrite: rewrite_note,
             hint: background_hint(background, session.id)
           }.compact
@@ -623,6 +745,16 @@ module Clacky
 
       # Core spawn: PTY + reader thread + marker install.
       private def spawn_shell(args:, shell_name:, command:, cwd:, env:)
+        # Per-project trash dir — the rm shell-function (see SAFE_RM_BASH
+        # and install_marker) reads this env var to know where to move
+        # deleted files.
+        trash_dir =
+          begin
+            Clacky::TrashDirectory.new(cwd || Dir.pwd).trash_dir
+          rescue StandardError
+            nil
+          end
+
         spawn_env = {
           "TERM" => "xterm-256color",
           "PS1"  => "",
@@ -640,6 +772,7 @@ module Clacky
           "HISTSIZE" => "0",
           "SAVEHIST" => "0"
         }
+        spawn_env["CLACKY_TRASH_DIR"] = trash_dir if trash_dir
         (env || {}).each { |k, v| spawn_env[k.to_s] = v.to_s }
 
         log_file = SessionManager.allocate_log_file
@@ -760,8 +893,17 @@ module Clacky
         #   2. stty -echo stops the PTY from echoing our wrapper lines
         #      back into captured output.
         #   3. Empty PS1/PS2 keeps prompt noise out of captured output.
-        setup_line = %Q{HISTFILE=/dev/null; HISTSIZE=0; SAVEHIST=0; unset HISTFILE 2>/dev/null; stty -echo 2>/dev/null; PS1=""; PS2=""\n}
+        setup_line = %Q{HISTFILE=/dev/null; HISTSIZE=0; SAVEHIST=0; unset HISTFILE 2>/dev/null; set +o histexpand 2>/dev/null; stty -echo 2>/dev/null; PS1=""; PS2=""\n}
         session.mutex.synchronize { session.writer.write(setup_line) }
+
+        # Install the safe-rm shell function. Single-line `source`
+        # avoids feeding a multi-line function definition through ZLE
+        # (which would garble it under zsh -l -i). The file itself
+        # ships with the gem — see SAFE_RM_PATH.
+        if File.exist?(SAFE_RM_PATH)
+          source_line = %Q{source #{SAFE_RM_PATH} 2>/dev/null || true\n}
+          session.mutex.synchronize { session.writer.write(source_line) }
+        end
 
         # Emit the first marker by running a no-op through the same wrapper
         # we use for real commands. spawn_shell's read_until_marker will
@@ -1001,9 +1143,106 @@ module Clacky
         ""
       end
 
-      # ---------------------------------------------------------------------
-      # Display helpers
-      # ---------------------------------------------------------------------
+      # Detect commands that are known to take a long time and produce
+      # bursty output with multi-second quiet gaps. Used by `execute` to
+      # auto-widen the timeout / disable idle-return so the LLM doesn't
+      # poll a rspec/bundle-install 10 times over.
+      #
+      # Matching is substring-based after stripping common prefixes
+      # (`sudo `, `env VAR=val `, `cd path && ...`) so that wrapping the
+      # real slow command in another shell construct still hits.
+      private def slow_command?(command)
+        return false if command.nil? || command.empty?
+        s = command.to_s
+
+        # Strip leading `cd ... && ` / `cd ...;` — users / the agent often
+        # prepend a cd to the real command.
+        s = s.sub(/\Acd\s+\S+\s*(?:&&|;)\s*/, "")
+        # Strip leading env-var assignments: `FOO=bar BAZ=qux cmd`.
+        s = s.sub(/\A(?:[A-Za-z_][A-Za-z0-9_]*=\S+\s+)+/, "")
+        # Strip leading `sudo ` (not actually allowed by Security, but harmless).
+        s = s.sub(/\Asudo\s+/, "")
+        # Trim leading whitespace.
+        s = s.lstrip
+
+        SLOW_COMMAND_PATTERNS.any? { |pat| s.include?(pat) }
+      end
+
+      # Apply per-line truncation to a cleaned (post-OutputCleaner) string.
+      # If any single line exceeds MAX_LINE_CHARS, we chop it at that length
+      # and append `…[line truncated: <original> chars]` so the LLM knows
+      # content was elided. Critical for minified JS/CSS/JSON dumps that
+      # would otherwise swallow the entire 4 KB budget with one line.
+      private def truncate_long_lines(text, max: MAX_LINE_CHARS)
+        return text if text.nil? || text.empty?
+        lines = text.split("\n", -1)
+        any_truncated = false
+        truncated_lines = lines.map do |line|
+          if line.bytesize > max
+            any_truncated = true
+            sliced = line.byteslice(0, max).to_s
+            sliced.force_encoding(Encoding::UTF_8)
+            sliced = sliced.scrub("?") unless sliced.valid_encoding?
+            "#{sliced} …[line truncated: #{line.bytesize} chars]"
+          else
+            line
+          end
+        end
+        return text unless any_truncated
+        truncated_lines.join("\n")
+      end
+
+      # Overflow directory: shared across sessions (and persists after
+      # Clacky exits) so the LLM can re-read the full output in later
+      # turns. Lives under /tmp so it is naturally swept by the OS, and
+      # we also best-effort prune files older than OVERFLOW_MAX_AGE_SEC
+      # on each write so long-running servers don't accumulate garbage.
+      OVERFLOW_DIR_NAME = "clacky-terminal-overflow"
+      OVERFLOW_MAX_AGE_SEC = 7 * 24 * 60 * 60 # 7 days
+
+      private def overflow_dir
+        @overflow_dir ||= begin
+          dir = File.join(Dir.tmpdir, OVERFLOW_DIR_NAME)
+          FileUtils.mkdir_p(dir)
+          dir
+        end
+      end
+
+      # Drop overflow files older than OVERFLOW_MAX_AGE_SEC. Best-effort —
+      # any error (permission, race with another process) is swallowed,
+      # we'd rather keep the current command's result than crash because
+      # of stale cleanup.
+      private def prune_old_overflow_files
+        cutoff = Time.now - OVERFLOW_MAX_AGE_SEC
+        Dir.glob(File.join(overflow_dir, "*.log")).each do |f|
+          next unless File.file?(f)
+          begin
+            File.delete(f) if File.mtime(f) < cutoff
+          rescue StandardError
+            # ignore
+          end
+        end
+      rescue StandardError
+        # ignore
+      end
+
+      # Write the full cleaned output to a sidecar file so the LLM can
+      # `grep` / `head` / `tail` it in a follow-up tool call. Returns the
+      # absolute path, or nil if the write failed (in which case we'll
+      # just truncate without disclosure).
+      private def spill_overflow_file(cleaned, session_id:)
+        prune_old_overflow_files
+        ts = Time.now.strftime("%Y%m%d-%H%M%S")
+        sid = session_id || "nosid"
+        rand = SecureRandom.hex(3)
+        path = File.join(overflow_dir, "#{ts}-s#{sid}-#{rand}.log")
+        File.open(path, "wb") { |f| f.write(cleaned) }
+        path
+      rescue StandardError
+        nil
+      end
+
+
 
       # Max visible length of a command inside the tool-call summary line.
       # Keeps the "terminal(...)" summary on a single UI row even when the
@@ -1076,6 +1315,14 @@ module Clacky
           end
 
         status = "#{prefix}#{status}" unless prefix.empty?
+
+        # When output overflowed, surface the file path in the UI too
+        # (not just in the LLM-facing `output`). Keeps the dev aware that
+        # the full log is recoverable.
+        if result[:full_output_file]
+          status = "#{status}  [full: #{result[:full_output_file]}]"
+        end
+
         tail.empty? ? status : "#{tail}\n#{status}"
       end
 

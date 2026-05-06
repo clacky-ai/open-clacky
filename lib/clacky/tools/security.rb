@@ -22,15 +22,22 @@ module Clacky
     #   1. Block hard-dangerous commands:       sudo, pkill clacky, eval, exec,
     #                                           `...`, $(...), | sh, | bash,
     #                                           redirect to /etc /usr /bin.
-    #   2. Rewrite `rm` → `mv <file> <trash>`   so the file is recoverable.
-    #   3. Rewrite `curl ... | bash` → save     script to a file for manual
+    #   2. Rewrite `curl ... | bash` → save     script to a file for manual
     #                                           review instead of exec.
-    #   4. Protect credential/secret files:     .env, .ssh/, .aws/ — block
+    #   3. Protect credential/secret files:     .env, .ssh/, .aws/ — block
     #                                           writes to these only. Other
     #                                           "project" files (Gemfile,
     #                                           README.md, package.json, …)
     #                                           are NOT protected — editing
     #                                           them is a normal dev task.
+    #
+    # Note on `rm`:
+    #   `rm` is NOT rewritten here — it's intercepted at runtime by a shell
+    #   function installed in each PTY session (see Terminal::SAFE_RM_BASH
+    #   and Terminal#install_marker). This lets the shell's own parser
+    #   handle heredocs / multi-line / globs / variables correctly. A
+    #   static Ruby-side rewrite cannot — it would mis-parse heredoc
+    #   bodies and destroy legitimate commands.
     #
     # Notes:
     #   - `cp`, `mv`, `mkdir`, `touch`, `echo` are allowed to touch ANY path
@@ -96,7 +103,6 @@ module Clacky
           @project_root = File.expand_path(project_root)
 
           trash_directory = Clacky::TrashDirectory.new(@project_root)
-          @trash_dir  = trash_directory.trash_dir
           @backup_dir = trash_directory.backup_dir
 
           @project_hash = trash_directory.generate_project_hash(@project_root)
@@ -114,12 +120,16 @@ module Clacky
           @safe_check_command = Clacky::Utils::Encoding.safe_check(command)
 
           case @safe_check_command
-          when /pkill.*clacky|killall.*clacky|kill\s+.*\bclacky\b/i
-            raise SecurityError, "Killing the clacky server process is not allowed. To restart, use: kill -USR1 $CLACKY_MASTER_PID"
-          when /clacky\s+server/
-            raise SecurityError, "Managing the clacky server from within a session is not allowed. To restart, use: kill -USR1 $CLACKY_MASTER_PID"
-          when /^rm\s+/
-            replace_rm_command(command)
+          # Block attempts to terminate the clacky server process.
+          # IMPORTANT: each verb is anchored with \b so substrings like
+          # "Skill" (contains "kill") or "Bill Killalina" don't trigger
+          # false positives. We also require `clacky` to appear as a whole
+          # word AND within a reasonable distance (same logical command,
+          # not hundreds of chars later in an unrelated echo string).
+          when /\bpkill\b[^\n;|&]{0,80}\bclacky\b|\bkillall\b[^\n;|&]{0,80}\bclacky\b|\bkill\s+(?:-\S+\s+)*[^\n;|&]{0,40}\bclacky\b/i
+            raise SecurityError, "Killing the clacky server process is not allowed. To restart, use: #{restart_hint}"
+          when /\bclacky\s+server\b/
+            raise SecurityError, "Managing the clacky server from within a session is not allowed. To restart, use: #{restart_hint}"
           when /^chmod\s+x/
             replace_chmod_command(command)
           when /^curl.*\|\s*(sh|bash)/
@@ -134,27 +144,6 @@ module Clacky
             validate_general_command(@safe_check_command)
             command
           end
-        end
-
-        def replace_rm_command(command)
-          files = parse_rm_files(command)
-          raise SecurityError, "No files specified for deletion" if files.empty?
-
-          commands = files.map do |file|
-            validate_file_path(file)
-
-            timestamp = Time.now.strftime("%Y%m%d_%H%M%S_%N")
-            safe_name = "#{File.basename(file)}_deleted_#{timestamp}"
-            trash_path = File.join(@trash_dir, safe_name)
-
-            create_delete_metadata(file, trash_path) if File.exist?(file)
-
-            "mv #{Shellwords.escape(file)} #{Shellwords.escape(trash_path)}"
-          end
-
-          result = commands.join(' && ')
-          log_replacement("rm", result, "Files moved to trash instead of permanent deletion")
-          result
         end
 
         def replace_chmod_command(command)
@@ -192,6 +181,22 @@ module Clacky
 
         def allow_dev_null_redirect(command)
           command
+        end
+
+        # Build a copy-pasteable "how to restart clacky server" hint.
+        # When running inside a clacky server worker, `CLACKY_MASTER_PID` is
+        # injected by ServerMaster (see server_master.rb). We keep the
+        # variable name in the hint (so the AI / user learns the standard
+        # convention) AND append the resolved PID in parentheses so it's
+        # immediately actionable. When the variable isn't set (e.g. one-shot
+        # CLI invocation), we just show the variable name.
+        def restart_hint
+          pid = ENV["CLACKY_MASTER_PID"].to_s
+          if pid =~ /\A\d+\z/
+            "kill -USR1 $CLACKY_MASTER_PID  (current master PID: #{pid})"
+          else
+            "kill -USR1 $CLACKY_MASTER_PID"
+          end
         end
 
         # Relaxed validator for mv / cp / mkdir / touch / echo.
@@ -258,16 +263,6 @@ module Clacky
           command
         end
 
-        def parse_rm_files(command)
-          begin
-            parts = Shellwords.split(command)
-          rescue ArgumentError
-            parts = command.split(/\s+/)
-          end
-
-          parts.drop(1).reject { |part| part.start_with?('-') }
-        end
-
         # Block writes that would clobber credentials / secrets.
         # These are the only paths truly dangerous to write to by accident:
         #   - ~/.ssh/*          (SSH private keys)
@@ -298,28 +293,10 @@ module Clacky
           end
         end
 
-        # Kept for `rm` handler — which rewrites rm → mv-to-trash. We still
-        # want to prevent accidentally trashing a secret file.
+        # Alias retained for readability — chmod handler validates that
+        # the target is not a credential/secret file.
         def validate_file_path(path)
           validate_secret_write(path)
-        end
-
-        def create_delete_metadata(original_path, trash_path)
-          metadata = {
-            original_path: File.expand_path(original_path),
-            project_root: @project_root,
-            trash_directory: File.dirname(trash_path),
-            deleted_at: Time.now.iso8601,
-            deleted_by: 'AI_Terminal',
-            file_size: File.size(original_path),
-            file_type: File.extname(original_path),
-            file_mode: File.stat(original_path).mode.to_s(8)
-          }
-
-          metadata_file = "#{trash_path}.metadata.json"
-          File.write(metadata_file, JSON.pretty_generate(metadata))
-        rescue StandardError => e
-          log_warning("Failed to create metadata for #{original_path}: #{e.message}")
         end
 
         def log_replacement(original, replacement, reason)
@@ -342,12 +319,13 @@ module Clacky
           # Logging must never break main functionality.
         end
 
-        private :replace_rm_command, :replace_chmod_command,
+        private :replace_chmod_command,
                 :replace_curl_pipe_command, :block_sudo_command,
                 :allow_dev_null_redirect, :validate_and_allow,
-                :validate_general_command, :parse_rm_files,
+                :validate_general_command,
                 :validate_file_path, :validate_secret_write,
-                :create_delete_metadata, :log_replacement,
+                :restart_hint,
+                :log_replacement,
                 :log_warning, :write_log
       end
     end

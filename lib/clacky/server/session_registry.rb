@@ -218,31 +218,62 @@ module Clacky
 
         ordered = pinned_section + non_pinned
 
-        ordered.map do |s|
-          id = s[:session_id]
-          ls = live[id]
-          {
-            id:            id,
-            name:          ls&.dig(:name) || s[:name] || "",
-            status:        ls ? ls[:status].to_s : "idle",
-            error:         ls ? ls[:error] : nil,
-            model:         ls&.dig(:model),
-            source:        s_source(s),
-            agent_profile: (s[:agent_profile] || "general").to_s,
-            working_dir:   s[:working_dir],
-            created_at:    s[:created_at],
-            updated_at:    s[:updated_at],
-            total_tasks:   ls&.dig(:total_tasks) || s.dig(:stats, :total_tasks) || 0,
-            total_cost:    ls&.dig(:total_cost)  || s.dig(:stats, :total_cost_usd) || 0.0,
-            cost_source:   (ls&.dig(:cost_source) || s.dig(:stats, :cost_source) || "estimated").to_s,
-            # latest_latency is in-memory only (live sessions) — not persisted
-            # at the session-level on disk. The on-disk source of truth is
-            # per-assistant-message `latency` fields in messages[]. Reloaded
-            # sessions start with nil and get populated on the next LLM call.
-            latest_latency: ls&.dig(:latest_latency),
-            pinned:        s[:pinned] || false,
-          }
+        ordered.map { |s| build_enriched_row(s, live[s[:session_id]]) }
+      end
+
+      # Return the same enriched hash that a `list` row would produce, for a
+      # single session — merging on-disk fields with in-memory live fields.
+      # Returns nil if the session is unknown on disk.
+      #
+      # This is the targeted, O(1) counterpart to `list` used by the WS layer
+      # when it only needs one row (e.g. pushing a fresh snapshot to a client
+      # that just (re)subscribed, or broadcasting a status-change update).
+      def snapshot(session_id)
+        return nil unless @session_manager
+        disk = @session_manager.load(session_id)
+        return nil unless disk
+
+        live = @mutex.synchronize do
+          s = @sessions[session_id]
+          next nil unless s
+          model_info = s[:agent]&.current_model_info
+          live_name  = s[:agent]&.name
+          live_name  = nil if live_name&.empty?
+          { status: s[:status], error: s[:error], model: model_info&.dig(:model),
+            name: live_name, total_tasks: s[:agent]&.total_tasks,
+            total_cost: s[:agent]&.total_cost, cost_source: s[:agent]&.cost_source,
+            latest_latency: s[:agent]&.latest_latency }
         end
+
+        build_enriched_row(disk, live)
+      end
+
+      # Merge a single disk-side session hash with the corresponding live
+      # in-memory agent fields (may be nil) into the row shape the frontend
+      # consumes.
+      private def build_enriched_row(s, ls)
+        id = s[:session_id]
+        {
+          id:            id,
+          name:          ls&.dig(:name) || s[:name] || "",
+          status:        ls ? ls[:status].to_s : "idle",
+          error:         ls ? ls[:error] : nil,
+          model:         ls&.dig(:model),
+          source:        s_source(s),
+          agent_profile: (s[:agent_profile] || "general").to_s,
+          working_dir:   s[:working_dir],
+          created_at:    s[:created_at],
+          updated_at:    s[:updated_at],
+          total_tasks:   ls&.dig(:total_tasks) || s.dig(:stats, :total_tasks) || 0,
+          total_cost:    ls&.dig(:total_cost)  || s.dig(:stats, :total_cost_usd) || 0.0,
+          cost_source:   (ls&.dig(:cost_source) || s.dig(:stats, :cost_source) || "estimated").to_s,
+          # latest_latency is in-memory only (live sessions) — not persisted
+          # at the session-level on disk. The on-disk source of truth is
+          # per-assistant-message `latency` fields in messages[]. Reloaded
+          # sessions start with nil and get populated on the next LLM call.
+          latest_latency: ls&.dig(:latest_latency),
+          pinned:        s[:pinned] || false,
+        }
       end
 
 

@@ -33,19 +33,83 @@ module Clacky
       }.freeze
 
       # Ensure ~/.clacky/parsers/ exists and all default parsers are present.
-      # Called once at startup.
+      # Called at Agent startup (idempotent — safe to run every time).
+      #
+      # Copies every file from default_parsers/ (not just the entry-point .rb
+      # scripts listed in PARSER_FOR). A parser may ship companion helper
+      # scripts — e.g. pdf_parser_ocr.py sits next to pdf_parser.rb and is
+      # invoked by relative path — so those helpers must be distributed too.
+      #
+      # Version upgrade policy:
+      #   Each bundled parser declares `VERSION: <n>` in a header comment
+      #   (works for Ruby `# VERSION: 2` and Python `# VERSION: 2` alike,
+      #   scanned in the first 40 lines of the file).
+      #
+      #   On startup, per-file:
+      #     - If the file does NOT exist in ~/.clacky/parsers/ → copy it.
+      #     - If it exists:
+      #         * bundled has no VERSION → never touch (bundled file
+      #           is opting out of managed upgrades).
+      #         * installed has no VERSION → treat it as legacy v0 and
+      #           upgrade (lenient mode — covers users who installed before
+      #           the VERSION scheme existed). The old file is backed up.
+      #         * both have VERSION, bundled > installed → upgrade, backing
+      #           up the old copy as `<script>.v<old>.bak`.
+      #         * bundled ≤ installed → leave the user's copy alone
+      #           (preserves LLM/user modifications).
+      #
+      #   Backups live alongside the parser so the user can inspect
+      #   their own edits after an upgrade. They are never removed
+      #   automatically.
       def self.setup!
         FileUtils.mkdir_p(PARSERS_DIR)
 
-        PARSER_FOR.values.uniq.each do |script|
-          dest = File.join(PARSERS_DIR, script)
-          next if File.exist?(dest)
+        Dir.glob(File.join(DEFAULT_PARSERS_DIR, "**", "*")).each do |src|
+          next unless File.file?(src)
+          basename = File.basename(src)
+          next if basename.start_with?(".") || basename.end_with?(".bak")
 
-          src = File.join(DEFAULT_PARSERS_DIR, script)
-          if File.exist?(src)
+          rel  = src.sub(/^#{Regexp.escape(DEFAULT_PARSERS_DIR)}\/?/, "")
+          dest = File.join(PARSERS_DIR, rel)
+
+          if !File.exist?(dest)
+            FileUtils.mkdir_p(File.dirname(dest))
             FileUtils.cp(src, dest)
+            # Preserve executable bit so sibling scripts can be run directly.
+            FileUtils.chmod(File.stat(src).mode, dest)
+            next
+          end
+
+          bundled_version = extract_version(src)
+          # Bundled file opts out of managed upgrades — never touch user copy.
+          next unless bundled_version
+
+          installed_version = extract_version(dest) || 0
+
+          if bundled_version > installed_version
+            backup = "#{dest}.v#{installed_version}.bak"
+            FileUtils.cp(dest, backup) unless File.exist?(backup)
+            FileUtils.cp(src, dest)
+            FileUtils.chmod(File.stat(src).mode, dest)
           end
         end
+      end
+
+      # Read the VERSION marker from a parser script (e.g. "# VERSION: 2").
+      # Works for any script language that uses `#` for comments
+      # (Ruby, Python, shell). Returns Integer or nil.
+      def self.extract_version(path)
+        return nil unless File.exist?(path)
+        # Only scan the first 40 lines — the marker lives in the header.
+        File.foreach(path).with_index do |line, i|
+          break if i >= 40
+          if (m = line.match(/^\s*#\s*VERSION:\s*(\d+)/i))
+            return m[1].to_i
+          end
+        end
+        nil
+      rescue StandardError
+        nil
       end
 
       # Run the appropriate parser for the given file path.

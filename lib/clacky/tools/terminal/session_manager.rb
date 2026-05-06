@@ -175,12 +175,17 @@ module Clacky
             end
           end
 
-          # Kill every live session. Called from at_exit.
+          # Kill every live session and close any open fds. Called from at_exit.
           def kill_all!
             (@sessions.values rescue []).each do |s|
-              next if s.status == "exited" || s.status == "killed"
-              Process.kill("KILL", s.pid) rescue nil
+              begin
+                Process.kill("KILL", s.pid) unless %w[exited killed].include?(s.status.to_s)
+              rescue StandardError
+                # ignore
+              end
               s.log_io&.close rescue nil
+              s.writer&.close rescue nil
+              s.reader&.close rescue nil
             end
           end
 

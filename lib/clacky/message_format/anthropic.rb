@@ -91,13 +91,53 @@ module Clacky
                         else data["stop_reason"]
                         end
 
+        # Anthropic native `input_tokens` counts ONLY the non-cached, freshly-billed
+        # input — cache_read_input_tokens and cache_creation_input_tokens are
+        # reported separately and are disjoint from input_tokens.
+        #
+        # Normalise to the codebase's canonical shape (OpenAI-style) so downstream
+        # (ModelPricing.calculate_cost, CostTracker, show_token_usage) stays
+        # provider-agnostic:
+        #
+        #   prompt_tokens     = non_cached + cache_read     (OpenAI convention:
+        #                                                    includes cache_read
+        #                                                    but NOT cache_write;
+        #                                                    ModelPricing does
+        #                                                    `regular_input = prompt_tokens - cache_read`.)
+        #   completion_tokens = output
+        #   total_tokens      = THIS TURN'S new compute volume
+        #                     = raw_input + cache_creation + output
+        #                       (cache_read is excluded because hits are ~free /
+        #                        already-paid-for; cache_creation IS new work this
+        #                        turn even though it's billed at write_rate.)
+        #   cache_read_input_tokens / cache_creation_input_tokens → independent fields
+        #
+        # total_tokens is purely presentational. CostTracker treats it as the
+        # per-iteration delta directly (no subtraction of previous_total), which
+        # is the correct reading when total_tokens already means "new work this
+        # turn" rather than "cumulative".
+        raw_input_tokens  = usage["input_tokens"].to_i
+        cache_read        = usage["cache_read_input_tokens"].to_i
+        cache_creation    = usage["cache_creation_input_tokens"].to_i
+        output_tokens     = usage["output_tokens"].to_i
+
+        prompt_tokens = raw_input_tokens + cache_read
+
         usage_data = {
-          prompt_tokens:      usage["input_tokens"],
-          completion_tokens:  usage["output_tokens"],
-          total_tokens:       usage["input_tokens"].to_i + usage["output_tokens"].to_i
+          prompt_tokens:      prompt_tokens,
+          completion_tokens:  output_tokens,
+          # Per-turn new compute: what the server freshly processed this request.
+          # Excludes cache_read (nearly free, already-paid-for).
+          total_tokens:       raw_input_tokens + cache_creation + output_tokens,
+          # Signal to CostTracker: total_tokens above is already the per-turn
+          # delta (not a running cumulative like OpenAI's). CostTracker should
+          # NOT subtract previous_total when this flag is truthy.
+          # OpenAI parse leaves this field unset; Bedrock may adopt the same
+          # convention in future if we normalise it there too.
+          total_is_per_turn: true
         }
-        usage_data[:cache_read_input_tokens]     = usage["cache_read_input_tokens"]     if usage["cache_read_input_tokens"]
-        usage_data[:cache_creation_input_tokens] = usage["cache_creation_input_tokens"] if usage["cache_creation_input_tokens"]
+        usage_data[:cache_read_input_tokens]     = cache_read     if cache_read     > 0
+        usage_data[:cache_creation_input_tokens] = cache_creation if cache_creation > 0
 
         { content: content, tool_calls: tool_calls, finish_reason: finish_reason,
           usage: usage_data, raw_api_usage: usage }
@@ -151,15 +191,39 @@ module Clacky
 
         # canonical tool result (role: "tool") → Anthropic user message with tool_result block
         if role == "tool"
+          # Strip any cache_control that Client#apply_message_caching may have
+          # embedded INSIDE msg[:content] (it wraps string content as
+          # [{type:"text", text:..., cache_control:{...}}]). We hoist that
+          # marker up to the tool_result block itself below — that's where
+          # Anthropic expects the marker for a tool_result turn.
+          #
+          # CRITICAL: if we leave cache_control on the inner text block, the
+          # tool_result.content shape flips between "string" and
+          # "[{text,cache_control}]" depending on whether this message is the
+          # current cache breakpoint — which mutates the cached prefix every
+          # turn and destroys cache_read hit-rate (the classic "cache_read
+          # stuck at tiny number" symptom).
+          hoisted_cache_control = nil
+          raw_content = msg[:content]
+          if raw_content.is_a?(Array) &&
+             raw_content.length == 1 &&
+             raw_content.first.is_a?(Hash) &&
+             raw_content.first[:type] == "text" &&
+             raw_content.first[:cache_control]
+            hoisted_cache_control = raw_content.first[:cache_control]
+            raw_content = raw_content.first[:text]
+          end
+
           # If content is an Array of canonical blocks (e.g. image_url + text from file_reader),
           # convert each block to Anthropic format via content_to_blocks.
           # Plain strings pass through unchanged.
-          tool_content = if msg[:content].is_a?(Array)
-                           content_to_blocks(msg[:content])
+          tool_content = if raw_content.is_a?(Array)
+                           content_to_blocks(raw_content)
                          else
-                           msg[:content]
+                           raw_content
                          end
           block = { type: "tool_result", tool_use_id: msg[:tool_call_id], content: tool_content }
+          block[:cache_control] = hoisted_cache_control if hoisted_cache_control
           return { role: "user", content: [block] }
         end
 

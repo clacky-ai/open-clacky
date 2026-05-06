@@ -12,14 +12,29 @@ module Clacky
       @api_key = api_key
       @base_url = base_url
       @model = model
-      @use_anthropic_format = anthropic_format
       # Detect Bedrock: ABSK key prefix (native AWS) or abs- model prefix (Clacky AI proxy)
       @use_bedrock = MessageFormat::Bedrock.bedrock_api_key?(api_key, model)
+
+      # Resolve provider once — reused for capability + api-type lookups.
+      provider_id = Providers.resolve_provider(base_url: @base_url, api_key: @api_key)
+
+      # Decide anthropic_format dynamically based on provider+model, falling
+      # back to the explicit constructor flag for unknown providers / custom
+      # base_urls. This lets e.g. OpenRouter's Claude models auto-route to the
+      # native /v1/messages endpoint (preserving cache_control byte-for-byte)
+      # without requiring any change to user YAML.
+      provider_prefers_anthropic = provider_id &&
+                                   Providers.anthropic_format_for_model?(provider_id, @model)
+      @use_anthropic_format = provider_prefers_anthropic || anthropic_format
+
+      # Remember the provider id so we can tune connection headers below
+      # (OpenRouter's /v1/messages accepts either Bearer or x-api-key, but
+      # some OpenRouter-compatible relays only honour Bearer — send both).
+      @provider_id = provider_id
 
       # Determine vision support once at construction time.
       # Non-vision models (DeepSeek, Kimi, MiniMax, etc.) reject image_url
       # content blocks; the conversion layer strips them when this is false.
-      provider_id = Providers.resolve_provider(base_url: @base_url, api_key: @api_key)
       @vision_supported = Providers.supports?(provider_id, :vision, model_name: @model)
     end
 
@@ -47,7 +62,7 @@ module Clacky
       elsif anthropic_format?
         minimal_body = { model: model, max_tokens: 16,
                          messages: [{ role: "user", content: "hi" }] }.to_json
-        response = anthropic_connection.post("v1/messages") { |r| r.body = minimal_body }
+        response = anthropic_connection.post(anthropic_messages_path) { |r| r.body = minimal_body }
       else
         minimal_body = { model: model, max_tokens: 16,
                          messages: [{ role: "user", content: "hi" }] }.to_json
@@ -77,7 +92,7 @@ module Clacky
         parse_simple_bedrock_response(response)
       elsif anthropic_format?
         body     = MessageFormat::Anthropic.build_request_body(messages, model, [], max_tokens, false)
-        response = anthropic_connection.post("v1/messages") { |r| r.body = body.to_json }
+        response = anthropic_connection.post(anthropic_messages_path) { |r| r.body = body.to_json }
         parse_simple_anthropic_response(response)
       else
         body     = { model: model, max_tokens: max_tokens, messages: messages }
@@ -206,7 +221,7 @@ module Clacky
       messages = apply_message_caching(messages) if caching_enabled
 
       body     = MessageFormat::Anthropic.build_request_body(messages, model, tools, max_tokens, caching_enabled)
-      response = anthropic_connection.post("v1/messages") { |r| r.body = body.to_json }
+      response = anthropic_connection.post(anthropic_messages_path) { |r| r.body = body.to_json }
 
       raise_error(response) unless response.status == 200
       check_html_response(response)
@@ -333,11 +348,35 @@ module Clacky
         conn.headers["x-api-key"]      = @api_key
         conn.headers["anthropic-version"] = "2023-06-01"
         conn.headers["anthropic-dangerous-direct-browser-access"] = "true"
+        # OpenRouter's /v1/messages endpoint authenticates with a Bearer
+        # token (the OpenRouter API key), not Anthropic's x-api-key. We send
+        # both so the same connection code works for direct Anthropic and
+        # for OpenRouter-proxied Claude — each endpoint ignores the header
+        # it doesn't recognise.
+        if @provider_id == "openrouter"
+          conn.headers["Authorization"] = "Bearer #{@api_key}"
+        end
         conn.options.timeout      = 300
         conn.options.open_timeout = 10
         conn.ssl.verify           = false
         conn.adapter Faraday.default_adapter
       end
+    end
+
+    # Correct relative path for the Anthropic /v1/messages endpoint, accounting
+    # for whether the configured base_url already includes a "/v1" segment.
+    #
+    # Examples:
+    #   base_url = "https://api.anthropic.com"         → "v1/messages"
+    #   base_url = "https://openrouter.ai/api/v1"      → "messages"
+    #   base_url = "https://openrouter.ai/api/v1/"     → "messages"
+    #
+    # Without this, OpenRouter would receive POST /api/v1/v1/messages → 404
+    # (HTML error page), which bubbles up as the infamous
+    # "Invalid API endpoint or server error (received HTML instead of JSON)".
+    private def anthropic_messages_path
+      base = @base_url.to_s.chomp("/")
+      base.end_with?("/v1") ? "messages" : "v1/messages"
     end
 
     # ── Error handling ────────────────────────────────────────────────────────

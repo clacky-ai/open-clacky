@@ -177,6 +177,108 @@ module Clacky
         }
       },
 
+      # OpenAI GPT-5.5 / GPT-5.4 — breakpoint at 272K input tokens
+      # Source: https://openai.com/api/pricing/ (USD / 1M tokens)
+      # Note: OpenAI's actual tiered-pricing threshold is 272K, not the
+      # global 200K below.  Prompts between 200K–272K will slightly
+      # over-estimate costs until a per-model threshold is implemented.
+      "gpt-5.5" => {
+        input: {
+          default: 5.00,              # $5/MTok for prompts ≤ 272K tokens
+          over_200k: 10.00            # $10/MTok for prompts > 272K tokens
+        },
+        output: {
+          default: 30.00,             # $30/MTok for prompts ≤ 272K tokens
+          over_200k: 45.00            # $45/MTok for prompts > 272K tokens
+        },
+        cache: {
+          write_default: 5.00,        # $5/MTok cache write (≤ 272K)
+          write_over_200k: 10.00,     # $10/MTok cache write (> 272K)
+          read_default: 0.50,         # $0.50/MTok cache read (≤ 272K)
+          read_over_200k: 1.00        # $1.00/MTok cache read (> 272K)
+        }
+      },
+
+      "gpt-5.4" => {
+        input: {
+          default: 2.50,              # $2.50/MTok for prompts ≤ 272K tokens
+          over_200k: 5.00             # $5/MTok for prompts > 272K tokens
+        },
+        output: {
+          default: 15.00,             # $15/MTok for prompts ≤ 272K tokens
+          over_200k: 22.50           # $22.50/MTok for prompts > 272K tokens
+        },
+        cache: {
+          write_default: 2.50,        # $2.50/MTok cache write (≤ 272K)
+          write_over_200k: 5.00,      # $5/MTok cache write (> 272K)
+          read_default: 0.25,         # $0.25/MTok cache read (≤ 272K)
+          read_over_200k: 0.50        # $0.50/MTok cache read (> 272K)
+        }
+      },
+
+      # GPT-5.4 flat-rate models (no breakpoint, single rate regardless of context)
+      "gpt-5.4-mini" => {
+        input: {
+          default: 0.75,              # $0.75/MTok
+          over_200k: 0.75
+        },
+        output: {
+          default: 4.50,              # $4.50/MTok
+          over_200k: 4.50
+        },
+        cache: {
+          write: 0.75,                # $0.75/MTok cache write
+          read: 0.075                 # $0.075/MTok cache read (10% of input)
+        }
+      },
+
+      "gpt-5.4-nano" => {
+        input: {
+          default: 0.20,              # $0.20/MTok
+          over_200k: 0.20
+        },
+        output: {
+          default: 1.25,              # $1.25/MTok
+          over_200k: 1.25
+        },
+        cache: {
+          write: 0.20,                # $0.20/MTok cache write
+          read: 0.02                  # $0.02/MTok cache read (10% of input)
+        }
+      },
+
+      # O-series reasoning models — flat-rate (200K context window)
+      # Source: https://openai.com/api/pricing/
+      "o3" => {
+        input: {
+          default: 2.00,              # $2/MTok
+          over_200k: 2.00             # flat rate
+        },
+        output: {
+          default: 8.00,              # $8/MTok
+          over_200k: 8.00
+        },
+        cache: {
+          write: 2.00,                # $2/MTok cache write (same as input)
+          read: 0.50                  # $0.50/MTok cache read (25% of input)
+        }
+      },
+
+      "o4-mini" => {
+        input: {
+          default: 1.10,              # $1.10/MTok
+          over_200k: 1.10             # flat rate
+        },
+        output: {
+          default: 4.40,              # $4.40/MTok
+          over_200k: 4.40
+        },
+        cache: {
+          write: 1.10,                # $1.10/MTok cache write (same as input)
+          read: 0.275                 # $0.275/MTok cache read (25% of input)
+        }
+      },
+
       # GLM (Zhipu / Z.ai) — USD per 1M tokens.
       # Source: https://docs.z.ai/guides/overview/pricing (Z.ai international).
       # Pricing policy: we always bill at the Z.ai international flat rate,
@@ -253,6 +355,8 @@ module Clacky
     }.freeze
 
     # Threshold for tiered pricing (200K tokens)
+    # NOTE: OpenAI GPT-5.5/GPT-5.4 use a 272K breakpoint, not 200K.
+    # Costs for prompts between 200K–272K will be slightly over-estimated.
     TIERED_PRICING_THRESHOLD = 200_000
 
     class << self
@@ -409,6 +513,22 @@ module Clacky
           "minimax-m2.5"
         when /^minimax-m2\.7$/i
           "minimax-m2.7"
+
+        # OpenAI GPT-5.x models — match various dashed/dotted/compact forms
+        # (e.g. "gpt-5.5", "gpt-5-5", "gpt5.5", "gpt55")
+        when /^gpt-?5\.?5$/i, /^gpt-?5[\.-]?5$/i
+          "gpt-5.5"
+        when /^gpt-?5\.?4[^.]*mini$/i, /^gpt-?5\.?4[\.-]?mini$/i
+          "gpt-5.4-mini"
+        when /^gpt-?5\.?4[^.]*nano$/i, /^gpt-?5\.?4[\.-]?nano$/i
+          "gpt-5.4-nano"
+        when /^gpt-?5\.?4$/i, /^gpt-?5[\.-]?4$/i
+          "gpt-5.4"
+        # O-series reasoning models
+        when /^o4[\.-]?mini$/i
+          "o4-mini"
+        when /^o3$/i
+          "o3"
         else
           nil  # No pricing available for this model — cost will show as N/A
         end

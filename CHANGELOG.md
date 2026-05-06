@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.1] - 2026-05-06
+
+### Added
+- **OpenRouter Anthropic API support.** You can now route Claude model requests through OpenRouter, giving access to Anthropic models via a single OpenRouter API key — useful when Anthropic direct access is limited in your region.
+- **GPT provider support.** Direct GPT provider configuration is now available alongside other providers, making it easier to switch between different OpenAI-compatible endpoints.
+- **OCR-powered PDF reading.** PDF files that contain scanned images (non-text PDFs) are now readable via OCR, allowing the agent to extract content from scanned documents, invoices, and image-heavy PDFs.
+- **Terminal output size control.** The agent now limits terminal output to a configurable size, preventing token overflows when running commands that produce very long output.
+- **Memories & Trash manager in Web UI.** A new management panel lets you browse, review, and delete agent memories and trashed files directly from the Web UI.
+- **Watchdog for interrupt messages.** A background watchdog ensures interrupt signals reliably stop the agent even when it's deep in a tool execution loop.
+- **Skill import with category directory scanning.** When importing skills from openclaw packages, nested category directories are now scanned automatically, so all skills in a category bundle are imported at once.
+
+### Improved
+- **Deploy skill simplified.** The deploy skill now uses Railway CLI directly without custom helper tools, making deployments more reliable and the codebase significantly lighter.
+- **Fix double-render of progress indicators.** Progress spinners and status lines no longer render twice in quick succession, keeping the Web UI output clean.
+- **Session idle status tracking and file descriptor cleanup.** Sessions now correctly report idle state when the agent finishes, and open file descriptors are properly closed to avoid resource leaks.
+- **GPT-4.1 and GPT-5 pricing added.** Model cost tracking now includes the latest GPT-4.1 and GPT-5 pricing tiers.
+
+### Fixed
+- **UTF-8 encoding error in file preview.** Opening files with non-UTF-8 characters no longer crashes the preview — they are now handled gracefully.
+- **Expand `~` in openfile path.** The "open file in editor" API endpoint now correctly expands `~` to the user's home directory.
+
 ## [1.0.0] - 2026-04-30
 
 ### Added
