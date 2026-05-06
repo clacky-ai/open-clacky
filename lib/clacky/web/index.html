@@ -704,7 +704,13 @@
 
       <div class="setup-field">
         <label class="setup-label" data-i18n="onboard.key.baseurl">Base URL</label>
-        <input id="setup-base-url" type="text" class="setup-input" data-i18n-placeholder="settings.models.placeholder.baseurl" placeholder="https://api.anthropic.com">
+        <div class="base-url-combobox">
+          <input id="setup-base-url" type="text" class="setup-input base-url-input" data-i18n-placeholder="settings.models.placeholder.baseurl" placeholder="https://api.anthropic.com">
+          <button type="button" id="setup-base-url-dropdown-btn" class="base-url-dropdown-btn" aria-label="Select preset endpoint">
+            <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+          </button>
+          <div id="setup-base-url-dropdown" class="base-url-dropdown" style="display:none"></div>
+        </div>
       </div>
 
       <div class="setup-field">

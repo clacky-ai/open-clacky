@@ -3263,6 +3263,74 @@ body {
   font-style: italic;
 }
 
+/* Base URL combobox — mirrors model-name-combobox shape; differs only in
+   showing a two-line option (label + URL) so users can distinguish
+   regional/billing-plan variants under one provider. */
+.base-url-combobox {
+  position: relative;
+  display: flex;
+  gap: 0;
+}
+.base-url-combobox .base-url-input {
+  flex: 1;
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+  border-right: none;
+}
+.base-url-combobox .base-url-dropdown-btn {
+  background: var(--color-bg-primary);
+  border: 1px solid var(--color-border-primary);
+  border-top-right-radius: 6px;
+  border-bottom-right-radius: 6px;
+  color: var(--color-text-secondary);
+  padding: 0 8px;
+  cursor: pointer;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+}
+.base-url-combobox .base-url-dropdown-btn:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+.base-url-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border-primary);
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  max-height: 280px;
+  overflow-y: auto;
+  z-index: 1000;
+}
+.base-url-dropdown-option {
+  padding: 8px 12px;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+.base-url-dropdown-option:hover {
+  background: var(--color-bg-hover);
+}
+.base-url-dropdown-label {
+  font-size: 13px;
+  color: var(--color-text-primary);
+  font-weight: 500;
+}
+.base-url-dropdown-option:hover .base-url-dropdown-label {
+  color: var(--color-accent-primary);
+}
+.base-url-dropdown-url {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Fira Code', 'Courier New', monospace;
+  margin-top: 2px;
+}
+
 /* Model card footer */
 .model-card-footer {
   display: flex;

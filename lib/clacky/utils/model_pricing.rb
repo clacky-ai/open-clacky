@@ -177,6 +177,79 @@ module Clacky
         }
       },
 
+      # GLM (Zhipu / Z.ai) — USD per 1M tokens.
+      # Source: https://docs.z.ai/guides/overview/pricing (Z.ai international).
+      # Pricing policy: we always bill at the Z.ai international flat rate,
+      # regardless of which endpoint (mainland bigmodel.cn vs intl z.ai) the
+      # user configured. Rationale:
+      #   1. Mainland GLM uses tiered pricing (≤32K / >32K / >128K) where the
+      #      >32K tier is hit by the vast majority of real requests, and is
+      #      actually a few RMB cheaper than Z.ai's flat rate — displaying the
+      #      (slightly higher) Z.ai rate gives users a "displayed ≤ actual"
+      #      experience which is psychologically safer than the reverse.
+      #   2. Single flat rate keeps the table shape consistent with every
+      #      other provider here (no special-case tier logic for just GLM).
+      # Cache-write: same convention as DeepSeek/Kimi — OpenAI-compatible
+      # endpoints don't charge separately for cache writes (Z.ai's page lists
+      # "Cached Input Storage: Limited-time Free"), so bill writes at the
+      # regular input miss rate for safe "displayed ≤ actual" behaviour.
+      "glm-5.1" => {
+        input:  { default: 1.40, over_200k: 1.40 },
+        output: { default: 4.40, over_200k: 4.40 },
+        cache:  { write: 1.40, read: 0.26 }
+      },
+
+      "glm-5" => {
+        input:  { default: 1.00, over_200k: 1.00 },
+        output: { default: 3.20, over_200k: 3.20 },
+        cache:  { write: 1.00, read: 0.20 }
+      },
+
+      "glm-5-turbo" => {
+        input:  { default: 1.20, over_200k: 1.20 },
+        output: { default: 4.00, over_200k: 4.00 },
+        cache:  { write: 1.20, read: 0.24 }
+      },
+
+      # GLM-5V-Turbo is the multimodal sibling of GLM-5-Turbo (vision capable,
+      # see providers.rb model_capabilities override). Same input/output rate
+      # as 5-Turbo per Z.ai's Vision Models table.
+      "glm-5v-turbo" => {
+        input:  { default: 1.20, over_200k: 1.20 },
+        output: { default: 4.00, over_200k: 4.00 },
+        cache:  { write: 1.20, read: 0.24 }
+      },
+
+      "glm-4.7" => {
+        input:  { default: 0.60, over_200k: 0.60 },
+        output: { default: 2.20, over_200k: 2.20 },
+        cache:  { write: 0.60, read: 0.11 }
+      },
+
+      # MiniMax — USD per 1M tokens.
+      # Source: https://platform.minimaxi.com (Pay-as-You-Go).
+      # MiniMax pricing is identical across mainland (.com) and international
+      # (.io) endpoints, verified by the team. Same cache-write convention as
+      # DeepSeek/Kimi/GLM: bill writes at the input miss rate (OpenAI-compatible
+      # usage responses from MiniMax don't reliably carry a separate
+      # cache_creation_input_tokens field, so a distinct write rate would be
+      # dead code in practice).
+      # Note: providers.rb uses the capitalised "MiniMax-M2.x" model id, but
+      # the pricing table keys are lowercased to stay consistent with the
+      # rest of this file; normalize_model_name() lowercases incoming model
+      # names before lookup.
+      "minimax-m2.5" => {
+        input:  { default: 0.30, over_200k: 0.30 },
+        output: { default: 1.20, over_200k: 1.20 },
+        cache:  { write: 0.30, read: 0.03 }
+      },
+
+      "minimax-m2.7" => {
+        input:  { default: 0.30, over_200k: 0.30 },
+        output: { default: 1.20, over_200k: 1.20 },
+        cache:  { write: 0.30, read: 0.06 }
+      },
+
     }.freeze
 
     # Threshold for tiered pricing (200K tokens)
@@ -314,6 +387,28 @@ module Clacky
           "kimi-k2.5"
         when /^kimi-k2\.?6$/i
           "kimi-k2.6"
+        # GLM (Zhipu / Z.ai) — the five models registered in providers.rb.
+        # GLM-5V-Turbo is the vision variant; all five share the same Z.ai
+        # international flat-rate pricing regardless of which endpoint
+        # (mainland bigmodel.cn vs intl z.ai) the user configured.
+        # Strict anchored match so unrelated strings like "glm-5-x-foo"
+        # don't silently borrow a nearby model's rate.
+        when /^glm-5\.1$/i
+          "glm-5.1"
+        when /^glm-5v-turbo$/i
+          "glm-5v-turbo"
+        when /^glm-5-turbo$/i
+          "glm-5-turbo"
+        when /^glm-5$/i
+          "glm-5"
+        when /^glm-4\.7$/i
+          "glm-4.7"
+        # MiniMax — model ids in providers.rb use capitalised "MiniMax-M2.x"
+        # but we match case-insensitively and map to the lowercased table key.
+        when /^minimax-m2\.5$/i
+          "minimax-m2.5"
+        when /^minimax-m2\.7$/i
+          "minimax-m2.7"
         else
           nil  # No pricing available for this model — cost will show as N/A
         end
