@@ -339,17 +339,80 @@ RSpec.describe Clacky::Tools::FileReader do
         end
       end
 
-      it "detects PDF files" do
+      it "delegates PDF files to parser (auto-extracts text, no base64)" do
         Dir.mktmpdir do |dir|
           pdf_file = File.join(dir, "test.pdf")
-          pdf_data = "%PDF-1.4".b
+          # A fake PDF payload — the parser will fail to extract text from it,
+          # but that failure is handled gracefully: we get a parser-failure hash,
+          # NOT a base64 binary blob. This is the behaviour we want post-refactor.
+          pdf_data = "%PDF-1.4\n% fake".b
           File.binwrite(pdf_file, pdf_data)
 
           result = tool.execute(path: pdf_file)
 
+          # Parser fails on this fake PDF → we should get a parser-failure result
+          # carrying the parser_path so the LLM knows how to fix/retry.
           expect(result[:binary]).to be true
           expect(result[:format]).to eq("pdf")
-          expect(result[:mime_type]).to eq("application/pdf")
+          expect(result[:content]).to be_nil
+          expect(result[:error]).to include("Failed to extract text")
+          expect(result[:parser_path]).to be_a(String).and include("pdf_parser.rb")
+          # Critically: no base64 payload (old behaviour sent the whole PDF as base64).
+          expect(result[:base64_data]).to be_nil
+        end
+      end
+
+      it "returns a text result when parser succeeds on a PDF" do
+        # Simulate a successful parse by stubbing FileProcessor.process_path to
+        # return a FileRef with a real preview_path. This isolates FileReader
+        # from the actual pdftotext binary, keeping the spec fast and portable.
+        Dir.mktmpdir do |dir|
+          pdf_file = File.join(dir, "real.pdf")
+          File.binwrite(pdf_file, "%PDF-1.4\n%%EOF".b)
+
+          preview_path = File.join(dir, "real.pdf.preview.md")
+          File.write(preview_path, "Extracted line 1\nExtracted line 2\n")
+
+          fake_ref = Clacky::Utils::FileProcessor::FileRef.new(
+            name: "real.pdf", type: :pdf,
+            original_path: pdf_file, preview_path: preview_path
+          )
+          allow(Clacky::Utils::FileProcessor).to receive(:process_path).and_return(fake_ref)
+
+          result = tool.execute(path: pdf_file)
+
+          expect(result[:error]).to be_nil
+          expect(result[:content]).to include("Extracted line 1")
+          expect(result[:content]).to include("Extracted line 2")
+          expect(result[:parsed_from]).to eq("pdf")
+          expect(result[:source_path]).to eq(preview_path)
+          expect(result[:total_lines]).to eq(2)
+          expect(result[:binary]).to be_nil
+        end
+      end
+
+      it "truncates oversized parser output (no token blow-up)" do
+        Dir.mktmpdir do |dir|
+          pdf_file = File.join(dir, "huge.pdf")
+          File.binwrite(pdf_file, "%PDF-1.4".b)
+
+          # Produce a preview larger than MAX_CONTENT_CHARS worth of text.
+          preview_path = File.join(dir, "huge.pdf.preview.md")
+          big = ("x" * 200 + "\n") * 1000  # ~200k chars, well over MAX_CONTENT_CHARS
+          File.write(preview_path, big)
+
+          fake_ref = Clacky::Utils::FileProcessor::FileRef.new(
+            name: "huge.pdf", type: :pdf,
+            original_path: pdf_file, preview_path: preview_path
+          )
+          allow(Clacky::Utils::FileProcessor).to receive(:process_path).and_return(fake_ref)
+
+          result = tool.execute(path: pdf_file)
+
+          expect(result[:error]).to be_nil
+          expect(result[:truncated]).to be true
+          # Content must be bounded — this is the whole point of the refactor.
+          expect(result[:content].length).to be <= (described_class::MAX_CONTENT_CHARS + 500)
         end
       end
 
