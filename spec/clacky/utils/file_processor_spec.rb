@@ -56,7 +56,10 @@ RSpec.describe Clacky::Utils::FileProcessor do
             .and_return({ success: true, text: "extracted text", error: nil, parser_path: nil })
 
           ref = described_class.process_path(path)
-          expect(ref.preview_path).to eq("#{path}.preview.md")
+          # preview is now written to UPLOAD_DIR (tmpdir), not next to the original file
+          expect(ref.preview_path).to start_with(Clacky::Utils::FileProcessor::UPLOAD_DIR)
+          expect(ref.preview_path).to end_with(".preview.md")
+          expect(ref.preview_path).to include("test.pdf")
           expect(File.read(ref.preview_path)).to eq("extracted text")
           expect(ref.parse_error).to be_nil
         end

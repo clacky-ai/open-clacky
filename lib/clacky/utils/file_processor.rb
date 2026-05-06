@@ -397,7 +397,14 @@ module Clacky
     end
 
     def self.save_preview(content, original_path)
-      dest = "#{original_path}.preview.md"
+      # Always write previews to a tmpdir-based path to avoid polluting the
+      # user's working directory with .preview.md sidecar files.
+      # Use the same UPLOAD_DIR that uploaded files live in; for on-disk files
+      # outside that dir (e.g. project files opened by file_reader), we still
+      # land in UPLOAD_DIR so the user's tree stays clean.
+      FileUtils.mkdir_p(UPLOAD_DIR)
+      safe_name = File.basename(original_path.to_s).gsub(/[\/\:\*?"<>|\x00]/, "_")
+      dest = File.join(UPLOAD_DIR, "#{SecureRandom.hex(8)}_#{safe_name}.preview.md")
       File.write(dest, content)
       dest
     end
