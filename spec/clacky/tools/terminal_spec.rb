@@ -191,29 +191,6 @@ RSpec.describe Clacky::Tools::Terminal do
       expect(second[:exit_code]).to eq(0)
     end
 
-    xit "translates \n to \r so raw-mode TUIs see 'Enter' (not a literal newline char)" do
-      # A raw-mode Ruby reader: STDIN.raw { STDIN.getc } reads ONE byte, no
-      # line-discipline translation. If we sent \n, the child would see 0x0A.
-      # We expect 0x0D because the tool should have translated it.
-      script = <<~'RUBY'
-        require "io/console"
-        STDOUT.sync = true
-        print "ready\n"
-        ch = STDIN.raw { STDIN.getc }
-        printf "got=0x%02X\n", ch.ord
-      RUBY
-
-      first = tool.execute(command: %(ruby -e #{Shellwords.escape(script)}), timeout: 2)
-      sid = first[:session_id]
-      expect(sid).to be_a(Integer), "expected child to block on getc, got: #{first.inspect}"
-
-      # AI sends the conventional "\n" meaning "press Enter".
-      second = tool.execute(session_id: sid, input: "\n", timeout: 5)
-      expect(second[:output]).to include("got=0x0D"),
-        "expected raw-mode child to receive \r (0x0D), got: #{second[:output].inspect}"
-      expect(second[:exit_code]).to eq(0)
-    end
-
     it "does not treat command output containing a bogus marker as completion" do
       # Output literal looks like a marker but uses a different token.
       result = tool.execute(
