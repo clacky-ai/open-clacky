@@ -125,6 +125,15 @@ module Clacky
         "api" => "openai-completions",
         "default_model" => "MiniMax-M2.7",
         "models" => ["MiniMax-M2.5", "MiniMax-M2.7"],
+        # MiniMax operates two regional endpoints with identical APIs & model
+        # lineup — mainland China (.com) and international (.io). Listing both
+        # lets find_by_base_url identify either one as provider "minimax",
+        # so capability checks (vision=false) fire correctly regardless of
+        # which endpoint the user configured.
+        "endpoint_variants" => [
+          { "label" => "Mainland China", "label_key" => "settings.models.baseurl.variant.mainland_cn",    "base_url" => "https://api.minimaxi.com/v1", "region" => "cn"   }.freeze,
+          { "label" => "International",  "label_key" => "settings.models.baseurl.variant.international",  "base_url" => "https://api.minimax.io/v1",   "region" => "intl" }.freeze
+        ].freeze,
         # MiniMax M2.x does not support multimodal/vision input on this endpoint.
         "capabilities" => { "vision" => false }.freeze,
         "website_url" => "https://www.minimaxi.com/user-center/basic-information/interface-key"
@@ -136,6 +145,17 @@ module Clacky
         "api" => "openai-completions",
         "default_model" => "kimi-k2.6",
         "models" => ["kimi-k2.6", "kimi-k2.5"],
+        # Moonshot operates two regional endpoints with identical APIs & model
+        # lineup — mainland China (.cn) and international (.ai). Kimi does not
+        # distinguish pay-as-you-go vs coding-plan at the base_url level, so
+        # only two variants are needed. Listing both here lets find_by_base_url
+        # identify either one as provider "kimi", so downstream capability
+        # checks, fallback chains, and provider-specific behaviours work
+        # regardless of which endpoint the user configured.
+        "endpoint_variants" => [
+          { "label" => "Mainland China", "label_key" => "settings.models.baseurl.variant.mainland_cn",   "base_url" => "https://api.moonshot.cn/v1", "region" => "cn"   }.freeze,
+          { "label" => "International",  "label_key" => "settings.models.baseurl.variant.international", "base_url" => "https://api.moonshot.ai/v1", "region" => "intl" }.freeze
+        ].freeze,
         # k2.5 / k2.6 are multimodal; legacy k2 text-only models need model_capabilities override if added.
         "capabilities" => { "vision" => true }.freeze,
         "website_url" => "https://platform.moonshot.cn/console/api-keys"
@@ -192,11 +212,26 @@ module Clacky
       }.freeze,
 
       "glm" => {
-        "name" => "GLM (ZhipuAI)",
+        "name" => "GLM (Z.ai / Zhipu)",
         "base_url" => "https://open.bigmodel.cn/api/paas/v4",
         "api" => "openai-completions",
         "default_model" => "glm-5.1",
         "models" => ["glm-5.1", "glm-5", "glm-5-turbo", "glm-5v-turbo", "glm-4.7"],
+        # Zhipu / Z.ai expose four functionally-equivalent endpoints:
+        # two regional sites (mainland open.bigmodel.cn + international api.z.ai)
+        # each with a general-billing and a Coding-Plan subpath. They share the
+        # same model lineup & identical capability profile, so a single preset
+        # with endpoint_variants is the right shape — one source of truth for
+        # vision/model_capabilities, four URLs recognised by find_by_base_url.
+        # Without this, users pointing at api.z.ai or the /coding/ path fell
+        # through to the conservative "assume vision=true" default and got
+        # hallucinated image descriptions on text-only GLM models (C-5563).
+        "endpoint_variants" => [
+          { "label" => "Mainland · Pay-as-you-go",      "label_key" => "settings.models.baseurl.variant.mainland_cn_payg",    "base_url" => "https://open.bigmodel.cn/api/paas/v4",        "region" => "cn"   }.freeze,
+          { "label" => "Mainland · Coding Plan",        "label_key" => "settings.models.baseurl.variant.mainland_cn_coding",  "base_url" => "https://open.bigmodel.cn/api/coding/paas/v4", "region" => "cn"   }.freeze,
+          { "label" => "International · Pay-as-you-go", "label_key" => "settings.models.baseurl.variant.international_payg",  "base_url" => "https://api.z.ai/api/paas/v4",                "region" => "intl" }.freeze,
+          { "label" => "International · Coding Plan",   "label_key" => "settings.models.baseurl.variant.international_coding","base_url" => "https://api.z.ai/api/coding/paas/v4",         "region" => "intl" }.freeze
+        ].freeze,
         # GLM models are text-only except glm-5v-turbo which is vision-capable ("v" = visual).
         "capabilities" => { "vision" => false }.freeze,
         "model_capabilities" => {
@@ -376,14 +411,33 @@ module Clacky
       # Find provider ID by base URL.
       # Matches if the given URL starts with the provider's base_url (after normalisation),
       # so both exact matches and sub-path variants (e.g. "/v1") are recognised.
+      #
+      # Also scans `endpoint_variants` (when present) so providers that operate
+      # multiple regional / billing-plan endpoints under the same identity
+      # (e.g. GLM on open.bigmodel.cn + api.z.ai, MiniMax on .com + .io) are
+      # all recognised as that single provider — one capability definition,
+      # N entry URLs. Without this, users configured with a non-default
+      # variant fall back to the "unknown provider" path and miss capability
+      # enforcement (see C-5563).
       # @param base_url [String] The base URL to look up
       # @return [String, nil] The provider ID or nil if not found
       def find_by_base_url(base_url)
         return nil if base_url.nil? || base_url.empty?
         normalized = base_url.to_s.chomp("/")
         PRESETS.find do |_id, preset|
-          preset_base = preset["base_url"].to_s.chomp("/")
-          normalized == preset_base || normalized.start_with?("#{preset_base}/")
+          # Collect every URL this preset claims: the canonical base_url plus
+          # any declared endpoint_variants. Dedup so the canonical one showing
+          # up in both lists doesn't change behaviour.
+          candidates = [preset["base_url"]]
+          variants = preset["endpoint_variants"]
+          if variants.is_a?(Array)
+            variants.each { |v| candidates << v["base_url"] if v.is_a?(Hash) }
+          end
+          candidates.compact.uniq.any? do |candidate|
+            preset_base = candidate.to_s.chomp("/")
+            next false if preset_base.empty?
+            normalized == preset_base || normalized.start_with?("#{preset_base}/")
+          end
         end&.first
       end
 

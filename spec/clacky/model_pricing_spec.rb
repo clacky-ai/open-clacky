@@ -365,4 +365,159 @@ RSpec.describe Clacky::ModelPricing do
       expect(pricing).to be_nil
     end
   end
+
+  # GLM (Zhipu / Z.ai) pricing — always bill at Z.ai international flat rate,
+  # regardless of mainland-vs-intl endpoint. Flat-rate (no tiered billing).
+  # Source: https://docs.z.ai/guides/overview/pricing
+  describe "GLM pricing" do
+    it "bills glm-5.1 at the Z.ai flat rate" do
+      usage = { prompt_tokens: 100_000, completion_tokens: 50_000 }
+      result = described_class.calculate_cost(model: "glm-5.1", usage: usage)
+      # (100_000/1M)*$1.4 + (50_000/1M)*$4.4 = 0.14 + 0.22 = $0.36
+      expect(result[:cost]).to be_within(0.0001).of(0.36)
+      expect(result[:source]).to eq(:price)
+    end
+
+    it "bills glm-5 at the Z.ai flat rate" do
+      usage = { prompt_tokens: 1_000_000, completion_tokens: 1_000_000 }
+      result = described_class.calculate_cost(model: "glm-5", usage: usage)
+      # $1 + $3.2 = $4.20
+      expect(result[:cost]).to be_within(0.0001).of(4.20)
+    end
+
+    it "bills glm-5-turbo separately from glm-5v-turbo (they share rates but not row)" do
+      usage = { prompt_tokens: 1_000_000, completion_tokens: 1_000_000 }
+      text_cost   = described_class.calculate_cost(model: "glm-5-turbo", usage: usage)[:cost]
+      vision_cost = described_class.calculate_cost(model: "glm-5v-turbo", usage: usage)[:cost]
+      # GLM-5-Turbo and GLM-5V-Turbo happen to share the same input/output rate
+      # on Z.ai's pricing page, but they are distinct rows — they must both
+      # resolve to :price (not N/A) and produce the same cost.
+      expect(text_cost).to   be_within(0.0001).of(5.20)  # $1.2 + $4 = $5.2
+      expect(vision_cost).to be_within(0.0001).of(5.20)
+    end
+
+    it "bills glm-4.7 at its lower flat rate" do
+      usage = { prompt_tokens: 1_000_000, completion_tokens: 1_000_000 }
+      result = described_class.calculate_cost(model: "glm-4.7", usage: usage)
+      # $0.6 + $2.2 = $2.80
+      expect(result[:cost]).to be_within(0.0001).of(2.80)
+    end
+
+    it "does NOT apply tiered pricing for prompts over 200K (GLM is flat-rate)" do
+      small = described_class.calculate_cost(
+        model: "glm-5.1",
+        usage: { prompt_tokens: 10_000, completion_tokens: 0 }
+      )[:cost]
+      large = described_class.calculate_cost(
+        model: "glm-5.1",
+        usage: { prompt_tokens: 250_000, completion_tokens: 0 }
+      )[:cost]
+      # Per-token rate must be identical — rules out accidental tiered cost.
+      expect(small / 10_000).to be_within(0.0000001).of(large / 250_000)
+    end
+
+    it "bills cache reads at $0.26/MTok and cache writes at the input miss rate for glm-5.1" do
+      usage = {
+        prompt_tokens: 100_000,
+        completion_tokens: 0,
+        cache_read_input_tokens: 50_000,
+        cache_creation_input_tokens: 50_000
+      }
+      result = described_class.calculate_cost(model: "glm-5.1", usage: usage)
+      # Regular input: (100_000 - 50_000) / 1M * $1.4  = $0.07
+      # Cache read:     50_000 / 1M * $0.26            = $0.013
+      # Cache write:    50_000 / 1M * $1.40 (miss rate)= $0.07
+      # Total: $0.153
+      expect(result[:cost]).to be_within(0.0001).of(0.153)
+    end
+
+    it "is case-insensitive for GLM model names" do
+      result = described_class.calculate_cost(
+        model: "GLM-5.1",
+        usage: { prompt_tokens: 1_000_000, completion_tokens: 0 }
+      )
+      expect(result[:cost]).to be_within(0.0001).of(1.40)
+      expect(result[:source]).to eq(:price)
+    end
+  end
+
+  # MiniMax pricing — identical across mainland (.com) and international (.io)
+  # endpoints per the team's verification.
+  # Source: https://platform.minimaxi.com (Pay-as-You-Go)
+  describe "MiniMax pricing" do
+    it "bills MiniMax-M2.5 with its distinct cache-read rate" do
+      usage = {
+        prompt_tokens: 100_000,
+        completion_tokens: 50_000,
+        cache_read_input_tokens: 20_000
+      }
+      result = described_class.calculate_cost(model: "MiniMax-M2.5", usage: usage)
+      # Regular input: (100_000 - 20_000) / 1M * $0.30  = $0.024
+      # Cache read:     20_000 / 1M * $0.03             = $0.0006
+      # Output:         50_000 / 1M * $1.20             = $0.06
+      # Total: $0.0846
+      expect(result[:cost]).to be_within(0.0001).of(0.0846)
+      expect(result[:source]).to eq(:price)
+    end
+
+    it "bills MiniMax-M2.7 with its higher cache-read rate" do
+      usage = {
+        prompt_tokens: 1_000_000,
+        completion_tokens: 1_000_000,
+        cache_read_input_tokens: 500_000
+      }
+      result = described_class.calculate_cost(model: "MiniMax-M2.7", usage: usage)
+      # Regular input: 500_000 / 1M * $0.30 = $0.15
+      # Cache read:    500_000 / 1M * $0.06 = $0.03
+      # Output:      1_000_000 / 1M * $1.20 = $1.20
+      # Total: $1.38
+      expect(result[:cost]).to be_within(0.0001).of(1.38)
+    end
+
+    it "handles the capitalised MiniMax- prefix from providers.rb" do
+      # providers.rb uses "MiniMax-M2.7" (capitalised), but the pricing table
+      # key is lowercase — normalize_model_name must bridge the two.
+      result = described_class.calculate_cost(
+        model: "MiniMax-M2.7",
+        usage: { prompt_tokens: 1_000_000, completion_tokens: 0 }
+      )
+      expect(result[:cost]).to be_within(0.0001).of(0.30)
+      expect(result[:source]).to eq(:price)
+    end
+
+    it "is also case-insensitive (lowercased input works)" do
+      result = described_class.calculate_cost(
+        model: "minimax-m2.7",
+        usage: { prompt_tokens: 1_000_000, completion_tokens: 0 }
+      )
+      expect(result[:source]).to eq(:price)
+    end
+  end
+
+  # Guards against accidentally billing unrelated model names at a
+  # neighbouring model's rate — the anchored ^...$ regex in normalize_model_name
+  # should reject fuzzy matches and fall through to nil (cost=N/A).
+  describe "strict matching for GLM/MiniMax" do
+    it "returns nil cost for unregistered GLM variants" do
+      %w[glm-4.7-flash glm-4.6 glm-4.5-air glm-ocr glm-4.6v].each do |m|
+        result = described_class.calculate_cost(
+          model: m,
+          usage: { prompt_tokens: 1_000_000, completion_tokens: 0 }
+        )
+        expect(result[:cost]).to be_nil,   "expected N/A for #{m}, got #{result[:cost]}"
+        expect(result[:source]).to be_nil, "expected nil source for #{m}, got #{result[:source]}"
+      end
+    end
+
+    it "returns nil cost for unregistered MiniMax variants" do
+      %w[minimax-m2.5-highspeed m2-her minimax-abab6].each do |m|
+        result = described_class.calculate_cost(
+          model: m,
+          usage: { prompt_tokens: 1_000_000, completion_tokens: 0 }
+        )
+        expect(result[:cost]).to be_nil,   "expected N/A for #{m}, got #{result[:cost]}"
+        expect(result[:source]).to be_nil, "expected nil source for #{m}, got #{result[:source]}"
+      end
+    end
+  end
 end

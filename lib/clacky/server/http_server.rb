@@ -2706,12 +2706,16 @@ module Clacky
       def api_list_providers(res)
         providers = Clacky::Providers::PRESETS.map do |id, preset|
           {
-            id:            id,
-            name:          preset["name"],
-            base_url:      preset["base_url"],
-            default_model: preset["default_model"],
-            models:        preset["models"] || [],
-            website_url:   preset["website_url"]
+            id:                id,
+            name:              preset["name"],
+            base_url:          preset["base_url"],
+            default_model:     preset["default_model"],
+            models:            preset["models"] || [],
+            # Frontend uses this to render a Base URL dropdown (regional /
+            # billing-plan variants) when present. Absent for single-endpoint
+            # providers — UI renders a plain text input in that case.
+            endpoint_variants: preset["endpoint_variants"],
+            website_url:       preset["website_url"]
           }
         end
         json_response(res, 200, { providers: providers })

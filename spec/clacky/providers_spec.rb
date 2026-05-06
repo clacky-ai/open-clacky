@@ -197,6 +197,114 @@ RSpec.describe Clacky::Providers do
     end
   end
 
+  describe ".find_by_base_url with endpoint_variants" do
+    # Regression guard for C-5563: providers that expose multiple regional
+    # / billing-plan endpoints must be recognised regardless of which URL
+    # the user configured, so capability checks (vision=false for GLM
+    # text models, MiniMax text-only) fire correctly.
+
+    context "GLM (Zhipu / Z.ai) four endpoints" do
+      it "recognises mainland pay-as-you-go" do
+        expect(described_class.find_by_base_url("https://open.bigmodel.cn/api/paas/v4"))
+          .to eq("glm")
+      end
+
+      it "recognises mainland Coding Plan (subpath variant)" do
+        # Distinct from paas/v4 — must not be matched as a prefix of the
+        # canonical URL, and must be identified as glm via endpoint_variants.
+        expect(described_class.find_by_base_url("https://open.bigmodel.cn/api/coding/paas/v4"))
+          .to eq("glm")
+      end
+
+      it "recognises international pay-as-you-go (api.z.ai)" do
+        expect(described_class.find_by_base_url("https://api.z.ai/api/paas/v4"))
+          .to eq("glm")
+      end
+
+      it "recognises international Coding Plan (api.z.ai)" do
+        expect(described_class.find_by_base_url("https://api.z.ai/api/coding/paas/v4"))
+          .to eq("glm")
+      end
+
+      it "recognises endpoint subpaths under any variant" do
+        expect(described_class.find_by_base_url("https://api.z.ai/api/coding/paas/v4/chat/completions"))
+          .to eq("glm")
+      end
+
+      it "ensures capability detection fires for all four URLs + text model (C-5563 fix)" do
+        [
+          "https://open.bigmodel.cn/api/paas/v4",
+          "https://open.bigmodel.cn/api/coding/paas/v4",
+          "https://api.z.ai/api/paas/v4",
+          "https://api.z.ai/api/coding/paas/v4"
+        ].each do |url|
+          id = described_class.find_by_base_url(url)
+          # vision=false must be enforced for text-only GLM models regardless
+          # of which endpoint the user picked; this is the whole point of
+          # declaring endpoint_variants.
+          expect(described_class.supports?(id, :vision, model_name: "glm-5.1"))
+            .to be(false), "expected vision=false at #{url}"
+          # vision model still reports true (per-model override).
+          expect(described_class.supports?(id, :vision, model_name: "glm-5v-turbo"))
+            .to be(true), "expected vision=true at #{url} for glm-5v-turbo"
+        end
+      end
+    end
+
+    context "MiniMax two regional endpoints" do
+      it "recognises mainland (.com)" do
+        expect(described_class.find_by_base_url("https://api.minimaxi.com/v1"))
+          .to eq("minimax")
+      end
+
+      it "recognises international (.io)" do
+        expect(described_class.find_by_base_url("https://api.minimax.io/v1"))
+          .to eq("minimax")
+      end
+
+      it "enforces vision=false on both regional endpoints" do
+        ["https://api.minimaxi.com/v1", "https://api.minimax.io/v1"].each do |url|
+          expect(described_class.supports?(described_class.find_by_base_url(url), :vision))
+            .to be(false), "expected vision=false at #{url}"
+        end
+      end
+    end
+
+    context "Kimi (Moonshot) two regional endpoints" do
+      it "recognises mainland (.cn)" do
+        expect(described_class.find_by_base_url("https://api.moonshot.cn/v1"))
+          .to eq("kimi")
+      end
+
+      it "recognises international (.ai)" do
+        expect(described_class.find_by_base_url("https://api.moonshot.ai/v1"))
+          .to eq("kimi")
+      end
+
+      it "keeps vision=true on both endpoints (Kimi k2.5/k2.6 are multimodal)" do
+        # Unlike GLM/MiniMax, Kimi's current models support vision — so the
+        # whole point of declaring variants here is purely to let capability
+        # detection (fallback chains, provider-specific behaviours) wire up
+        # correctly, not to force vision=false.
+        ["https://api.moonshot.cn/v1", "https://api.moonshot.ai/v1"].each do |url|
+          expect(described_class.supports?(described_class.find_by_base_url(url), :vision))
+            .to be(true), "expected vision=true at #{url}"
+        end
+      end
+    end
+
+    it "returns nil for an unknown URL unrelated to any preset or variant" do
+      expect(described_class.find_by_base_url("https://api.unknown-provider.example/v1"))
+        .to be_nil
+    end
+
+    it "still recognises the canonical base_url when endpoint_variants is absent" do
+      # Anthropic has no endpoint_variants — should behave exactly as before.
+      expect(described_class.find_by_base_url("https://api.anthropic.com"))
+        .to eq("anthropic")
+    end
+  end
+
   describe ".api_type_for_model" do
     it "returns the provider-level api when no overrides are defined" do
       # openai preset has no model_api_overrides → always returns "openai-completions"
