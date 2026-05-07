@@ -1,13 +1,16 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-# Install platform skills into ~/.clacky/skills/.
+# Install builtin skills into ~/.clacky/skills/.
 #
-# Fetches the skill list from GET /api/v1/skills on the openclacky platform
-# (public, no auth), then downloads and installs each skill's zip package
-# in parallel (5 workers, 30s total timeout).
+# Fetches the server-curated builtin list from GET /api/v1/skills/builtin on
+# the openclacky platform (public, no auth), then downloads and installs each
+# skill's zip package in parallel (5 workers, 30s total timeout).
 #
-# Called by onboard skill: `ruby install_platform_skills.rb --recommended`
+# The "builtin" whitelist is enforced server-side — this script takes no
+# filter flags. Admin toggles the `builtin` flag per skill on the platform.
+#
+# Called by onboard skill: `ruby install_builtin_skills.rb`
 #
 # Output:
 #   - Diagnostics → STDERR
@@ -17,23 +20,22 @@
 require 'uri'
 require 'net/http'
 require 'json'
-require 'optparse'
 require 'timeout'
 
 # Reuse the downloader/extractor/installer from the skill-add skill.
 # Physical relocation to lib/clacky/ is deferred until a third caller appears.
 require_relative '../../skill-add/scripts/install_from_zip'
 
-class PlatformSkillsInstaller
+class BuiltinSkillsInstaller
   PRIMARY_HOST     = ENV.fetch('CLACKY_LICENSE_SERVER', 'https://www.openclacky.com')
-  FALLBACK_HOST    = 'https://openclacky.up.railway.app'
+  FALLBACK_HOST    = 'http://localhost:3000'
   API_HOSTS        = ENV['CLACKY_LICENSE_SERVER'] ? [PRIMARY_HOST] : [PRIMARY_HOST, FALLBACK_HOST]
+  API_PATH         = '/api/v1/skills/builtin'
   API_OPEN_TIMEOUT = 5
   API_READ_TIMEOUT = 10
   CONCURRENCY      = 5
 
-  def initialize(options)
-    @query_params      = build_query_params(options)
+  def initialize
     @target_dir        = File.join(Dir.home, '.clacky', 'skills')
     @per_skill_timeout = 10
     @total_timeout     = 30
@@ -59,25 +61,11 @@ class PlatformSkillsInstaller
 
   # --- Internals -------------------------------------------------------------
 
-  # Build the query-parameter hash that mirrors the platform API spec.
-  private def build_query_params(options)
-    params = {}
-    params['recommended'] = 'true' if options[:recommended]
-    params['category'] = options[:category] if options[:category]
-    params
-  end
-
-  # /api/v1/skills[?...]. Empty query when no filters.
-  private def api_path
-    qs = URI.encode_www_form(@query_params)
-    qs.empty? ? '/api/v1/skills' : "/api/v1/skills?#{qs}"
-  end
-
   # Returns an array of skill hashes, or nil on total failure.
   private def fetch_skill_list
     API_HOSTS.each do |host|
       begin
-        uri = URI.parse(host + api_path)
+        uri = URI.parse(host + API_PATH)
         Net::HTTP.start(uri.host, uri.port,
                         use_ssl:      uri.scheme == 'https',
                         open_timeout: API_OPEN_TIMEOUT,
@@ -172,7 +160,7 @@ class PlatformSkillsInstaller
   # The caller (onboard) should parse the LAST stdout line.
   private def emit_summary
     unless @errors.empty?
-      warn '[install_platform_skills] non-fatal errors:'
+      warn '[install_builtin_skills] non-fatal errors:'
       @errors.each { |e| warn "  - #{e}" }
     end
     puts JSON.generate(
@@ -184,12 +172,4 @@ class PlatformSkillsInstaller
 end
 
 # ── Entry point ───────────────────────────────────────────────────────────────
-if __FILE__ == $0
-  options = {}
-  OptionParser.new do |o|
-    o.on('--recommended', 'Only install recommended skills') { options[:recommended] = true }
-    o.on('--category SLUG', 'Filter by category slug') { |v| options[:category] = v }
-  end.parse!
-
-  PlatformSkillsInstaller.new(options).run
-end
+BuiltinSkillsInstaller.new.run if __FILE__ == $0

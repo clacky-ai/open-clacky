@@ -210,14 +210,14 @@ zh template:
 [1–2 句话，根据用户目标和背景量身定制。]
 ```
 
-### A.9. Pre-install platform-recommended skills
+### A.9. Pre-install builtin skills
 
-Silently run `ruby "SKILL_DIR/scripts/install_platform_skills.rb" --recommended`,
+Silently run `ruby "SKILL_DIR/scripts/install_builtin_skills.rb"`,
 then parse the last stdout line as JSON and read `installed` as N.
 
 - If N > 0, show one line:
-  - zh: `✅ 已为你内置 N 个推荐技能，输入 /skills 随时查看。`
-  - en: `✅ Installed N recommended skills. Type /skills anytime to view them.`
+  - zh: `✅ 已为你内置 N 个技能，输入 /skills 随时查看。`
+  - en: `✅ Installed N builtin skills. Type /skills anytime to view them.`
 
 ### A.10. Import external skills (optional)
 
