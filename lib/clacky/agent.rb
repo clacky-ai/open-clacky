@@ -1561,36 +1561,43 @@ module Clacky
       text = content.to_s.strip
       return false if text.empty? || text.length > 800  # Long responses are likely real answers
 
-      # Completion indicators — if present, this is a final answer, not a plan
-      completion_patterns = [
-        /✅|✔️|🎉|👍/,
-        /已完成|已修改|已提交|已保存|已创建|已删除/,
-        /done[.!]?|finished[.!]?|completed[.!]?/i,
-        /\btask (is )?(complete|done|finished)\b/i,
-        /(以上|上述|所有).*(完成|修改|更新)/,
-        /\bno changes?( needed| required)?\b/i
-      ]
-      return false if completion_patterns.any? { |p| text.match?(p) }
+      # Dual-mode detection for responses that claim action without tool calls:
+      #   Mode 1 (intent): model says "I'll do X" but asks permission instead of acting
+      #   Mode 2 (false completion): model says "I've done X ✅" but no tool was called
 
-      # Action-intent detection: the model describes intent to perform a
-      # concrete action but didn't actually call any tools.
-      #
-      # Strategy: match action verbs (investigate, check, search, fix, etc.)
-      # combined with pronoun/modal context — "I'll investigate", "let me check",
-      # "我来排查", etc.  Pure factual statements without action verbs are
-      # treated as real answers, not stalled plans.
-      cn_verbs = "排查|检查|查看|看看|分析|搜索|查找|定位|修复|修改|创建|删除|读取|运行|执行|测试|验证|调试"
-      en_verbs = "investigate|check|look|search|find|fix|modify|create|delete|read|run|execute|test|verify|debug|analyz|explor|review|inspect|examin"
-      action_patterns = [
-        # Chinese: 我 + action verb (with optional modifier)
-        /我.{0,4}(#{cn_verbs})/,
+      cn_verbs = "排查|检查|查看|看看|分析|搜索|查找|定位|修复|修改|创建|删除|移除|读取|运行|执行|测试|验证|调试|部署|启动|安装|配置|更新|添加"
+      en_verbs = "investigate|check|look|search|find|fix|modify|create|delete|remove|read|run|execute|test|verify|debug|analyz|explor|review|inspect|examin|deploy|start|install|configur|update|add|setup"
+
+      # ── Mode 1: Intent detection ──────────────────────────────────────
+      # The model describes intent to perform a concrete action but
+      # didn't actually call any tools. Key signals:
+      #   - pronoun/modal + action verb ("I'll investigate", "我来排查")
+      #   - question ending (seeking permission: "要我现在直接跑吗？")
+      #   - explicit future tense ("我将/我会/我要")
+
+      # Exclusion: explanations and suggestions that aren't stalled plans
+      explanation_patterns = [
+        /让我(解释|说明|回答|总结|列出|梳理)/,
+        /让我来(解释|说明|总结)/,
+        /你可以(检查|查看|运行|验证)/,
+        /\blet me (explain|clarify|summarize|describe)\b/i,
+        # Past tense "我已" = "I have already" → genuine completion, not intent
+        /我已[经将把给]/
+      ]
+      return false if explanation_patterns.any? { |p| text.match?(p) }
+
+      intent_patterns = [
+        # Chinese: 我 + action verb (widened distance for "我建议做这个3步小测试")
+        /我.{0,10}(#{cn_verbs})/,
         # Chinese: modal + action verb without explicit "我"
         /(先|需要|准备|打算|正在|开始).{0,3}(#{cn_verbs})/,
         # Chinese: common intent phrases
         /让我来|让我(直接)?|我来/,
+        # Chinese: explicit future tense
+        /我将|我会|我要/,
         # English: I + modal + action verb (flexible spacing)
         /\bI\s*('ll|will|need to|should|can|have to|'m going to|plan to|want to)\b.{0,30}(#{en_verbs})/i,
-        # English: imperative intent (let me, let's, I'll start/begin)
+        # English: imperative intent (let me, let's)
         /\blet me\b.{0,30}(#{en_verbs})/i,
         /\blet's\b.{0,30}(#{en_verbs})/i,
         /\bwe\s*('ll|should|need to|can)\b.{0,30}(#{en_verbs})/i,
@@ -1598,7 +1605,35 @@ module Clacky
         # English: first-person present progressive intent
         /\bI'm (going to|about to)\b.{0,30}(#{en_verbs})/i
       ]
-      action_patterns.any? { |p| text.match?(p) }
+
+      intent_detected = intent_patterns.any? { |p| text.match?(p) }
+
+      # Question ending → seeking permission (strong intent signal)
+      question_ending = text.end_with?("？") || text.end_with?("?")
+
+      # ── Mode 2: False completion detection ────────────────────────────
+      # The model claims it already performed an action ("已移除 ✅",
+      # "I've deleted the file") but no tool call was made.
+      # Length-limited to ≤60 chars to avoid false positives on genuine
+      # completions that include explanations.
+
+      short_text = text.length <= 60
+
+      false_completion_patterns = [
+        # Chinese: 已 + verb (已移除, 已修改, 已创建) — direct perfect aspect
+        /已(#{cn_verbs})/,
+        # Chinese: 已完成 + verb (已完成修改, 已完成创建) — "完成" may intervene
+        /已完成(#{cn_verbs})/,
+        # Chinese: verb + completion marker at end (删除了✅, 修改完毕)
+        /(#{cn_verbs})了?\s*[✅✔🎉！!。]\s*$/,
+        # English: past tense action claim + success marker
+        /\bI('ve| have)\b.{0,20}(#{en_verbs})(ed|d)?\b.{0,15}(successfully|done|✅|✔)/i,
+        # English: action + "successfully" / "completed"
+        /\b(#{en_verbs})(ed|d)?\b.{0,10}(successfully|completed)\b/i
+      ]
+      false_completion_detected = short_text && false_completion_patterns.any? { |p| text.match?(p) }
+
+      intent_detected || question_ending || false_completion_detected
     end
 
     # Track modified files for Time Machine snapshots
