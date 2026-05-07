@@ -67,6 +67,15 @@ module Clacky
         body
       end
 
+      # Build a streaming request body (same as build_request_body but with
+      # stream: true).  Used for the streaming-first strategy when the client
+      # prefers streaming over non-streaming Anthropic requests.
+      def build_stream_request_body(messages, model, tools, max_tokens, caching_enabled)
+        body = build_request_body(messages, model, tools, max_tokens, caching_enabled)
+        body[:stream] = true
+        body
+      end
+
       # ── Response parsing ──────────────────────────────────────────────────────
 
       # Parse Anthropic API response into canonical internal format.
@@ -141,6 +150,148 @@ module Clacky
 
         { content: content, tool_calls: tool_calls, finish_reason: finish_reason,
           usage: usage_data, raw_api_usage: usage }
+      end
+
+      # Parse Anthropic SSE streaming chunks into canonical format.
+      #
+      # Anthropic streaming format (SSE):
+      #   event: message_start
+      #   data: {"type":"message_start","message":{"id":"msg_...","usage":{"input_tokens":N}}}
+      #
+      #   event: content_block_start
+      #   data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}
+      #
+      #   event: content_block_delta
+      #   data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}
+      #
+      #   event: content_block_stop
+      #   data: {"type":"content_block_stop","index":0}
+      #
+      #   event: message_delta
+      #   data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":N}}
+      #
+      #   event: message_stop
+      #   data: {"type":"message_stop"}
+      #
+      # Tool calls arrive as content blocks with type "tool_use":
+      #   event: content_block_start
+      #   data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_...","name":"func","input":{}}}
+      #
+      #   event: content_block_delta
+      #   data: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"..."}}
+      #
+      # @param raw_chunks [Array<String>] raw response body chunks from Faraday on_data
+      # @return [Hash] canonical response: { content:, tool_calls:, finish_reason:, usage:, raw_api_usage: }
+      def parse_stream_response(raw_chunks)
+        body = raw_chunks.join
+        events = parse_anthropic_sse_events(body)
+
+        content       = +""
+        tool_calls    = []
+        current_tool  = nil   # { id:, name:, arguments: }
+        finish_reason = nil
+        usage_data    = {}
+        cache_read    = 0
+        cache_creation = 0
+
+        events.each do |event|
+          event_type = event[:type]
+          data       = event[:data]
+
+          case event_type
+          when "message_start"
+            msg = data["message"] || {}
+            msg_usage = msg["usage"] || {}
+            raw_input = msg_usage["input_tokens"].to_i
+            cache_read = msg_usage["cache_read_input_tokens"].to_i
+            cache_creation = msg_usage["cache_creation_input_tokens"].to_i
+            usage_data["input_tokens"] = raw_input
+
+          when "content_block_start"
+            block = data["content_block"] || {}
+            if block["type"] == "tool_use"
+              current_tool = {
+                id:   block["id"],
+                name: block["name"],
+                arguments: +""
+              }
+            end
+
+          when "content_block_delta"
+            delta = data["delta"] || {}
+            case delta["type"]
+            when "text_delta"
+              content << delta["text"] if delta["text"]
+            when "input_json_delta"
+              if current_tool
+                current_tool[:arguments] << delta["partial_json"] if delta["partial_json"]
+              end
+            end
+
+          when "content_block_stop"
+            if current_tool
+              tool_calls << current_tool
+              current_tool = nil
+            end
+
+          when "message_delta"
+            delta = data["delta"] || {}
+            finish_reason = case delta["stop_reason"]
+                            when "end_turn"   then "stop"
+                            when "tool_use"   then "tool_calls"
+                            when "max_tokens" then "length"
+                            else delta["stop_reason"]
+                            end
+            delta_usage = data["usage"] || {}
+            usage_data["output_tokens"] = delta_usage["output_tokens"]
+            cache_read += delta_usage["cache_read_input_tokens"].to_i
+            cache_creation += delta_usage["cache_creation_input_tokens"].to_i
+
+          when "message_stop"
+            # End of stream — nothing to extract
+          end
+        end
+
+        tool_calls = tool_calls.map do |tc|
+          args = tc[:arguments].to_s
+          # Validate and normalize JSON arguments
+          begin
+            JSON.parse(args)
+          rescue JSON::ParserError
+            # If arguments are not valid JSON, wrap them
+            args = args.to_json
+          end
+          { id: tc[:id], type: "function", name: tc[:name], arguments: args }
+        end
+        tool_calls = nil if tool_calls.empty?
+
+        # When tool_calls are present, override finish_reason
+        finish_reason = "tool_calls" if tool_calls && !tool_calls.empty?
+
+        # Normalise usage to canonical (OpenAI-style) format, same logic as parse_response
+        raw_input_tokens  = usage_data["input_tokens"].to_i
+        output_tokens     = usage_data["output_tokens"].to_i
+        prompt_tokens     = raw_input_tokens + cache_read
+
+        usage = {
+          prompt_tokens:      prompt_tokens,
+          completion_tokens:  output_tokens,
+          total_tokens:       raw_input_tokens + cache_creation + output_tokens,
+          total_is_per_turn:  true
+        }
+        usage[:cache_read_input_tokens]     = cache_read     if cache_read     > 0
+        usage[:cache_creation_input_tokens] = cache_creation if cache_creation > 0
+
+        {
+          content:       content.empty? ? nil : content,
+          tool_calls:    tool_calls,
+          finish_reason: finish_reason,
+          usage:         usage,
+          raw_api_usage: usage_data.merge(
+            "cache_read_input_tokens" => cache_read,
+            "cache_creation_input_tokens" => cache_creation
+          )
+        }
       end
 
       # ── Tool result formatting ────────────────────────────────────────────────
@@ -319,6 +470,58 @@ module Clacky
         when Array  then content.map { |b| b.is_a?(Hash) ? (b[:text] || "") : b.to_s }.join("\n")
         else             content.to_s
         end
+      end
+
+      # Parse raw Anthropic SSE body into an array of { type:, data: } hashes.
+      # Anthropic streaming uses both `event:` and `data:` lines:
+      #   event: message_start
+      #   data: {"type":"message_start",...}
+      #
+      # The parser is tolerant: if `event:` lines are absent, it falls back
+      # to inspecting the data payload's `type` field to classify the event.
+      private_class_method def self.parse_anthropic_sse_events(body)
+        events       = []
+        current_type = nil
+        current_data = nil
+
+        body.each_line do |line|
+          line = line.chomp
+
+          if line.start_with?("event: ")
+            current_type = line[7..].strip
+          elsif line.start_with?("data: ")
+            data_str = line[6..]
+            next if data_str.strip == "[DONE]"
+
+            parsed = begin
+              JSON.parse(data_str)
+            rescue JSON::ParserError
+              nil
+            end
+            next unless parsed
+
+            # If no event type was declared, infer it from the data's "type" field
+            unless current_type
+              current_type = parsed["type"]
+            end
+
+            current_data = parsed
+          elsif line.empty?
+            # Empty line = end of event. Flush the current event.
+            if current_type && current_data
+              events << { type: current_type, data: current_data }
+            end
+            current_type = nil
+            current_data = nil
+          end
+        end
+
+        # Flush the last event if the stream didn't end with a blank line
+        if current_type && current_data
+          events << { type: current_type, data: current_data }
+        end
+
+        events
       end
     end
   end

@@ -235,6 +235,65 @@ module Clacky
       (data["content"] || []).select { |b| b["type"] == "text" }.map { |b| b["text"] }.join("")
     end
 
+    # Streaming variant of send_anthropic_request.  Reads the response body
+    # via Faraday's on_data callback, accumulates Anthropic SSE chunks, and
+    # parses them into canonical format.
+    def send_anthropic_stream_request(messages, model, tools, max_tokens, caching_enabled)
+      body = MessageFormat::Anthropic.build_stream_request_body(messages, model, tools, max_tokens, caching_enabled)
+      inject_cache_affinity!(body, :anthropic)
+
+      chunks = []
+      response = anthropic_connection.post(anthropic_messages_path) do |req|
+        req.body = body.to_json
+        req.headers["x-client-request-id"] = SecureRandom.uuid
+        req.options.on_data = proc do |chunk, _bytes, _env|
+          chunks << chunk if chunk
+        end
+      end
+
+      # Handle errors: some providers require streaming via Responses API
+      if response.status == 400
+        error_body = begin
+          reconstructed = chunks.join
+          JSON.parse(reconstructed.empty? ? "{}" : reconstructed)
+        rescue
+          {}
+        end
+        error_msg = error_body.is_a?(Hash) ? error_body.dig("error", "message").to_s : ""
+        if error_msg.match?(/stream/i)
+          @use_responses = true
+          return send_responses_stream_request(messages, model, tools, max_tokens, caching_enabled)
+        end
+      end
+
+      raise_error(response, chunks: chunks) unless response.status == 200
+      check_html_response(response, chunks: chunks)
+
+      MessageFormat::Anthropic.parse_stream_response(chunks)
+    end
+
+    # Streaming variant of parse_simple_anthropic_response.  Returns accumulated text.
+    def parse_simple_anthropic_stream_response(model, messages, max_tokens)
+      body = MessageFormat::Anthropic.build_stream_request_body(
+        messages, model, [], max_tokens, false
+      )
+      inject_cache_affinity!(body, :anthropic)
+
+      chunks = []
+      response = anthropic_connection.post(anthropic_messages_path) do |req|
+        req.body = body.to_json
+        req.options.on_data = proc do |chunk, _bytes, _env|
+          chunks << chunk if chunk
+        end
+      end
+
+      raise_error(response, chunks: chunks) unless response.status == 200
+      check_html_response(response, chunks: chunks)
+
+      parsed = MessageFormat::Anthropic.parse_stream_response(chunks)
+      parsed[:content] || ""
+    end
+
     # ── OpenAI request / response ─────────────────────────────────────────────
 
     def send_openai_request(messages, model, tools, max_tokens, caching_enabled)
