@@ -210,7 +210,16 @@ zh template:
 [1–2 句话，根据用户目标和背景量身定制。]
 ```
 
-### A.9. Import external skills (optional)
+### A.9. Pre-install platform-recommended skills
+
+Silently run `ruby "SKILL_DIR/scripts/install_platform_skills.rb" --recommended`,
+then parse the last stdout line as JSON and read `installed` as N.
+
+- If N > 0, show one line:
+  - zh: `✅ 已为你内置 N 个推荐技能，输入 /skills 随时查看。`
+  - en: `✅ Installed N recommended skills. Type /skills anytime to view them.`
+
+### A.10. Import external skills (optional)
 
 Run `test -d ~/.openclaw && echo yes || echo no`. If `no`, skip silently.
 If `yes`:
@@ -221,7 +230,7 @@ If `yes`:
    - en: `{ "question": "OpenClaw detected. Found N skills. Import them into Clacky?", "options": ["Import", "Skip"] }`
 4. If confirmed: `ruby "SKILL_DIR/scripts/import_external_skills.rb" --source openclaw --yes`
 
-### A.10. Celebrate soul setup & offer browser
+### A.11. Celebrate soul setup & offer browser
 
 zh:
 > ✅ 你的专属 AI 灵魂已设定完成！[ai.name] 已经准备好了。
@@ -240,14 +249,14 @@ en: `{ "question": "Want to set up browser automation now? (You can always run /
 
 If chosen → invoke `browser-setup` skill with subcommand `setup`.
 
-### A.11. Offer personal website
+### A.12. Offer personal website
 
 zh: `{ "question": "还有一件有意思的事：要帮你生成一个个人主页吗？我会根据你刚才分享的信息做一个，生成后你会得到一个公开链接。", "options": ["生成主页", "跳过，完成设置"] }`
 en: `{ "question": "One more thing: want me to generate a personal website from the info you just shared? You'll get a public link you can share.", "options": ["Generate my site", "Skip, I'm done"] }`
 
 If chosen → invoke `personal-website` skill.
 
-### A.12. Confirm and close
+### A.13. Confirm and close
 
 Speak as [ai.name]. This is the AI's first moment of truly being alive — it has a soul,
 it knows its person, it has hands and eyes, and it just did its first real thing in the world.
@@ -315,7 +324,7 @@ en:
 
 Do NOT open a new session — the UI handles navigation after the skill finishes.
 
-### A.13. First-run notes
+### A.14. First-run notes
 
 - Keep both files under 300 words each.
 - Do not ask follow-up questions beyond the cards above.
