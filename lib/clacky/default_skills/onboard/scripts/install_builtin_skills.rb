@@ -28,7 +28,7 @@ require_relative '../../skill-add/scripts/install_from_zip'
 
 class BuiltinSkillsInstaller
   PRIMARY_HOST     = ENV.fetch('CLACKY_LICENSE_SERVER', 'https://www.openclacky.com')
-  FALLBACK_HOST    = 'http://localhost:3000'
+  FALLBACK_HOST    = 'https://openclacky.up.railway.app'
   API_HOSTS        = ENV['CLACKY_LICENSE_SERVER'] ? [PRIMARY_HOST] : [PRIMARY_HOST, FALLBACK_HOST]
   API_PATH         = '/api/v1/skills/builtin'
   API_OPEN_TIMEOUT = 5
