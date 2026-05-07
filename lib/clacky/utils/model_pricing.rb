@@ -247,6 +247,221 @@ module Clacky
         }
       },
 
+      # GLM (ZhipuAI / Z.AI) models — flat-rate pricing, no context-length tiers
+      # Source: https://docs.z.ai/guides/overview/pricing (USD / 1M tokens)
+      # GLM billing model:
+      #   - No tiered pricing (single rate regardless of context length)
+      #   - Cache storage is currently limited-time free
+      #   - Cached input = cache_read rate
+
+      # GLM-5.1 — flagship, long-horizon task model (8h autonomous work)
+      "glm-5.1" => {
+        input: {
+          default: 1.40,                  # $1.40/MTok
+          over_200k: 1.40
+        },
+        output: {
+          default: 4.40,                  # $4.40/MTok
+          over_200k: 4.40
+        },
+        cache: {
+          write: 0.0,                     # Limited-time Free
+          read: 0.26                      # $0.26/MTok cached input
+        }
+      },
+
+      # GLM-5 — standard flagship
+      "glm-5" => {
+        input: {
+          default: 1.00,                  # $1.00/MTok
+          over_200k: 1.00
+        },
+        output: {
+          default: 3.20,                  # $3.20/MTok
+          over_200k: 3.20
+        },
+        cache: {
+          write: 0.0,                     # Limited-time Free
+          read: 0.20                      # $0.20/MTok cached input
+        }
+      },
+
+      # GLM-5-Turbo — fast variant
+      "glm-5-turbo" => {
+        input: {
+          default: 1.20,                  # $1.20/MTok
+          over_200k: 1.20
+        },
+        output: {
+          default: 4.00,                  # $4.00/MTok
+          over_200k: 4.00
+        },
+        cache: {
+          write: 0.0,                     # Limited-time Free
+          read: 0.24                      # $0.24/MTok cached input
+        }
+      },
+
+      # GLM-4.7 — mid-tier
+      "glm-4.7" => {
+        input: {
+          default: 0.60,                  # $0.60/MTok
+          over_200k: 0.60
+        },
+        output: {
+          default: 2.20,                  # $2.20/MTok
+          over_200k: 2.20
+        },
+        cache: {
+          write: 0.0,                     # Limited-time Free
+          read: 0.11                      # $0.11/MTok cached input
+        }
+      },
+
+      # GLM-4.6 — same pricing tier as GLM-4.7
+      "glm-4.6" => {
+        input: {
+          default: 0.60,                  # $0.60/MTok
+          over_200k: 0.60
+        },
+        output: {
+          default: 2.20,                  # $2.20/MTok
+          over_200k: 2.20
+        },
+        cache: {
+          write: 0.0,                     # Limited-time Free
+          read: 0.11                      # $0.11/MTok cached input
+        }
+      },
+
+      # GLM-4.5 — same input/output pricing as GLM-4.7
+      "glm-4.5" => {
+        input: {
+          default: 0.60,                  # $0.60/MTok
+          over_200k: 0.60
+        },
+        output: {
+          default: 2.20,                  # $2.20/MTok
+          over_200k: 2.20
+        },
+        cache: {
+          write: 0.0,                     # Limited-time Free
+          read: 0.11                      # $0.11/MTok cached input
+        }
+      },
+
+      # GLM-4.5-X — high-performance variant
+      "glm-4.5-x" => {
+        input: {
+          default: 2.20,                  # $2.20/MTok
+          over_200k: 2.20
+        },
+        output: {
+          default: 8.90,                  # $8.90/MTok
+          over_200k: 8.90
+        },
+        cache: {
+          write: 0.0,                     # Limited-time Free
+          read: 0.45                      # $0.45/MTok cached input
+        }
+      },
+
+      # GLM-4.5-Air — budget model
+      "glm-4.5-air" => {
+        input: {
+          default: 0.20,                  # $0.20/MTok
+          over_200k: 0.20
+        },
+        output: {
+          default: 1.10,                  # $1.10/MTok
+          over_200k: 1.10
+        },
+        cache: {
+          write: 0.0,                     # Limited-time Free
+          read: 0.03                      # $0.03/MTok cached input
+        }
+      },
+
+      # GLM-4.5-AirX — fast budget model
+      "glm-4.5-airx" => {
+        input: {
+          default: 1.10,                  # $1.10/MTok
+          over_200k: 1.10
+        },
+        output: {
+          default: 4.50,                  # $4.50/MTok
+          over_200k: 4.50
+        },
+        cache: {
+          write: 0.0,                     # Limited-time Free
+          read: 0.22                      # $0.22/MTok cached input
+        }
+      },
+
+      # GLM-4-32B — small open-weight model, flat-rate
+      "glm-4-32b" => {
+        input: {
+          default: 0.10,                  # $0.10/MTok
+          over_200k: 0.10
+        },
+        output: {
+          default: 0.10,                  # $0.10/MTok
+          over_200k: 0.10
+        },
+        cache: {
+          write: 0.0,                     # No caching
+          read: 0.0
+        }
+      },
+
+      # GLM-4.7-FlashX — ultra-budget, flat rate
+      "glm-4.7-flashx" => {
+        input: {
+          default: 0.07,                  # $0.07/MTok
+          over_200k: 0.07
+        },
+        output: {
+          default: 0.40,                  # $0.40/MTok
+          over_200k: 0.40
+        },
+        cache: {
+          write: 0.0,                     # Limited-time Free
+          read: 0.01                      # $0.01/MTok cached input
+        }
+      },
+
+      # GLM-4.7-Flash — free model
+      "glm-4.7-flash" => {
+        input: {
+          default: 0.0,                   # Free
+          over_200k: 0.0
+        },
+        output: {
+          default: 0.0,                   # Free
+          over_200k: 0.0
+        },
+        cache: {
+          write: 0.0,                     # Free
+          read: 0.0                       # Free
+        }
+      },
+
+      # GLM-4.5-Flash — free model
+      "glm-4.5-flash" => {
+        input: {
+          default: 0.0,                   # Free
+          over_200k: 0.0
+        },
+        output: {
+          default: 0.0,                   # Free
+          over_200k: 0.0
+        },
+        cache: {
+          write: 0.0,                     # Free
+          read: 0.0                       # Free
+        }
+      },
+
       # O-series reasoning models — flat-rate (200K context window)
       # Source: https://openai.com/api/pricing/
       "o3" => {
@@ -529,6 +744,35 @@ module Clacky
           "o4-mini"
         when /^o3$/i
           "o3"
+
+        # GLM (ZhipuAI / Z.AI) models — strict match to avoid accidental aliasing
+        when /\aglm-5\.1\z/i
+          "glm-5.1"
+        when /\aglm-5-turbo\z/i, /\aglm-5\.0-turbo\z/i
+          "glm-5-turbo"
+        when /\aglm-5\z/i, /\aglm-5\.0\z/i
+          "glm-5"
+        when /\aglm-4\.7-flashx\z/i
+          "glm-4.7-flashx"
+        when /\aglm-4\.7-flash\z/i
+          "glm-4.7-flash"
+        when /\aglm-4\.7\z/i
+          "glm-4.7"
+        when /\aglm-4\.6\z/i
+          "glm-4.6"
+        when /\aglm-4\.5-x\z/i
+          "glm-4.5-x"
+        when /\aglm-4\.5-airx\z/i
+          "glm-4.5-airx"
+        when /\aglm-4\.5-air\z/i
+          "glm-4.5-air"
+        when /\aglm-4\.5-flash\z/i
+          "glm-4.5-flash"
+        when /\aglm-4\.5\z/i
+          "glm-4.5"
+        when /\aglm-4-32b\z/i
+          "glm-4-32b"
+
         else
           nil  # No pricing available for this model — cost will show as N/A
         end
