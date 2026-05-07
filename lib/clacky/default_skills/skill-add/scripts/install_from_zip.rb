@@ -19,7 +19,7 @@ require 'find'
 class ZipSkillInstaller
   ZIP_URL_PATTERN = %r{^https?://.+\.zip(\?.*)?$}i
 
-  def initialize(zip_source, skill_name: nil, target_dir: nil)
+  def initialize(zip_source, skill_name: nil, target_dir: nil, skip_if_exists: false)
     @zip_source = zip_source
     @local_path = local_zip_path?(zip_source)
     # skill_name can be provided explicitly (e.g. slug from the store API).
@@ -27,45 +27,72 @@ class ZipSkillInstaller
     # "ui-ux-pro-max-1.0.0.zip" → "ui-ux-pro-max".
     @skill_name = skill_name || infer_skill_name(zip_source)
     @target_dir = target_dir || File.join(Dir.home, '.clacky', 'skills')
+    # When true, existing skill directories are preserved and the install for
+    # that specific skill is skipped (recorded in @skipped_skills).
+    # Default false keeps the legacy "overwrite" behaviour for `install`.
+    @skip_if_exists   = skip_if_exists
+    # Suppresses user-facing puts for programmatic callers (set by `perform`).
+    @silent           = false
     @installed_skills = []
-    @errors = []
+    @skipped_skills   = []
+    @errors           = []
   end
 
-  # Main installation entry point.
+  # Programmatic entry point for library-style callers (e.g. onboard pre-install).
+  #
+  # Unlike `install`, this method:
+  #   - does NOT print user-facing output
+  #   - does NOT call `exit` on failure (raises instead)
+  #   - returns a result hash: { installed: [...], skipped: [...], errors: [...] }
+  #
+  # The caller is responsible for rendering feedback and deciding whether any
+  # error is fatal.
+  def perform
+    @silent = true
+    do_install
+    { installed: @installed_skills, skipped: @skipped_skills, errors: @errors }
+  end
+
+  # Main installation entry point (CLI). Prints progress, prints a final
+  # report, and calls `exit` on failure. Use `perform` for programmatic use.
   def install
+    do_install
+    report_results
+  rescue ArgumentError => e
+    puts "Error: #{e.message}"
+    exit 1
+  rescue StandardError => e
+    puts "Error: Installation failed: #{e.message}"
+    exit 1
+  end
+
+  # Shared core used by both `install` (CLI) and `perform` (library).
+  # Raises on invalid input; the caller decides how to surface errors.
+  private def do_install
     if @local_path
       # Install directly from a local zip file — no download needed.
-      # Expand tilde in path (e.g. ~/Downloads/skill.zip)
+      # Expand tilde in path (e.g. ~/Downloads/skill.zip).
       expanded = File.expand_path(@zip_source)
-      raise ArgumentError, "File not found: #{@zip_source}" unless File.exist?(expanded)
-      raise ArgumentError, "Not a zip file: #{@zip_source}" unless expanded.end_with?('.zip')
+      raise ArgumentError, "File not found: #{@zip_source}"  unless File.exist?(expanded)
+      raise ArgumentError, "Not a zip file: #{@zip_source}"  unless expanded.end_with?('.zip')
 
       Dir.mktmpdir('clacky-zip-') do |tmpdir|
         extract_zip(expanded, tmpdir)
-        extracted_dir = File.join(tmpdir, 'extracted')
-        discover_and_install_skills(extracted_dir)
+        discover_and_install_skills(File.join(tmpdir, 'extracted'))
       end
     else
       # Install from a remote URL.
       unless valid_zip_url?
-        raise ArgumentError, "Invalid zip source: #{@zip_source}\nProvide an http(s) URL ending with .zip, or an absolute path to a local zip file."
+        raise ArgumentError, "Invalid zip source: #{@zip_source}\n" \
+                             "Provide an http(s) URL ending with .zip, or an absolute path to a local zip file."
       end
 
       Dir.mktmpdir('clacky-zip-') do |tmpdir|
         zip_path = download_zip(tmpdir)
         extract_zip(zip_path, tmpdir)
-        extracted_dir = File.join(tmpdir, 'extracted')
-        discover_and_install_skills(extracted_dir)
+        discover_and_install_skills(File.join(tmpdir, 'extracted'))
       end
     end
-
-    report_results
-  rescue ArgumentError => e
-    puts "❌ #{e.message}"
-    exit 1
-  rescue StandardError => e
-    puts "❌ Installation failed: #{e.message}"
-    exit 1
   end
 
   # Return true if the source looks like a local file path (absolute or relative ending in .zip).
@@ -93,8 +120,10 @@ class ZipSkillInstaller
 
   # Download the zip file to tmpdir and return its local path.
   private def download_zip(tmpdir)
-    puts "⬇️  Downloading skill package..."
-    puts "   #{@zip_source}"
+    unless @silent
+      puts "Downloading skill package..."
+      puts "   #{@zip_source}"
+    end
 
     zip_path = File.join(tmpdir, 'skill.zip')
     uri = URI.parse(@zip_source)
@@ -129,7 +158,7 @@ class ZipSkillInstaller
 
   # Extract the zip archive into <tmpdir>/extracted/.
   private def extract_zip(zip_path, tmpdir)
-    puts "📂 Extracting package..."
+    puts "Extracting package..." unless @silent
     extracted_dir = File.join(tmpdir, 'extracted')
     FileUtils.mkdir_p(extracted_dir)
 
@@ -184,7 +213,11 @@ class ZipSkillInstaller
     target_path = File.join(@target_dir, name)
 
     if File.exist?(target_path)
-      puts "♻️  Skill '#{name}' already exists — overwriting..."
+      if @skip_if_exists
+        @skipped_skills << { name: name, path: target_path, reason: 'already exists' }
+        return
+      end
+      puts "Skill '#{name}' already exists — overwriting..." unless @silent
       FileUtils.rm_rf(target_path)
     end
 
@@ -218,7 +251,7 @@ class ZipSkillInstaller
     puts "\n" + "=" * 60
 
     if @installed_skills.empty?
-      puts "❌ No skills were installed."
+      puts "No skills were installed."
       if @errors.any?
         puts "\nErrors:"
         @errors.each { |e| puts "   • #{e}" }
@@ -226,7 +259,7 @@ class ZipSkillInstaller
       exit 1
     end
 
-    puts "✅ Installation complete!"
+    puts "Installation complete!"
     puts "\nInstalled #{@installed_skills.size} skill(s):\n\n"
     @installed_skills.each do |skill|
       puts "   ✓ #{skill[:name]}"
@@ -236,7 +269,7 @@ class ZipSkillInstaller
     end
 
     if @errors.any?
-      puts "⚠️  Warnings:"
+      puts "Warnings:"
       @errors.each { |e| puts "   • #{e}" }
       puts
     end
