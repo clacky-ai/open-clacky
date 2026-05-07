@@ -4,9 +4,10 @@ description: |
   Configure IM platform channels (Feishu, WeCom, Weixin) for openclacky.
   Uses browser automation for navigation; guides the user to paste credentials and perform UI steps.
   Trigger on: "channel setup", "setup feishu", "setup wecom", "setup weixin", "setup wechat", "channel config",
-  "channel status", "channel enable", "channel disable", "channel reconfigure", "channel doctor".
-  Subcommands: setup, status, enable <platform>, disable <platform>, reconfigure, doctor.
-argument-hint: "setup | status | enable <platform> | disable <platform> | reconfigure | doctor"
+  "channel status", "channel enable", "channel disable", "channel reconfigure", "channel doctor",
+  "send message to weixin", "send message to feishu", "send message to wecom".
+  Subcommands: setup, status, enable <platform>, disable <platform>, reconfigure, doctor, send.
+argument-hint: "setup | status | enable <platform> | disable <platform> | reconfigure | doctor | send <platform> <message>"
 allowed-tools:
   - Bash
   - Read
@@ -33,6 +34,7 @@ Configure IM platform channels for openclacky.
 | `channel disable feishu/wecom/weixin` | disable |
 | `channel reconfigure` | reconfigure |
 | `channel doctor` | doctor |
+| `send <message> to weixin/feishu/wecom` | send |
 
 ---
 
@@ -344,6 +346,58 @@ Check each item, report ✅ / ❌ with remediation:
    ```
    - `WeCom authentication failed` or non-zero errcode → ❌ "WeCom credentials incorrect"
    - `adapter loop started` with no auth error → ✅
+
+---
+
+## `send`
+
+Proactively send a message to a user via an IM channel adapter.
+
+### Parse the request
+
+Extract two things from the user's instruction:
+- **platform** — one of `weixin`, `feishu`, `wecom`
+- **message** — the text content to send
+
+If the platform cannot be inferred, ask the user to clarify.
+
+### Step 1 — Resolve target user (optional)
+
+If the user specified a `user_id`, use it directly.
+
+Otherwise, list known users first:
+
+```bash
+curl -s http://${CLACKY_SERVER_HOST}:${CLACKY_SERVER_PORT}/api/channels/<platform>/users
+```
+
+- If the list is **empty**: tell the user "No known users for `<platform>`. The target user must send at least one message to the bot before proactive messaging is possible." Stop here.
+- If there is **exactly one** user: use it silently.
+- If there are **multiple** users: show the list and ask which one to send to, unless the user already specified one.
+
+### Step 2 — Send the message
+
+```bash
+curl -s -X POST http://${CLACKY_SERVER_HOST}:${CLACKY_SERVER_PORT}/api/channels/<platform>/send \
+  -H "Content-Type: application/json" \
+  -d '{"message": "<message>", "user_id": "<user_id>"}'
+```
+
+**Response handling:**
+
+| HTTP status | Meaning | Action |
+|---|---|---|
+| `200 { ok: true }` | Delivered | Tell user: "✅ Message sent to `<platform>`." |
+| `400` platform not running | Adapter is stopped | Tell user the platform is not running and suggest `channel enable <platform>`. |
+| `400` no context_token | Token missing | Explain: "The bot has no active session token for this user. Ask the user to send any message to the bot first, then retry." |
+| `503` no known users | Nobody has messaged the bot | Same guidance as empty user list above. |
+| Other error | Unexpected | Show the error message from the response body. |
+
+### Constraints & notes
+
+- **Weixin (iLink protocol)**: Every outbound message requires a `context_token` that is obtained from the most recent inbound message from that user. The token is cached in memory and reset on server restart. If the server was restarted since the user last wrote, the token is gone and the send will fail — the user must message the bot again.
+- **Feishu / WeCom**: No token required. As long as the adapter is running and the `user_id` / `chat_id` is valid, the message will be delivered.
+- This feature is intended for **proactive notifications** (e.g. task completion, reminders). It is not a replacement for the normal reply flow triggered by inbound messages.
 
 ---
 

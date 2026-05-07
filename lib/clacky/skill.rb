@@ -287,6 +287,36 @@ module Clacky
         end
       end
 
+      # Environment hint: if the skill references ${CLACKY_SERVER_HOST/PORT} but
+      # those vars were not injected (bare-CLI mode without a running server),
+      # the `${...}` placeholders will survive expansion as literal text. In that
+      # case append a non-fatal note so the LLM knows the skill's HTTP callbacks
+      # will not work, without blocking the skill entirely (the user may still
+      # want to read instructions, explore files, etc.).
+      if processed_content.match?(/\$\{CLACKY_SERVER_(HOST|PORT)\}/)
+        processed_content += <<~HINT
+
+
+          ---
+
+          > ⚠️ **Environment note (auto-injected)**: this skill calls back into the
+          > Clacky HTTP server (via `${CLACKY_SERVER_HOST}` / `${CLACKY_SERVER_PORT}`),
+          > but those variables are **not set** in the current process. That means
+          > no local Clacky server was detected.
+          >
+          > Any `curl http://${CLACKY_SERVER_HOST}:...` command in the steps above
+          > will fail with a DNS/connection error. Before running those steps you
+          > should either:
+          >
+          > 1. Ask the user to start the server in another terminal: `clacky server`
+          >    (then retry — the CLI auto-detects it via `/tmp/clacky-server-*.pid`), or
+          > 2. If the task can be completed without the server API, skip those steps
+          >    and tell the user which parts require the server.
+          >
+          > This is an informational hint, not an error. Proceed with judgment.
+        HINT
+      end
+
       processed_content
     end
 

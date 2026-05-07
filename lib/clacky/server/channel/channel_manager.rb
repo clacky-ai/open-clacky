@@ -77,6 +77,66 @@ module Clacky
         @mutex.synchronize { @adapters.map(&:platform_id) }
       end
 
+      # Proactively send a message to a user on the given platform.
+      #
+      # For Weixin (iLink protocol) a context_token is required for every outbound
+      # message.  This method looks up the most-recently cached token for user_id.
+      # If no token is found the message cannot be delivered and nil is returned.
+      #
+      # For Feishu and WeCom the chat_id / user_id is sufficient — no token needed.
+      #
+      # @param platform [Symbol, String] e.g. :weixin, :feishu, :wecom
+      # @param user_id  [String]         IM user identifier
+      # @param message  [String]         plain-text (or markdown) message to send
+      # @return [Hash, nil]  adapter result hash, or nil on failure
+      def send_to_user(platform, user_id, message)
+        platform = platform.to_sym
+        adapter  = @mutex.synchronize { @adapters.find { |a| a.platform_id == platform } }
+
+        unless adapter
+          Clacky::Logger.warn("[ChannelManager] send_to_user: no running adapter for :#{platform}")
+          return nil
+        end
+
+        Clacky::Logger.info("[ChannelManager] send_to_user :#{platform} → #{user_id}")
+        adapter.send_text(user_id, message)
+      rescue StandardError => e
+        Clacky::Logger.error("[ChannelManager] send_to_user failed: #{e.message}")
+        nil
+      end
+
+      # Return a list of known user IDs for the given platform.
+      # Collected from every message that has been processed since the server started.
+      # Weixin stores context_tokens keyed by user_id; feishu/wecom track chat_ids
+      # via the session binding table in the registry.
+      #
+      # @param platform [Symbol, String]
+      # @return [Array<String>]
+      def known_users(platform)
+        platform = platform.to_sym
+        adapter  = @mutex.synchronize { @adapters.find { |a| a.platform_id == platform } }
+        return [] unless adapter
+
+        # Weixin adapter exposes @context_tokens whose keys are user_ids
+        if adapter.respond_to?(:context_token_user_ids)
+          return adapter.context_token_user_ids
+        end
+
+        # Fallback: scan session registry for channel_keys matching this platform
+        prefix = "#{platform}:"
+        ids = []
+        @registry.list.each do |summary|
+          @registry.with_session(summary[:id]) do |s|
+            (s[:channel_keys] || []).each do |key|
+              next unless key.start_with?(prefix)
+              # key format: "platform:user:USER_ID" or "platform:chat:CHAT_ID"
+              ids << key.split(":", 3).last
+            end
+          end
+        end
+        ids.uniq
+      end
+
       # Hot-reload a single platform adapter with updated config.
       # Stops the existing adapter (if running), then starts a new one if enabled.
       # @param platform [Symbol]

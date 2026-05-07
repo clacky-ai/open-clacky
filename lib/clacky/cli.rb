@@ -68,6 +68,14 @@ module Clacky
       # Fire-and-forget background thread; never blocks startup.
       Clacky::Telemetry.startup!
 
+      # ── Sibling server discovery ───────────────────────────────────────
+      # Bare-CLI mode does NOT boot an HTTP server, so skills that call
+      # back into /api/* (channels, browser, scheduler) normally can't work.
+      # If the user happens to have a Clacky server running on this machine
+      # (in another terminal or via `clacky server`), auto-wire CLACKY_SERVER_HOST
+      # / CLACKY_SERVER_PORT so those skills can reach it transparently.
+      discover_sibling_server!
+
       agent_config = Clacky::AgentConfig.load
 
       # Handle session listing
@@ -148,6 +156,36 @@ module Clacky
     end
 
     no_commands do
+      # Detect a sibling Clacky server running on this machine and expose its
+      # address to skills via ENV. Runs only in bare-CLI mode (where no server
+      # is booted by this process), and only when the user hasn't already set
+      # CLACKY_SERVER_HOST / CLACKY_SERVER_PORT explicitly.
+      #
+      # Why: skills like `channel-setup` and `browser-setup` call back into
+      # http://${CLACKY_SERVER_HOST}:${CLACKY_SERVER_PORT}/api/*. In server
+      # mode those vars are injected by HTTPServer#start. In CLI mode they
+      # would be blank, so the skill templates expand to an unreachable URL.
+      #
+      # Discovery is best-effort and non-fatal: if nothing is found we stay
+      # silent and let the skill's own pre-flight check emit a friendly error.
+      private def discover_sibling_server!
+        return if ENV["CLACKY_SERVER_PORT"] && !ENV["CLACKY_SERVER_PORT"].strip.empty?
+
+        require_relative "server/discover"
+        info = Clacky::Server::Discover.find_local
+        return unless info
+
+        ENV["CLACKY_SERVER_HOST"] = info[:host]
+        ENV["CLACKY_SERVER_PORT"] = info[:port].to_s
+        Clacky::Logger.debug(
+          "[CLI] Discovered local server PID=#{info[:pid]} at " \
+          "#{info[:host]}:#{info[:port]} — CLACKY_SERVER_* exported."
+        )
+      rescue StandardError => e
+        # Discovery must never break `clacky agent`.
+        Clacky::Logger.debug("[CLI] discover_sibling_server! failed: #{e.class}: #{e.message}")
+      end
+
       # Handle the `/config` slash command.
       #
       # show_config_modal is a pure UI component — it only mutates @models

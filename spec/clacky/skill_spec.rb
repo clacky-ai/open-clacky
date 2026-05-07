@@ -223,6 +223,58 @@ RSpec.describe Clacky::Skill do
           ENV["CLACKY_SERVER_PORT"] = orig
         end
       end
+
+      it "appends an environment hint when ${CLACKY_SERVER_*} is referenced but not injected" do
+        skill_dir = File.join(temp_dir, "env-missing-skill")
+        FileUtils.mkdir_p(skill_dir)
+        File.write(File.join(skill_dir, "SKILL.md"), <<~CONTENT)
+          ---
+          name: env-missing-skill
+          description: Skill relying on server env
+          ---
+          Call http://${CLACKY_SERVER_HOST}:${CLACKY_SERVER_PORT}/api/foo
+        CONTENT
+
+        orig_host = ENV.delete("CLACKY_SERVER_HOST")
+        orig_port = ENV.delete("CLACKY_SERVER_PORT")
+        begin
+          skill = described_class.new(skill_dir)
+          result = skill.process_content
+          expect(result).to include("Environment note")
+          expect(result).to include("clacky server")
+          # Unexpanded placeholders survive verbatim so the hint's context is clear.
+          expect(result).to include("${CLACKY_SERVER_HOST}")
+        ensure
+          ENV["CLACKY_SERVER_HOST"] = orig_host if orig_host
+          ENV["CLACKY_SERVER_PORT"] = orig_port if orig_port
+        end
+      end
+
+      it "does NOT append the environment hint when ${CLACKY_SERVER_*} is fully expanded" do
+        skill_dir = File.join(temp_dir, "env-present-skill")
+        FileUtils.mkdir_p(skill_dir)
+        File.write(File.join(skill_dir, "SKILL.md"), <<~CONTENT)
+          ---
+          name: env-present-skill
+          description: Skill relying on server env
+          ---
+          Call http://${CLACKY_SERVER_HOST}:${CLACKY_SERVER_PORT}/api/foo
+        CONTENT
+
+        orig_host = ENV["CLACKY_SERVER_HOST"]
+        orig_port = ENV["CLACKY_SERVER_PORT"]
+        ENV["CLACKY_SERVER_HOST"] = "127.0.0.1"
+        ENV["CLACKY_SERVER_PORT"] = "8080"
+        begin
+          skill = described_class.new(skill_dir)
+          result = skill.process_content
+          expect(result).not_to include("Environment note")
+          expect(result).to include("http://127.0.0.1:8080/api/foo")
+        ensure
+          ENV["CLACKY_SERVER_HOST"] = orig_host
+          ENV["CLACKY_SERVER_PORT"] = orig_port
+        end
+      end
     end
 
     it "leaves unknown <%= key %> placeholders as empty string" do

@@ -393,6 +393,13 @@ module Clacky
             @ctx_mutex.synchronize { @context_tokens[user_id] }
           end
 
+          # Return all user IDs for which we have a cached context_token.
+          # Used by ChannelManager#known_users so callers can enumerate
+          # users reachable for proactive messaging.
+          def context_token_user_ids
+            @ctx_mutex.synchronize { @context_tokens.keys.dup }
+          end
+
           # Split text into ≤2000 Unicode character chunks per iLink protocol recommendation.
           # Priority: split at \n\n, then \n, then space, then hard cut.
           def split_message(text, limit: 2000)
