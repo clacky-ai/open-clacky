@@ -98,6 +98,7 @@ module Clacky
               message_id: message_id,
               timestamp: timestamp,
               chat_type: chat_type,
+              mentioned_open_ids: Array(message["mentions"]).filter_map { |m| m.dig("id", "open_id") },
               raw: @data
             }
           rescue JSON::ParserError

@@ -33,9 +33,15 @@ module Clacky
 
       # Update the reply context for the current inbound message.
       # Called at the start of each route_message so replies are threaded correctly.
-      # @param event [Hash] inbound event with :message_id
+      # Also updates chat_id — a session may span multiple chats (e.g. same user
+      # in both a direct message and a group), and each inbound event dictates
+      # where outbound replies should be routed.
+      # @param event [Hash] inbound event with :message_id and :chat_id
       def update_message_context(event)
-        @mutex.synchronize { @message_id = event[:message_id] }
+        @mutex.synchronize do
+          @message_id = event[:message_id]
+          @chat_id    = event[:chat_id] if event[:chat_id]
+        end
       end
 
       # === Output display ===

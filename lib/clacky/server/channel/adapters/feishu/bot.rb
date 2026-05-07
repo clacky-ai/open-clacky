@@ -226,6 +226,16 @@ module Clacky
             }.join
           end
 
+          # Get this bot's own open_id (cached, fetched lazily on first use).
+          # Used to detect @bot mentions in group chats.
+          # @return [String, nil] bot open_id, or nil if the API call fails
+          def bot_open_id
+            @bot_open_id ||= get("/open-apis/bot/v3/info").dig("bot", "open_id")
+          rescue => e
+            Clacky::Logger.warn("[feishu] Failed to fetch bot_open_id: #{e.message}")
+            nil
+          end
+
           # Get tenant access token (cached)
           # @return [String] Access token
           def tenant_access_token
