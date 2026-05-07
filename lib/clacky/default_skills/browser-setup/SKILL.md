@@ -146,10 +146,35 @@ Then tell the user:
 
 **On WSL**:
 
+First, ask the user which browser they want to use:
+
+> WSL2 detected. Which browser do you want to use?
+>
+> 1. **Windows browser** (Chrome/Edge running on Windows side) — recommended, avoids Linux GUI dependencies
+> 2. **Linux browser** (Chrome running inside WSL2 via X11/Wayland) — only if you have a Linux GUI set up
+>
+> Enter 1 or 2:
+
+Wait for user response. Parse the answer:
+- **1 or "windows"** → set `WSL_MODE="windows"` and proceed with Windows browser steps
+- **2 or "linux"** → set `WSL_MODE="linux"` and proceed with Linux browser steps
+
+**If Windows browser (mode = "windows")**:
+
 > Please follow these steps:
-> 1. Open **Edge** on Windows
-> 2. Visit: `edge://inspect/#remote-debugging`
+> 1. Open **Chrome or Edge** on Windows
+> 2. Visit: `chrome://inspect/#remote-debugging` (or `edge://inspect/#remote-debugging`)
 > 3. Click **"Allow remote debugging for this browser instance"**
+>
+> Let me know when done ✅
+
+**If Linux browser (mode = "linux")**:
+
+> Please follow these steps:
+> 1. Make sure **Chrome is installed inside WSL2** and can open (requires X11/Wayland setup)
+> 2. Open Chrome inside WSL2
+> 3. Visit: `chrome://inspect/#remote-debugging`
+> 4. Click **"Allow remote debugging for this browser instance"**
 >
 > Let me know when done ✅
 
@@ -206,6 +231,16 @@ Parse the version number:
 ### Step 5 — Save configuration via API
 
 Call the API to save the configuration:
+
+**On WSL** (include wsl_browser_mode):
+
+```bash
+curl -s -X POST http://${CLACKY_SERVER_HOST}:${CLACKY_SERVER_PORT}/api/browser/configure \
+  -H "Content-Type: application/json" \
+  -d "{\"chrome_version\":\"${VERSION}\",\"wsl_browser_mode\":\"${WSL_MODE}\"}"
+```
+
+**On macOS / Linux**:
 
 ```bash
 curl -s -X POST http://${CLACKY_SERVER_HOST}:${CLACKY_SERVER_PORT}/api/browser/configure \

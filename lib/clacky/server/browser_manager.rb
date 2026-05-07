@@ -3,6 +3,10 @@
 require "yaml"
 require "shellwords"
 require "open3"
+require "tmpdir"
+require "fileutils"
+require "net/http"
+require "json"
 
 module Clacky
   # BrowserManager owns the chrome-devtools-mcp daemon lifecycle.
@@ -126,13 +130,19 @@ module Clacky
     # Write browser.yml with the given config and reload the daemon.
     # Called by HttpServer POST /api/browser/configure.
     # @param chrome_version [String] detected Chrome major version
-    def configure(chrome_version:)
+    # @param wsl_browser_mode [String, nil] "windows" or "linux" (WSL only)
+    # @param chrome_port [Integer, nil] specific port for Chrome remote debugging
+    # @param auto_launch [Boolean, nil] whether to auto-launch headless Chrome
+    def configure(chrome_version:, wsl_browser_mode: nil, chrome_port: nil, auto_launch: nil)
       cfg = {
         "enabled"        => true,
         "browser"        => "chrome",
         "chrome_version" => chrome_version.to_s,
         "configured_at"  => Date.today.to_s
       }
+      cfg["wsl_browser_mode"] = wsl_browser_mode if wsl_browser_mode && !wsl_browser_mode.empty?
+      cfg["chrome_port"] = chrome_port.to_i if chrome_port && chrome_port.to_i > 0
+      cfg["auto_launch"] = auto_launch if [true, false].include?(auto_launch)
       FileUtils.mkdir_p(File.dirname(BROWSER_CONFIG_PATH))
       File.write(BROWSER_CONFIG_PATH, cfg.to_yaml)
       reload
@@ -151,6 +161,21 @@ module Clacky
       @config = cfg
       reload
       new_enabled
+    end
+
+    # Returns the configured WSL browser mode from browser.yml.
+    # @return [String] "windows" (default) or "linux"
+    def wsl_browser_mode
+      cfg = load_config
+      mode = cfg["wsl_browser_mode"].to_s.strip
+      mode.empty? ? "windows" : mode
+    end
+
+    # Public config reader for BrowserDetector (avoids circular deps).
+    # Returns the raw config hash from browser.yml.
+    # @return [Hash]
+    def load_config_for_detector
+      load_config
     end
 
     # ---------------------------------------------------------------------------
@@ -198,6 +223,20 @@ module Clacky
 
         result
       end
+    rescue RuntimeError => e
+      # If Chrome disconnected but MCP daemon is still alive, kill the daemon
+      # and auto-launch Chrome so the NEXT browser call can recover seamlessly.
+      if chrome_connection_error?(e.message)
+        Clacky::Logger.info("[BrowserManager] Chrome connection lost, cleaning up...")
+        @mutex.synchronize do
+          kill_process!
+          if auto_launch_enabled?
+            Clacky::Logger.info("[BrowserManager] Auto-launching Chrome for recovery...")
+            auto_launch_chrome
+          end
+        end
+      end
+      raise
     rescue Clacky::BrowserNotReachableError => e
       # Return friendly error for AI to guide user
       raise Clacky::AgentError, e.message
@@ -221,6 +260,18 @@ module Clacky
 
       # ⭐️ Critical: Verify Chrome is reachable BEFORE starting MCP daemon
       detected = Clacky::Utils::BrowserDetector.detect
+
+      if detected[:status] == :not_found
+        # Try auto-launching Chrome before giving up
+        if auto_launch_enabled?
+          Clacky::Logger.info("[BrowserManager] Chrome not found, attempting auto-launch...")
+          launched = auto_launch_chrome
+          if launched.is_a?(Hash)
+            Clacky::Logger.info("[BrowserManager] Auto-launch succeeded, using endpoint directly")
+            detected = launched.merge(status: :ok)
+          end
+        end
+      end
 
       if detected[:status] == :not_found
         raise Clacky::BrowserNotReachableError, <<~MSG.strip
@@ -294,7 +345,271 @@ module Clacky
       Clacky::Logger.info("[BrowserManager] MCP daemon started successfully (pid=#{wait_thr.pid})")
     end
 
-    # Build chrome-devtools-mcp command with explicit connection parameters.
+    # ---------------------------------------------------------------------------
+    # Auto-launch Chrome (headless)
+    # ---------------------------------------------------------------------------
+
+    # Check if auto-launch is enabled in browser.yml.
+    # Defaults to true on Linux/WSL-linux mode (where headless Chrome is available).
+    # @return [Boolean]
+    def auto_launch_enabled?
+      cfg = load_config
+      return cfg["auto_launch"] == true if cfg.key?("auto_launch")
+
+      # Default: enable auto-launch on Linux-based environments
+      os = Clacky::Utils::EnvironmentDetector.os_type
+      os == :linux || os == :wsl
+    end
+
+    # Attempt to auto-launch headless Chrome for remote debugging.
+    # Checks for existing Chrome instances first to avoid duplicates.
+    # Finds Chrome binary, picks a free port, launches, and waits for readiness.
+    # @return [Hash, false] detector-compatible hash on success, false on failure
+    def auto_launch_chrome
+      # First: check if Chrome is already running with remote debugging
+      existing = find_existing_chrome
+      if existing
+        Clacky::Logger.info("[BrowserManager] Found existing Chrome on port #{existing[:port]}, reusing")
+        return { mode: :ws_endpoint, value: existing[:ws] }
+      end
+
+      chrome_bin = find_chrome_binary
+      unless chrome_bin
+        Clacky::Logger.warn("[BrowserManager] Cannot auto-launch: no Chrome binary found")
+        return false
+      end
+
+      port = resolve_chrome_port
+      Clacky::Logger.info("[BrowserManager] Auto-launching Chrome: #{chrome_bin} on port #{port}")
+
+      # Kill any previously spawned Chrome before launching new one
+      kill_spawned_chrome!
+
+      pid = spawn_chrome(chrome_bin, port)
+      unless pid
+        Clacky::Logger.warn("[BrowserManager] Failed to spawn Chrome")
+        return false
+      end
+
+      @chrome_pid = pid
+      Clacky::Logger.info("[BrowserManager] Chrome spawned (pid=#{pid}), waiting for readiness...")
+      ready = wait_for_chrome(port, timeout: 10)
+      unless ready
+        Clacky::Logger.warn("[BrowserManager] Chrome did not become ready within timeout")
+        kill_spawned_chrome!
+        return false
+      end
+
+      Clacky::Logger.info("[BrowserManager] Chrome is ready on port #{port}")
+
+      # Fetch WebSocket endpoint directly from the known port
+      ws = Clacky::Utils::BrowserDetector.fetch_ws_endpoint(port)
+      unless ws
+        Clacky::Logger.warn("[BrowserManager] Chrome is running but could not fetch WebSocket URL")
+        kill_spawned_chrome!
+        return false
+      end
+
+      Clacky::Logger.info("[BrowserManager] Auto-launch complete: #{ws}")
+
+      # Persist the auto-launched port so BrowserDetector can find it on subsequent calls.
+      persist_auto_launch_port(port)
+
+      { mode: :ws_endpoint, value: ws }
+    rescue StandardError => e
+      Clacky::Logger.warn("[BrowserManager] Auto-launch failed: #{e.message}")
+      false
+    end
+
+    # Scan configured ports for an existing Chrome instance with remote debugging.
+    # @return [Hash, nil] { port: Integer, ws: String } or nil
+    def find_existing_chrome
+      require "net/http"
+      require "json"
+
+      ports = Clacky::Utils::BrowserDetector.load_scan_ports
+      ports.each do |port|
+        begin
+          uri  = URI("http://127.0.0.1:#{port}/json/version")
+          http = Net::HTTP.new(uri.host, uri.port)
+          http.open_timeout = 0.5
+          http.read_timeout = 0.5
+          resp = http.get(uri.request_uri)
+          next unless resp.code.to_i == 200
+
+          data = JSON.parse(resp.body)
+          ws = data["webSocketDebuggerUrl"]
+          next unless ws && !ws.empty?
+
+          Clacky::Logger.debug("[BrowserManager] Existing Chrome found on port #{port}: #{ws}")
+          return { port: port, ws: ws }
+        rescue StandardError
+          next
+        end
+      end
+      nil
+    end
+
+    # Persist the auto-launched Chrome port to browser.yml so BrowserDetector
+    # can find it on subsequent ensure_process! calls, preventing duplicate spawns.
+    def persist_auto_launch_port(port)
+      cfg = load_config
+      cfg["chrome_port"] = port.to_i
+      FileUtils.mkdir_p(File.dirname(BROWSER_CONFIG_PATH))
+      File.write(BROWSER_CONFIG_PATH, cfg.to_yaml)
+      Clacky::Logger.debug("[BrowserManager] Persisted auto-launch port #{port} to browser.yml")
+    rescue StandardError => e
+      Clacky::Logger.warn("[BrowserManager] Failed to persist auto-launch port: #{e.message}")
+    end
+
+    # Kill the Chrome process that we spawned (if any).
+    def kill_spawned_chrome!
+      if @chrome_pid
+        Clacky::Logger.info("[BrowserManager] Killing spawned Chrome (pid=#{@chrome_pid})")
+        Process.kill("TERM", @chrome_pid) rescue nil
+        Process.wait(@chrome_pid, Process::WNOHANG) rescue nil
+        @chrome_pid = nil
+      end
+      # Also clean up temp user-data-dir
+      if @chrome_user_data_dir && Dir.exist?(@chrome_user_data_dir)
+        FileUtils.rm_rf(@chrome_user_data_dir) rescue nil
+        @chrome_user_data_dir = nil
+      end
+    end
+
+    # Find the Chrome/Chromium binary on the system.
+    # @return [String, nil] path to binary
+    def find_chrome_binary
+      candidates = %w[
+        google-chrome-stable
+        google-chrome
+        chromium-browser
+        chromium
+        /opt/google/chrome/chrome
+        /usr/bin/google-chrome-stable
+        /usr/bin/google-chrome
+      ]
+
+      candidates.each do |bin|
+        path = which_cmd?(bin)
+        return path if path
+      end
+
+      nil
+    end
+
+    # Resolve which port Chrome should use.
+    # Uses chrome_port from browser.yml if configured, otherwise finds a free port.
+    # @return [Integer]
+    def resolve_chrome_port
+      cfg = load_config
+      configured = cfg["chrome_port"]
+      if configured && configured.to_i > 0
+        port = configured.to_i
+        unless port_free?(port)
+          Clacky::Logger.warn("[BrowserManager] Configured port #{port} is in use, falling back to auto-select")
+          return find_free_port
+        end
+        return port
+      end
+      find_free_port
+    end
+
+    # Find a free TCP port for Chrome remote debugging.
+    # @return [Integer]
+    def find_free_port
+      server = TCPServer.new("127.0.0.1", 0)
+      port = server.addr[1]
+      server.close
+      port
+    rescue StandardError
+      9223  # fallback
+    end
+
+    # Check if a port is free on localhost.
+    # @param port [Integer]
+    # @return [Boolean]
+    def port_free?(port)
+      TCPServer.new("127.0.0.1", port).close
+      true
+    rescue Errno::EADDRINUSE
+      false
+    end
+
+    # Spawn headless Chrome with remote debugging enabled.
+    # @param chrome_bin [String]
+    # @param port [Integer]
+    # @return [Integer, nil] pid
+    def spawn_chrome(chrome_bin, port)
+      user_data_dir = Dir.mktmpdir("clacky-chrome-")
+      args = [
+        chrome_bin,
+        "--headless=new",
+        "--remote-debugging-port=#{port}",
+        "--no-sandbox",
+        "--disable-gpu",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--disable-extensions",
+        "--disable-background-networking",
+        "--disable-sync",
+        "--user-data-dir=#{user_data_dir}",
+      ]
+
+      Clacky::Logger.debug("[BrowserManager] Spawning: #{args.join(' ')}")
+      pid = Process.spawn(*args, pgroup: true, [:out, :err] => "/dev/null")
+      # Store user_data_dir so it can be cleaned up later
+      @chrome_user_data_dir = user_data_dir
+      pid
+    rescue StandardError => e
+      Clacky::Logger.warn("[BrowserManager] spawn_chrome error: #{e.message}")
+      nil
+    end
+
+    # Wait for Chrome's devtools HTTP endpoint to become available.
+    # @param port [Integer]
+    # @param timeout [Integer] seconds
+    # @return [Boolean]
+    def wait_for_chrome(port, timeout: 10)
+      require "net/http"
+      require "json"
+
+      uri = URI("http://127.0.0.1:#{port}/json/version")
+      deadline = Time.now + timeout
+
+      while Time.now < deadline
+        begin
+          http = Net::HTTP.new(uri.host, uri.port)
+          http.open_timeout = 1
+          http.read_timeout = 1
+          response = http.get(uri.request_uri)
+          return true if response.code.to_i == 200
+        rescue StandardError
+          # Chrome not ready yet
+        end
+        sleep 0.5
+      end
+
+      false
+    end
+
+    # Check if a command is available on PATH.
+    # @param cmd [String]
+    # @return [String, nil] full path or nil
+    def which_cmd?(cmd)
+      # If it's already an absolute path and executable
+      return cmd if cmd.start_with?("/") && File.executable?(cmd)
+
+      ENV["PATH"].split(File::PATH_SEPARATOR).each do |dir|
+        full = File.join(dir, cmd)
+        return full if File.executable?(full)
+      end
+      nil
+    end
+
+    # ---------------------------------------------------------------------------
+    # Build MCP command
+    # ---------------------------------------------------------------------------
     # Always uses the detected browser endpoint (no --autoConnect fallback).
     # @param detected [Hash] { mode: :ws_endpoint, value: String } from BrowserDetector
     # @return [Array<String>] command array
@@ -360,6 +675,9 @@ module Clacky
         nil
       end
 
+      # Kill the Chrome process we spawned (if any) to prevent orphans
+      kill_spawned_chrome!
+
       Clacky::Logger.info("[BrowserManager] MCP daemon killed (pid=#{ps[:pid]})")
     end
 
@@ -392,6 +710,19 @@ module Clacky
         .select { |b| b.is_a?(Hash) && b["type"] == "text" }
         .map { |b| b["text"].to_s }
         .join("\n")
+    end
+
+    # Detect Chrome connectivity errors from MCP error messages.
+    # Returns true when the error indicates Chrome is unreachable
+    # (e.g. Chrome process died, port closed, connection refused).
+    def chrome_connection_error?(msg)
+      return false if msg.nil? || msg.empty?
+
+      msg.include?("Could not connect to Chrome") ||
+        msg.include?("ECONNREFUSED") ||
+        msg.include?("connect ECONNREFUSED") ||
+        msg.include?("Chrome is not reachable") ||
+        msg.include?("not running")
     end
   end
 end

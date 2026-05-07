@@ -299,6 +299,7 @@ RSpec.describe Clacky::BrowserManager do
 
     it "raises BrowserNotReachableError when browser is not found" do
       allow(Clacky::Utils::BrowserDetector).to receive(:detect).and_return({ status: :not_found })
+      allow(manager).to receive(:auto_launch_enabled?).and_return(false)
 
       expect { manager.send(:ensure_process!) }.to raise_error(
         Clacky::BrowserNotReachableError,
@@ -419,6 +420,53 @@ RSpec.describe Clacky::BrowserManager do
       inject_process([err_resp])
 
       expect { manager.mcp_call("navigate_page", { url: "bad" }) }.to raise_error(/navigation failed/)
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # #wsl_browser_mode
+  # ---------------------------------------------------------------------------
+  describe "#wsl_browser_mode" do
+    it "returns 'windows' when browser.yml is missing" do
+      expect(manager.wsl_browser_mode).to eq("windows")
+    end
+
+    it "returns 'windows' when wsl_browser_mode is not set" do
+      write_config("enabled" => true, "chrome_version" => "148")
+      expect(manager.wsl_browser_mode).to eq("windows")
+    end
+
+    it "returns 'linux' when wsl_browser_mode is set to linux" do
+      write_config("enabled" => true, "chrome_version" => "148", "wsl_browser_mode" => "linux")
+      expect(manager.wsl_browser_mode).to eq("linux")
+    end
+
+    it "returns 'windows' when wsl_browser_mode is set to an empty string" do
+      write_config("enabled" => true, "chrome_version" => "148", "wsl_browser_mode" => "")
+      expect(manager.wsl_browser_mode).to eq("windows")
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # #configure
+  # ---------------------------------------------------------------------------
+  describe "#configure" do
+    it "saves wsl_browser_mode in browser.yml" do
+      manager.configure(chrome_version: "148", wsl_browser_mode: "linux")
+      cfg = YAML.load_file(config_path)
+      expect(cfg["wsl_browser_mode"]).to eq("linux")
+    end
+
+    it "does not save wsl_browser_mode when nil" do
+      manager.configure(chrome_version: "148", wsl_browser_mode: nil)
+      cfg = YAML.load_file(config_path)
+      expect(cfg).not_to have_key("wsl_browser_mode")
+    end
+
+    it "does not save wsl_browser_mode when empty string" do
+      manager.configure(chrome_version: "148", wsl_browser_mode: "")
+      cfg = YAML.load_file(config_path)
+      expect(cfg).not_to have_key("wsl_browser_mode")
     end
   end
 
