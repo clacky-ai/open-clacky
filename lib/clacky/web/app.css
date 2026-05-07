@@ -1522,6 +1522,7 @@ body {
   line-height: 1.6;
   word-break: break-word;
   position: relative;
+  white-space: pre-wrap;
 }
 
 .msg-time {
