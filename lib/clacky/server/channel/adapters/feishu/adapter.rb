@@ -168,9 +168,16 @@ module Clacky
           def handle_message_event(event)
             # In group chats, only respond when the bot is explicitly @-mentioned.
             # Private chats always respond.
+            # Fail closed: if the bot's own open_id cannot be fetched (API error,
+            # bad credentials, etc.), drop group messages instead of responding to
+            # every message and spamming the group.
             if event[:chat_type] == :group
               bot_id = @bot.bot_open_id
-              return if bot_id && !Array(event[:mentioned_open_ids]).include?(bot_id)
+              if bot_id.nil?
+                Clacky::Logger.warn("[feishu] bot_open_id unavailable; dropping group message to avoid spam")
+                return
+              end
+              return unless Array(event[:mentioned_open_ids]).include?(bot_id)
             end
 
             allowed_users = @config[:allowed_users]
