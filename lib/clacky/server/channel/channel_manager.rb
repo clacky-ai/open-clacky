@@ -27,8 +27,14 @@ module Clacky
       # @param run_agent_task     [Proc] (session_id, agent, &task) — from HttpServer
       # @param interrupt_session  [Proc] (session_id) — from HttpServer
       # @param channel_config     [Clacky::ChannelConfig]
-      # @param binding_mode       [:user | :chat] how to map IM identities to sessions
-      def initialize(session_registry:, session_builder:, run_agent_task:, interrupt_session:, channel_config:, binding_mode: :user)
+      # @param binding_mode       [:user | :chat | :chat_user] how to map IM identities to sessions.
+      #   :chat_user (default) — one session per (chat, user) pair. Most natural:
+      #                          private chat = that user's session; in a group each
+      #                          user has their own session; the same user across
+      #                          different groups keeps those contexts separate.
+      #   :chat                — one session per chat (all users in a group share it).
+      #   :user                — one session per user (merges DMs and all groups).
+      def initialize(session_registry:, session_builder:, run_agent_task:, interrupt_session:, channel_config:, binding_mode: :chat_user)
         @registry          = session_registry
         @session_builder   = session_builder
         @run_agent_task    = run_agent_task
@@ -354,8 +360,10 @@ module Clacky
       def channel_key(event)
         platform = event[:platform].to_s
         case @binding_mode
-        when :chat then "#{platform}:chat:#{event[:chat_id]}"
-        else            "#{platform}:user:#{event[:user_id]}"
+        when :chat      then "#{platform}:chat:#{event[:chat_id]}"
+        when :user      then "#{platform}:user:#{event[:user_id]}"
+        else # :chat_user (default)
+          "#{platform}:chat:#{event[:chat_id]}:user:#{event[:user_id]}"
         end
       end
 
