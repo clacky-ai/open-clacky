@@ -755,9 +755,7 @@ RSpec.describe Clacky::Agent do
     let(:retry_response) do
       mock_api_response(
         content: "Let me create the file in smaller steps",
-        tool_calls: [
-          mock_tool_call(name: "write", args: '{"path": "test.md", "content": "# Title"}')
-        ],
+        tool_calls: nil,
         finish_reason: "stop"
       )
     end

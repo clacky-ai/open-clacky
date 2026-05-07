@@ -210,6 +210,7 @@ module Clacky
       @start_time = Time.now
       @task_truncation_count = 0  # Reset truncation counter for each task
       @task_timeout_hint_injected = false  # Reset read-timeout hint injection (see LlmCaller)
+      @task_upstream_truncation_hint_injected = false  # Reset upstream-truncation hint injection (see LlmCaller)
       @task_cost_source = :estimated  # Reset for new task
       # Note: Do NOT reset @previous_total_tokens here - it should maintain the value from the last iteration
       # across tasks to correctly calculate delta tokens in each iteration
@@ -403,14 +404,25 @@ module Clacky
             Clacky::Logger.warn("agent.think_response.log_failed", error: e.message)
           end
 
-          # Check if done (no more tool calls needed)
-          if response[:finish_reason] == "stop" || response[:tool_calls].nil? || response[:tool_calls].empty?
+          # Check if done (no more tool calls needed).
+          #
+          # Defensive rule: we ONLY exit on empty/missing tool_calls.
+          # We used to also short-circuit on finish_reason=="stop", but
+          # upstream routers (OpenRouter → Anthropic/Bedrock) can return the
+          # contradictory combo `finish_reason=="stop" + non-empty tool_calls
+          # with truncated args`, which caused the agent to silently treat a
+          # truncated response as "task complete". Truncation is now caught
+          # earlier by LlmCaller#detect_upstream_truncation! (which raises
+          # UpstreamTruncatedError → RetryableError); this branch stays as
+          # a belt-and-braces guard: if that detector ever misses a new
+          # truncation pattern, we still won't silently exit while the model
+          # is mid-tool_call.
+          if response[:tool_calls].nil? || response[:tool_calls].empty?
             # [DIAG] Pin down exactly which sub-condition triggered the task exit.
             Clacky::Logger.info("agent.loop_break_normal",
               session_id: @session_id,
               iteration: @iterations,
-              branch: (response[:finish_reason] == "stop" ? "finish_reason_stop" :
-                       response[:tool_calls].nil? ? "tool_calls_nil" : "tool_calls_empty"),
+              branch: (response[:tool_calls].nil? ? "tool_calls_nil" : "tool_calls_empty"),
               finish_reason: response[:finish_reason].to_s,
               tool_calls_count: (response[:tool_calls] || []).size
             )

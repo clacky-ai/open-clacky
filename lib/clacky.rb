@@ -133,6 +133,11 @@ module Clacky
   class AgentError < StandardError; end
   class BadRequestError < AgentError; end  # 400 errors — our request was malformed, history should be rolled back
   class RetryableError < StandardError; end  # Transient errors that should be retried (5xx, HTML response, rate limit)
+  # Upstream (model/router like OpenRouter/Bedrock) returned finish_reason="stop" together with
+  # one or more tool_calls whose `arguments` JSON was truncated (empty, "{}" placeholder, or
+  # otherwise unparseable). Subclass of RetryableError so it flows through the existing
+  # retry/fallback pipeline in LlmCaller#call_llm.
+  class UpstreamTruncatedError < RetryableError; end
   class ToolCallError < AgentError; end  # Raised when tool call fails due to invalid parameters
   class BrowserNotReachableError < AgentError; end  # Chrome/Edge not running or remote debugging disabled
   # BrowserManager singleton: Clacky::BrowserManager.instance

@@ -101,6 +101,19 @@ module Clacky
           # Successful response — if we were probing, confirm primary is healthy.
           handle_probe_success if @config.probing?
 
+          # ── Upstream truncation detector ──────────────────────────────────
+          # OpenRouter / Bedrock and other routers sometimes close the SSE
+          # stream mid-tool_use: we receive finish_reason="stop" together with
+          # a syntactically valid tool_call whose `arguments` JSON is empty,
+          # "{}" (placeholder before any key was streamed), or otherwise
+          # unparseable. Treat this as retryable — otherwise the agent would
+          # execute a tool with empty args (often failing cryptically) or
+          # silently exit thinking the task is done.
+          #
+          # Raises UpstreamTruncatedError (a RetryableError) so the rescue
+          # block below handles retry + fallback identically to 5xx/429.
+          detect_upstream_truncation!(response)
+
         rescue Faraday::TimeoutError => e
           # ── Read-timeout path (distinct from connection-level failures) ──
           # Faraday::TimeoutError on our non-streaming POST almost always means
@@ -345,6 +358,87 @@ module Clacky
            msg.include?("must be provided"))
       end
 
+      # Detect upstream tool-call truncation and raise UpstreamTruncatedError
+      # so the standard RetryableError rescue (with fallback model support)
+      # handles retry identically to 5xx/429.
+      #
+      # Background: OpenRouter routes to Anthropic/Bedrock/etc. and passes
+      # through whatever the upstream sends. If the upstream closes the SSE
+      # stream mid-tool_use (observed with Anthropic at ~127 s TTFT under
+      # load), OpenRouter does NOT surface an error — it emits a valid
+      # `tool_calls[]` whose `arguments` is empty, `"{}"`, or non-parseable
+      # JSON. Without this check the agent would either execute the tool with
+      # empty args or (worse) silently exit thinking the task finished.
+      #
+      # Rule is deliberately narrow: we only intercept the case where the
+      # model streamed literally nothing into the tool_call arguments —
+      # i.e. `nil`, empty string, or the placeholder `"{}"`. Partial/invalid
+      # JSON (e.g. `{"path": "/tmp/x"`) is left to the existing
+      # ArgumentsParser → BadArgumentsError path, because the model already
+      # committed to specific values and feeding the parse error back as a
+      # tool_result lets it self-correct in one round-trip (faster than a
+      # blind retry from scratch).
+      private def detect_upstream_truncation!(response)
+        tool_calls = response[:tool_calls]
+        return if tool_calls.nil? || tool_calls.empty?
+
+        truncated = tool_calls.find { |tc| tool_call_args_truncated?(tc[:arguments]) }
+        return unless truncated
+
+        args_str = truncated[:arguments].is_a?(String) ? truncated[:arguments] : truncated[:arguments].to_s
+        Clacky::Logger.warn("llm.upstream_truncation_detected",
+          model: current_model,
+          tool_name: truncated[:name].to_s,
+          args_len: args_str.length,
+          args_head: args_str[0, 80],
+          finish_reason: response[:finish_reason].to_s,
+          completion_tokens: response.dig(:token_usage, :completion_tokens),
+          ttft_ms: response.dig(:latency, :ttft_ms)
+        )
+
+        # Inject a one-shot [SYSTEM] hint so a plain retry isn't doomed to the
+        # same fate when the truncation correlates with large tool_call args
+        # (e.g. writing a 5000-char file in one go). For infrastructure-level
+        # blips this hint is harmless — the retry usually succeeds on its own
+        # and the hint just sits in history without affecting behaviour.
+        inject_upstream_truncation_hint_if_first(truncated)
+
+        raise Clacky::UpstreamTruncatedError,
+          "[LLM] Upstream truncated tool_call `#{truncated[:name]}` " \
+          "(args=#{args_str[0, 40].inspect}). Retrying..."
+      end
+
+      # True when a tool_call's arguments field looks COMPLETELY empty —
+      # i.e. the upstream stream was cut before the model wrote any real
+      # content into the arguments JSON.
+      #
+      # Rules:
+      #   - nil / non-String / empty string  → truncated (nothing at all)
+      #   - parses to {} (empty object)      → truncated (placeholder only)
+      #   - anything else (including partial/invalid JSON like `{"path":
+      #     "/tmp/x"` where the model already started writing) → NOT
+      #     truncated by this detector
+      #
+      # Partial-JSON cases are deliberately left to the existing
+      # ArgumentsParser → BadArgumentsError path, which surfaces the parse
+      # error back to the LLM as a tool_result so it can self-correct. That
+      # is more efficient than a blind retry when the model already wrote
+      # most of the args.
+      private def tool_call_args_truncated?(args)
+        return true if args.nil?
+        return true unless args.is_a?(String)
+        return true if args.empty?
+
+        parsed = begin
+          JSON.parse(args)
+        rescue JSON::ParserError
+          # Partial/invalid JSON — let ArgumentsParser handle it downstream.
+          return false
+        end
+
+        parsed.is_a?(Hash) && parsed.empty?
+      end
+
       # On the FIRST Faraday::TimeoutError within a task, append a [SYSTEM]
       # user message to the history instructing the model to break its work
       # into smaller steps. Subsequent timeouts in the same task are ignored
@@ -386,6 +480,54 @@ module Clacky
 
         @ui&.show_warning(
           "LLM response timed out — asking model to break the task into smaller steps and retrying..."
+        )
+      end
+
+      # On the FIRST upstream-truncation detection within a task, append a
+      # [SYSTEM] user message nudging the model toward smaller tool_call args.
+      # This guards against the (real but rare) case where the upstream SSE
+      # cut correlates with large tool_call payloads — a plain retry on the
+      # same oversized args would keep tripping the same wire.
+      #
+      # For purely infrastructural truncations (Anthropic edge blip, router
+      # hiccup), the hint is harmless — the retry will succeed and the hint
+      # just sits unused in history. Cheaper than letting the agent burn
+      # through its retry budget on the same oversized payload.
+      #
+      # Same plumbing as inject_large_output_hint_if_first_timeout: one-shot
+      # per task, carries `system_injected: true` so it's hidden from UI
+      # replay and skipped by compression/caching placement logic. Reset per
+      # task via Agent#run (see @task_upstream_truncation_hint_injected).
+      private def inject_upstream_truncation_hint_if_first(truncated_call)
+        return if @task_upstream_truncation_hint_injected
+
+        @task_upstream_truncation_hint_injected = true
+
+        tool_name = truncated_call[:name].to_s
+        hint = "[SYSTEM] The previous response was cut short by the upstream provider " \
+               "before the `#{tool_name}` tool_call finished streaming. " \
+               "The partial tool_call has been discarded. To avoid the same problem on retry, " \
+               "please adapt your approach:\n" \
+               "- Prefer smaller tool_call arguments — large single-shot payloads are more likely to be truncated.\n" \
+               "- For long file content: create the file first with a minimal skeleton via `write`, " \
+               "then append sections one at a time with `edit`.\n" \
+               "- Break large tasks into multiple smaller tool calls instead of one big one.\n" \
+               "- Keep each tool-call argument comfortably under ~2000 characters when possible."
+
+        @history.append({
+          role: "user",
+          content: hint,
+          system_injected: true,
+          task_id: @current_task_id
+        })
+
+        Clacky::Logger.info(
+          "[llm_caller] Upstream truncation — injected 'smaller tool_call args' hint " \
+          "(tool=#{tool_name.inspect})"
+        )
+
+        @ui&.show_warning(
+          "Upstream response was truncated mid tool-call — asking model to use smaller steps and retrying..."
         )
       end
     end
