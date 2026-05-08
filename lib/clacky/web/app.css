@@ -1594,7 +1594,7 @@ body {
 .msg-user .msg-time      { color: var(--color-text-secondary); right: 0; left: auto; padding-right: 4px; }
 .msg-assistant .msg-time { color: var(--color-text-secondary); left: 0;  right: auto; padding-left: 4px; }
 
-.msg-user      { background: var(--color-accent-primary); color: var(--color-button-primary-text); align-self: flex-end; }
+.msg-user      { background: var(--color-accent-primary); color: var(--color-button-primary-text); align-self: flex-end; white-space: pre-wrap; }
 [data-theme="dark"] .msg-user { background: var(--color-accent-hover); }
 .msg-assistant { background: var(--color-bg-tertiary); border: 1px solid var(--color-border-primary); align-self: flex-start; }
 
