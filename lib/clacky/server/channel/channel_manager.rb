@@ -122,19 +122,27 @@ module Clacky
           return adapter.context_token_user_ids
         end
 
-        # Fallback: scan session registry for channel_keys matching this platform
+        # Fallback: scan session registry for channel_keys matching this platform.
+        # Key formats depend on binding_mode:
+        #   :user       → "platform:user:USER_ID"
+        #   :chat       → "platform:chat:CHAT_ID"
+        #   :chat_user  → "platform:chat:CHAT_ID:user:USER_ID"
+        #
+        # For send_text we need the chat_id (Feishu/WeCom use chat_id as the
+        # receive_id for outbound messages), so we extract the chat portion.
         prefix = "#{platform}:"
         ids = []
         @registry.list.each do |summary|
           @registry.with_session(summary[:id]) do |s|
             (s[:channel_keys] || []).each do |key|
               next unless key.start_with?(prefix)
-              # key format: "platform:user:USER_ID" or "platform:chat:CHAT_ID"
-              ids << key.split(":", 3).last
+
+              remainder = key.sub(prefix, "") # e.g. "chat:OC_ID:user:OU_ID" or "user:UID" or "chat:CID"
+              ids << extract_chat_id(remainder)
             end
           end
         end
-        ids.uniq
+        ids.compact.uniq
       end
 
       # Hot-reload a single platform adapter with updated config.
@@ -424,6 +432,29 @@ module Clacky
         when :user      then "#{platform}:user:#{event[:user_id]}"
         else # :chat_user (default)
           "#{platform}:chat:#{event[:chat_id]}:user:#{event[:user_id]}"
+        end
+      end
+
+      # Extract the chat_id from the remainder of a channel_key (after removing "platform:" prefix).
+      #
+      # Possible formats:
+      #   "chat:CHAT_ID:user:USER_ID"  → CHAT_ID  (chat_user mode)
+      #   "chat:CHAT_ID"               → CHAT_ID  (chat mode)
+      #   "user:USER_ID"               → USER_ID  (user mode — use user_id as fallback)
+      #
+      # For Feishu/WeCom send_text, the chat_id is what's needed as receive_id.
+      private def extract_chat_id(remainder)
+        if remainder.start_with?("chat:")
+          # "chat:CHAT_ID:user:USER_ID" or "chat:CHAT_ID"
+          after_chat = remainder.sub("chat:", "")
+          # If there's a ":user:" segment, strip it and everything after
+          idx = after_chat.index(":user:")
+          idx ? after_chat[0...idx] : after_chat
+        elsif remainder.start_with?("user:")
+          # user-only mode: no chat_id available, use user_id
+          remainder.sub("user:", "")
+        else
+          remainder
         end
       end
 
