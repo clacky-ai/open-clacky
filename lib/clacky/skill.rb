@@ -309,7 +309,7 @@ module Clacky
           > should either:
           >
           > 1. Ask the user to start the server in another terminal: `clacky server`
-          >    (then retry — the CLI auto-detects it via `/tmp/clacky-server-*.pid`), or
+          >    (then retry — the CLI auto-detects it via `/tmp/clacky-master-*.pid`), or
           > 2. If the task can be completed without the server API, skip those steps
           >    and tell the user which parts require the server.
           >

@@ -203,15 +203,6 @@ module Clacky
 
         Clacky::Logger.info("[HttpServer PID=#{Process.pid}] start() mode=#{@inherited_socket ? 'worker' : 'standalone'} inherited_socket=#{@inherited_socket.inspect} master_pid=#{@master_pid.inspect}")
 
-        # In standalone mode (no master), kill any stale server and manage our own PID file.
-        # In worker mode the master owns the PID file; we just skip this block.
-        if @inherited_socket.nil?
-          kill_existing_server(@port)
-          pid_file = File.join(Dir.tmpdir, "clacky-server-#{@port}.pid")
-          File.write(pid_file, Process.pid.to_s)
-          at_exit { File.delete(pid_file) if File.exist?(pid_file) }
-        end
-
         # Expose server address and brand name to all child processes (skill scripts, shell commands, etc.)
         # so they can call back into the server without hardcoding the port,
         # and use the correct product name without re-reading brand.yml.
@@ -3725,36 +3716,6 @@ module Clacky
       def not_found(res)
         res.status = 404
         res.body   = "Not Found"
-      end
-
-      # Stop any previously running server on the given port via its PID file.
-      private def kill_existing_server(port)
-        pid_file = File.join(Dir.tmpdir, "clacky-server-#{port}.pid")
-        return unless File.exist?(pid_file)
-
-        pid = File.read(pid_file).strip.to_i
-        return if pid <= 0
-        # After exec-restart, the new process inherits the same PID as the old one.
-        # Skip sending TERM to ourselves — we are already the new server.
-        if pid == Process.pid
-          Clacky::Logger.info("[Server] exec-restart detected (PID=#{pid}), skipping self-kill.")
-          return
-        end
-
-        begin
-          Process.kill("TERM", pid)
-          Clacky::Logger.info("[Server] Stopped existing server (PID=#{pid}) on port #{port}.")
-          puts "Stopped existing server (PID: #{pid}) on port #{port}."
-          # Give it a moment to release the port
-          sleep 0.5
-        rescue Errno::ESRCH
-          Clacky::Logger.info("[Server] Existing server PID=#{pid} already gone.")
-        rescue Errno::EPERM
-          Clacky::Logger.warn("[Server] Could not stop existing server (PID=#{pid}) — permission denied.")
-          puts "Could not stop existing server (PID: #{pid}) — permission denied."
-        ensure
-          File.delete(pid_file) if File.exist?(pid_file)
-        end
       end
 
       # ── Inner classes ─────────────────────────────────────────────────────────
