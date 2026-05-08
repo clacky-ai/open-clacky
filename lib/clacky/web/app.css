@@ -854,69 +854,106 @@ body {
   display: none;
   align-items: center;
   justify-content: center;
-  width: 18px;
-  height: 18px;
+  width: 24px;
+  height: 24px;
   background: transparent;
   border: none;
-  border-radius: 3px;
+  border-radius: 4px;
   color: var(--color-text-muted);
-  font-size: 14px;
-  line-height: 1;
   cursor: pointer;
   padding: 0;
-  margin-top: -3px;
   transition: background .15s, color .15s;
-  font-weight: bold;
-  letter-spacing: -1px;
+  align-self: center;
 }
 .session-item:hover .session-actions-btn { display: flex; }
 .session-actions-btn:hover { 
-  background: var(--color-bg-hover); 
+  background: var(--color-border-primary); 
   color: var(--color-text-primary); 
 }
 
 /* Pin icon in session name */
 .session-pin-icon {
   flex-shrink: 0;
-  font-size: 11px;
-  opacity: 0.7;
+  display: inline-flex;
+  align-items: center;
+  opacity: 0.6;
   margin-left: 2px;
+  color: var(--color-text-tertiary);
 }
 .session-item.active .session-pin-icon {
   opacity: 1;
+  color: var(--color-accent-primary);
 }
 
 /* Actions menu dropdown */
 .session-actions-menu {
   background: var(--color-bg-secondary);
   border: 1px solid var(--color-border-primary);
-  border-radius: 6px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-  padding: 3px;
-  min-width: 120px;
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.08), 0 2px 6px rgba(0, 0, 0, 0.04);
+  padding: 4px;
+  min-width: 160px;
   z-index: 1000;
   animation: fadeIn 0.15s ease;
 }
 [data-theme="dark"] .session-actions-menu {
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5), 0 2px 6px rgba(0, 0, 0, 0.3);
 }
 .session-actions-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   padding: 6px 10px;
-  border-radius: 4px;
+  border-radius: 5px;
   cursor: pointer;
   color: var(--color-text-primary);
-  font-size: 12px;
-  transition: background .15s;
+  font-size: 13px;
+  line-height: 1.4;
+  transition: background .12s ease, color .12s ease;
   user-select: none;
+}
+.session-actions-menu-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  color: var(--color-text-secondary);
+  flex-shrink: 0;
+}
+.session-actions-menu-label {
+  flex: 1;
+  min-width: 0;
 }
 .session-actions-menu-item:hover {
   background: var(--color-bg-hover);
 }
+.session-actions-menu-item:hover .session-actions-menu-icon {
+  color: var(--color-text-primary);
+}
+.session-actions-menu-item--danger .session-actions-menu-icon {
+  color: var(--color-text-secondary);
+}
 .session-actions-menu-item--danger {
-  color: var(--color-error);
+  margin-top: 5px;
+  position: relative;
+}
+.session-actions-menu-item--danger::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -3px;
+  height: 1px;
+  background: var(--color-border-secondary);
+  pointer-events: none;
 }
 .session-actions-menu-item--danger:hover {
   background: var(--color-error-bg);
+  color: var(--color-error);
+}
+.session-actions-menu-item--danger:hover .session-actions-menu-icon {
+  color: var(--color-error);
 }
 
 @keyframes fadeIn {
@@ -1610,7 +1647,6 @@ body {
 }
 
 /* ── Markdown rendering inside assistant messages ────────────────────────── */
-.msg-assistant p          { margin: 0 0 0.6em; }
 .msg-assistant p:last-child { margin-bottom: 0; }
 .msg-assistant h1, .msg-assistant h2, .msg-assistant h3,
 .msg-assistant h4, .msg-assistant h5, .msg-assistant h6 {
