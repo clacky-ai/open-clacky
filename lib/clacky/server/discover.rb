@@ -6,7 +6,7 @@ require "socket"
 module Clacky
   module Server
     # Discover locally-running Clacky server(s) by scanning PID files
-    # written by HTTPServer#start at /tmp/clacky-server-<port>.pid.
+    # written by Master at /tmp/clacky-master-<port>.pid.
     #
     # Used by the CLI (bare `clacky agent` mode) to auto-detect a sibling
     # server process, so skills that call back into the server (channels,
@@ -17,8 +17,8 @@ module Clacky
     # Does NOT probe the TCP port (avoids false positives from stale files
     # but also avoids noisy connection attempts).
     module Discover
-      PID_FILE_GLOB = File.join(Dir.tmpdir, "clacky-server-*.pid").freeze
-      PID_FILE_REGEX = /clacky-server-(\d+)\.pid\z/.freeze
+      PID_FILE_GLOB = File.join(Dir.tmpdir, "clacky-master-*.pid").freeze
+      PID_FILE_REGEX = /clacky-master-(\d+)\.pid\z/.freeze
 
       module_function
 
@@ -32,7 +32,7 @@ module Clacky
       # Find all live Clacky servers on this machine.
       #
       # A PID file is considered "live" when:
-      #   1. The filename matches clacky-server-<port>.pid
+      #   1. The filename matches clacky-master-<port>.pid
       #   2. Its contents parse as a positive integer
       #   3. Process.kill(0, pid) confirms the PID is alive
       #
