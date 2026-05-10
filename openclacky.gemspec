@@ -68,6 +68,9 @@ Gem::Specification.new do |spec|
   spec.add_dependency "tty-markdown", "~> 0.7"
   # base64 is part of Ruby stdlib up to Ruby 3.3; only needed as explicit dep on Ruby 3.4+
   spec.add_dependency "base64", ">= 0.1.0"
+  # logger left stdlib in Ruby 4.0; faraday 2.8.x's response/logger.rb does a bare
+  # `require "logger"` so without this the gem can't load on Ruby 4.0+.
+  spec.add_dependency "logger", ">= 1.4"
   spec.add_dependency "websocket", "~> 1.2"
   spec.add_dependency "webrick", "~> 1.8"
   spec.add_dependency "artii", "~> 2.1"
