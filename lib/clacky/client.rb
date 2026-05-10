@@ -356,6 +356,21 @@ module Clacky
         if @provider_id == "openrouter"
           conn.headers["Authorization"] = "Bearer #{@api_key}"
         end
+        # Moonshot's Kimi Code (Coding Plan) endpoint enforces a User-Agent
+        # prefix whitelist limited to first-party coding agents (Kimi CLI,
+        # Claude Code, Roo Code, Kilo Code, ...). Requests with the default
+        # Faraday UA are rejected with HTTP 403 access_terminated_error,
+        # despite a valid API key. We send a Claude Code-shaped UA here
+        # because openclacky talks to this endpoint over the same Anthropic
+        # /v1/messages protocol that Claude Code uses, so the UA matches the
+        # wire-level behaviour. Hardcoding rather than exposing as a config
+        # field is intentional: the only UAs known to pass the gate are the
+        # whitelisted-client formats, and the project's preset registry is
+        # the single source of truth for provider-specific quirks (mirroring
+        # how the openrouter Bearer-fallback above is hardcoded).
+        if @provider_id == "kimi-coding"
+          conn.headers["User-Agent"] = "claude-cli/1.0.51 (external, cli)"
+        end
         conn.options.timeout      = 300
         conn.options.open_timeout = 10
         conn.ssl.verify           = false

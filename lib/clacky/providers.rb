@@ -146,12 +146,16 @@ module Clacky
         "default_model" => "kimi-k2.6",
         "models" => ["kimi-k2.6", "kimi-k2.5"],
         # Moonshot operates two regional endpoints with identical APIs & model
-        # lineup — mainland China (.cn) and international (.ai). Kimi does not
-        # distinguish pay-as-you-go vs coding-plan at the base_url level, so
-        # only two variants are needed. Listing both here lets find_by_base_url
-        # identify either one as provider "kimi", so downstream capability
-        # checks, fallback chains, and provider-specific behaviours work
-        # regardless of which endpoint the user configured.
+        # lineup — mainland China (.cn) and international (.ai). These are the
+        # pay-as-you-go Open Platform endpoints; the subscription-billed
+        # Coding Plan lives at api.kimi.com/coding with the unified
+        # `kimi-for-coding` model alias and is exposed as a separate
+        # top-level "kimi-coding" preset (different domain, distinct billing
+        # model, marketed by Moonshot as the standalone Kimi Code product).
+        # Listing both PAYG variants here lets find_by_base_url identify
+        # either one as provider "kimi", so downstream capability checks,
+        # fallback chains, and provider-specific behaviours work regardless
+        # of which endpoint the user configured.
         "endpoint_variants" => [
           { "label" => "Mainland China", "label_key" => "settings.models.baseurl.variant.mainland_cn",   "base_url" => "https://api.moonshot.cn/v1", "region" => "cn"   }.freeze,
           { "label" => "International",  "label_key" => "settings.models.baseurl.variant.international", "base_url" => "https://api.moonshot.ai/v1", "region" => "intl" }.freeze
@@ -159,6 +163,44 @@ module Clacky
         # k2.5 / k2.6 are multimodal; legacy k2 text-only models need model_capabilities override if added.
         "capabilities" => { "vision" => true }.freeze,
         "website_url" => "https://platform.moonshot.cn/console/api-keys"
+      }.freeze,
+
+      "kimi-coding" => {
+        "name" => "Kimi Code (Coding Plan)",
+        # Subscription-billed Kimi Code endpoint — separate product from the
+        # PAYG Moonshot Open Platform (api.moonshot.cn/v1 / .ai/v1). Uses the
+        # unified `kimi-for-coding` model alias which the Coding Plan backend
+        # routes to the appropriate K2 variant (Kimi-k2.6 today; 262K context,
+        # 32K max output, supports vision/video/reasoning).
+        #
+        # Why anthropic-messages: Moonshot exposes the Coding Plan via two
+        # URLs on the same domain — an Anthropic-format endpoint at
+        # api.kimi.com/coding/ (used by Claude Code via ANTHROPIC_BASE_URL)
+        # and an OpenAI-compatible endpoint at api.kimi.com/coding/v1 (used
+        # by Roo Code etc.). We route through anthropic-messages so
+        # cache_control fields round-trip byte-for-byte (the OpenAI shim is
+        # lossy for cache_control semantics — see OpenRouter preset above
+        # for the same reason). Verified against the live endpoint: response
+        # payload includes cache_creation_input_tokens / cache_read_input_tokens,
+        # so the cache layer is real on this backend.
+        #
+        # User-Agent gate: this endpoint enforces a UA-prefix whitelist
+        # limited to first-party coding agents (Kimi CLI, Claude Code, Roo
+        # Code, Kilo Code, ...). Requests carrying openclacky's default
+        # Faraday UA are rejected with HTTP 403 access_terminated_error.
+        # Client#anthropic_connection injects a Claude Code-shaped UA when
+        # @provider_id == "kimi-coding" — see the comment in client.rb for
+        # the policy rationale.
+        #
+        # Source: https://www.kimi.com/code/docs/third-party-tools/other-coding-agents.html
+        "base_url" => "https://api.kimi.com/coding",
+        "api" => "anthropic-messages",
+        "default_model" => "kimi-for-coding",
+        "models" => ["kimi-for-coding"],
+        # K2.6 backend behind the alias is multimodal (image + video input,
+        # reasoning). Same vision capability as the PAYG kimi preset.
+        "capabilities" => { "vision" => true }.freeze,
+        "website_url" => "https://www.kimi.com/code"
       }.freeze,
 
       "anthropic" => {

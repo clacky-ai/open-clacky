@@ -293,6 +293,41 @@ RSpec.describe Clacky::Providers do
       end
     end
 
+    context "Kimi Code (Coding Plan) — separate from PAYG Kimi" do
+      # The subscription-billed Coding Plan endpoint is its own preset, not
+      # an endpoint_variant of "kimi" — different domain (api.kimi.com vs
+      # api.moonshot.{cn,ai}), different model alias (kimi-for-coding vs
+      # kimi-k2.5/k2.6), different transport (anthropic-messages vs
+      # openai-completions). These tests guard that the routing actually
+      # discriminates instead of folding into the PAYG preset.
+      it "recognises the canonical /coding base URL" do
+        expect(described_class.find_by_base_url("https://api.kimi.com/coding"))
+          .to eq("kimi-coding")
+      end
+
+      it "recognises the OpenAI-compat /coding/v1 sub-path" do
+        # find_by_base_url uses prefix matching, so the OpenAI-compat URL
+        # documented for Roo Code et al. resolves to the same preset.
+        expect(described_class.find_by_base_url("https://api.kimi.com/coding/v1"))
+          .to eq("kimi-coding")
+      end
+
+      it "is anthropic-messages — not openai-completions like PAYG kimi" do
+        expect(described_class.api_type("kimi-coding")).to eq("anthropic-messages")
+        expect(described_class.api_type("kimi"))
+          .to eq("openai-completions") # sanity: PAYG preset stays as it was
+      end
+
+      it "uses the kimi-for-coding model alias as the only registered model" do
+        expect(described_class.models("kimi-coding")).to eq(["kimi-for-coding"])
+        expect(described_class.default_model("kimi-coding")).to eq("kimi-for-coding")
+      end
+
+      it "supports vision (K2.6 backend handles image input)" do
+        expect(described_class.supports?("kimi-coding", :vision)).to be true
+      end
+    end
+
     it "returns nil for an unknown URL unrelated to any preset or variant" do
       expect(described_class.find_by_base_url("https://api.unknown-provider.example/v1"))
         .to be_nil
