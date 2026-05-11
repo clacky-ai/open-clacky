@@ -100,7 +100,7 @@ ruby "SKILL_DIR/feishu_setup.rb"
 - The script completed successfully.
 - Config is already written to `~/.clacky/channels.yml`.
 - Tell the user: "✅ Feishu channel configured automatically! The channel is ready."
-- **Stop here — do not proceed to manual steps.**
+- **Skip Step 2 (manual fallback) and continue to Step 3.**
 
 **If exit code is non-0:**
 - Check stdout for the error message.
@@ -199,7 +199,61 @@ curl -s -X POST "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/in
   -d '{"app_id":"<APP_ID>","app_secret":"<APP_SECRET>"}'
 ```
 
-Check for `"code":0`. On success: "✅ Feishu channel configured."
+Check for `"code":0`. On success: continue to Step 3 (below).
+
+##### Phase 9 — done
+
+Step 2 ends here. **Continue to Step 3.**
+
+---
+
+#### Step 3 — Optional: install Feishu CLI
+
+Reach here from either Step 1 success or end of Step 2. Read `app_id` and `app_secret` from `~/.clacky/channels.yml` (under `channels.feishu`) for the install commands below.
+
+Call `request_user_feedback`:
+
+zh:
+```json
+{
+  "question": "是否要安装「飞书 CLI」？装好之后 AI 可以帮你操作飞书云文档、电子表格、多维表格、知识库、日历、任务等几乎全部飞书能力，不只是聊天，而是能\"做事\"。不装也 OK。",
+  "options": ["启用", "跳过"]
+}
+```
+
+en:
+```json
+{
+  "question": "Install Feishu CLI? With it, the AI can operate Feishu Docs, Sheets, Bitable, Wiki, Calendar, Tasks and almost every Feishu capability — not just chat, but actually get things done. Skipping is fine.",
+  "options": ["Enable", "Skip"]
+}
+```
+
+If the user picks Skip, stop — setup is complete.
+
+If the user picks Enable, run:
+
+```bash
+lark-cli --version > /dev/null 2>&1 || npm install -g @larksuite/cli
+echo -n "<APP_SECRET>" | lark-cli config init --app-id <APP_ID> --app-secret-stdin --brand feishu
+npx -y skills add larksuite/cli -y -g
+ruby "SKILL_DIR/import_lark_skills.rb"
+lark-cli auth login --recommend
+```
+
+The last command blocks up to 10 minutes waiting for browser authorization — make sure the runner's timeout is ≥ 600s.
+
+Once you see the authorization URL in the command's stdout, tell the user (do **not** wait for a reply — the CLI's blocking poll will return on its own when authorization completes):
+- zh: "请在浏览器中打开下方链接完成授权：\n<URL>"
+- en: "Open this URL in your browser to authorize:\n<URL>"
+
+**Do not kill and restart this command** — restarting invalidates the device code and breaks the link the user already opened. The "hang" is just polling; wait it out.
+
+When `lark-cli auth login` returns successfully, tell the user:
+- zh: "✅ 飞书 CLI 已就绪。"
+- en: "✅ Feishu CLI is ready."
+
+**Stop — setup is fully complete.**
 
 ---
 
