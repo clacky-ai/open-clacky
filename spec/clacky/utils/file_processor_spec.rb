@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "tmpdir"
+require "cgi"
 
 RSpec.describe Clacky::Utils::FileProcessor do
   # ---------------------------------------------------------------------------
@@ -390,6 +391,91 @@ RSpec.describe Clacky::Utils::FileProcessor do
         File.binwrite(f, "x" * (described_class::MAX_FILE_BYTES + 1))
         expect { described_class.file_to_base64(f) }
           .to raise_error(ArgumentError, /File too large/)
+      end
+    end
+  end
+
+  describe ".rewrite_local_image_urls" do
+    it "rewrites file:// image paths to /api/local-image proxy URLs" do
+      Dir.mktmpdir do |dir|
+        img = File.join(dir, "photo.png")
+        File.binwrite(img, "PNG")
+
+        content = "Check this: ![pic](file://#{img})"
+        result = described_class.rewrite_local_image_urls(content)
+
+        expected_path = CGI.escape("file://#{img}")
+        expect(result).to eq("Check this: ![pic](/api/local-image?path=#{expected_path})")
+      end
+    end
+
+    it "rewrites bare absolute image paths to /api/local-image proxy URLs" do
+      Dir.mktmpdir do |dir|
+        img = File.join(dir, "photo.jpg")
+        File.binwrite(img, "JPEG")
+
+        content = "See: ![img](#{img})"
+        result = described_class.rewrite_local_image_urls(content)
+
+        expected_path = CGI.escape(img)
+        expect(result).to eq("See: ![img](/api/local-image?path=#{expected_path})")
+      end
+    end
+
+    it "leaves https:// image URLs untouched" do
+      content = "![logo](https://example.com/logo.png)"
+      result = described_class.rewrite_local_image_urls(content)
+      expect(result).to eq(content)
+    end
+
+    it "leaves non-image local paths untouched" do
+      Dir.mktmpdir do |dir|
+        pdf = File.join(dir, "doc.pdf")
+        File.binwrite(pdf, "%PDF")
+
+        content = "![doc](file://#{pdf})"
+        result = described_class.rewrite_local_image_urls(content)
+        expect(result).to eq(content)
+      end
+    end
+
+    it "leaves non-existent file paths untouched" do
+      content = "![img](/nonexistent/image.png)"
+      result = described_class.rewrite_local_image_urls(content)
+      expect(result).to eq(content)
+    end
+
+    it "returns nil/empty content as-is" do
+      expect(described_class.rewrite_local_image_urls(nil)).to be_nil
+      expect(described_class.rewrite_local_image_urls("")).to eq("")
+    end
+
+    it "handles multiple images in the same content" do
+      Dir.mktmpdir do |dir|
+        img1 = File.join(dir, "a.png")
+        img2 = File.join(dir, "b.jpg")
+        File.binwrite(img1, "PNG")
+        File.binwrite(img2, "JPG")
+
+        content = "![a](file://#{img1}) and ![b](#{img2})"
+        result = described_class.rewrite_local_image_urls(content)
+
+        expect(result).to include("/api/local-image?path=#{CGI.escape("file://#{img1}")}")
+        expect(result).to include("/api/local-image?path=#{CGI.escape(img2)}")
+      end
+    end
+
+    it "handles percent-encoded file:// paths" do
+      Dir.mktmpdir do |dir|
+        img = File.join(dir, "my photo.png")
+        File.binwrite(img, "PNG")
+
+        encoded_path = "file://#{dir}/my%20photo.png"
+        content = "![pic](#{encoded_path})"
+        result = described_class.rewrite_local_image_urls(content)
+
+        expect(result).to include("/api/local-image?path=")
+        expect(result).not_to eq(content)
       end
     end
   end

@@ -57,7 +57,9 @@ module Clacky
       def show_assistant_message(content, files:)
         return if content.nil? || content.to_s.strip.empty?
 
-        @events << { type: "assistant_message", session_id: @session_id, content: content }
+        # Rewrite local image paths to /api/local-image proxy URLs for browser rendering
+        rewritten = Utils::FileProcessor.rewrite_local_image_urls(content.to_s)
+        @events << { type: "assistant_message", session_id: @session_id, content: rewritten }
       end
 
       def show_tool_call(name, args)
@@ -397,6 +399,7 @@ module Clacky
         when ["POST",   "/api/tool/browser"]      then api_tool_browser(req, res)
         when ["POST",   "/api/upload"]            then api_upload_file(req, res)
         when ["POST",   "/api/open-file"]         then api_open_file(req, res)
+        when ["GET",    "/api/local-image"]       then api_serve_local_image(req, res)
         when ["GET",    "/api/version"]           then api_get_version(res)
         when ["POST",   "/api/version/upgrade"]   then api_upgrade_version(req, res)
         when ["POST",   "/api/restart"]           then api_restart(req, res)
@@ -1553,6 +1556,43 @@ module Clacky
         json_response(res, 200, { ok: true })
       rescue => e
         json_response(res, 500, { ok: false, error: e.message })
+      end
+
+      # GET /api/local-image?path=file:///path/to/image.png
+      # GET /api/local-image?path=/path/to/image.png
+      #
+      # Serves a local image file with the correct Content-Type.
+      # Used by the Web UI to render local images that would otherwise be blocked
+      # by the browser's security policy (file:// from http:// origin).
+      #
+      def api_serve_local_image(req, res)
+        raw_path = URI.decode_www_form(req.query_string.to_s).to_h["path"].to_s
+        return json_response(res, 400, { error: "path is required" }) if raw_path.empty?
+
+        # Strip file:// prefix if present
+        path = raw_path.sub(%r{\Afile://}, "")
+        path = CGI.unescape(path)
+        path = File.expand_path(path)
+
+        # On WSL the file may be specified as a Windows path (e.g. "C:/Users/…").
+        # Convert it to the Linux-side path so File.exist? works.
+        path = Utils::EnvironmentDetector.win_to_linux_path(path)
+
+        # Security: only serve image files
+        ext = File.extname(path).downcase
+        unless Utils::FileProcessor::LOCAL_IMAGE_EXTENSIONS.include?(ext)
+          return json_response(res, 403, { error: "not an image file" })
+        end
+
+        return json_response(res, 404, { error: "file not found" }) unless File.exist?(path)
+
+        mime = Utils::FileProcessor::MIME_TYPES[ext] || "application/octet-stream"
+        res.status         = 200
+        res["Content-Type"] = mime
+        res["Cache-Control"] = "private, max-age=3600"
+        res.body = File.binread(path)
+      rescue => e
+        json_response(res, 500, { error: e.message })
       end
 
       # POST /api/channels/:platform

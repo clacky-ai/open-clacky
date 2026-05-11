@@ -1526,6 +1526,10 @@ module Clacky
     private def emit_assistant_message(content)
       return if content.nil? || content.empty?
 
+      # Rewrite local image paths (file:// and bare absolute) to /api/local-image proxy URLs
+      # so the browser can render them without file:// security blocks.
+      content = Clacky::Utils::FileProcessor.rewrite_local_image_urls(content)
+
       parsed = parse_file_links(content)
       @ui&.show_assistant_message(parsed[:text], files: parsed[:files])
     end

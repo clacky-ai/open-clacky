@@ -523,8 +523,79 @@ module Clacky
       nil
     end
 
+    # Image extensions that can be inlined as data URLs in markdown content.
+    LOCAL_IMAGE_EXTENSIONS = %w[.png .jpg .jpeg .gif .webp].freeze
+
+    # Replace local image paths in markdown content with base64 data URLs.
+    #
+    # Handles both `file:///path/to/img.png` and bare `/path/to/img.png` in
+    # markdown image syntax `![alt](src)`.
+    #
+    # @param content [String] markdown text potentially containing local image references
+    # @return [String] content with local images replaced by data URLs
+    def self.inline_local_images(content)
+      return content if content.nil? || content.empty?
+
+      content.gsub(%r{(!\[[^\]]*\])\((file://)?(/[^)]+)\)}) do
+        prefix     = $1
+        _scheme    = $2
+        raw_path   = $3
+        path       = CGI.unescape(raw_path)
+        ext        = File.extname(path).downcase
+        full_match = $&
+
+        unless LOCAL_IMAGE_EXTENSIONS.include?(ext) && File.exist?(path)
+          next full_match
+        end
+
+        begin
+          data_url = image_path_to_data_url(path)
+          Clacky::Logger.info("file_processor.inline_local_images", path: path, size: File.size(path))
+          "#{prefix}(#{data_url})"
+        rescue StandardError => e
+          Clacky::Logger.warn("file_processor.inline_local_images.failed", path: path, error: e.message)
+          full_match
+        end
+      end
+    end
+
     private_class_method :parse_zip_listing, :parse_tar_listing, :save_preview, :sanitize_filename,
                          :downscale_png_chunky, :downscale_via_cli
+
+    # -------------------------------------------------------------------------
+    # Local image URL rewriting
+    # -------------------------------------------------------------------------
+
+    # Rewrite local image paths in markdown content to use the /api/local-image proxy.
+    #
+    # Matches two patterns inside `![alt](url)`:
+    #   1. file:// URLs  →  ![alt](/api/local-image?path=file:///abs/path.png)
+    #   2. bare absolute paths  →  ![alt](/api/local-image?path=/abs/path.png)
+    #
+    # https:// URLs and non-image files are left untouched.
+    #
+    # @param content [String, nil] markdown text
+    # @return [String, nil] rewritten content (or original if nothing matched)
+    def self.rewrite_local_image_urls(content)
+      return content if content.nil? || content.empty?
+
+      content.gsub(/!\[([^\]]*)\]\(((?:file:\/\/)?\/[^)]+)\)/) do |match|
+        alt  = Regexp.last_match(1)
+        href = Regexp.last_match(2)
+
+        # Extract the filesystem path from the href
+        path = href.sub(%r{\Afile://}, "")
+        path = CGI.unescape(path)
+
+        ext = File.extname(path).downcase
+        if LOCAL_IMAGE_EXTENSIONS.include?(ext) && File.exist?(path)
+          encoded = CGI.escape(href)
+          "![#{alt}](/api/local-image?path=#{encoded})"
+        else
+          match # return original match unchanged
+        end
+      end
+    end
   end
   end
 end
