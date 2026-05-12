@@ -5,12 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.0.4] - 2026-05-11
+## [Unreleased]
 
 ### Added
 - **Anthropic SSE transport wired into the live client path.** Anthropic-format requests now go through the SSE-based `/v1/messages` stream parser (while still returning only after the full response is assembled), which improves compatibility with gateways that only support streaming responses. Added integration coverage for the Faraday `on_data` path and kept session latency reporting in non-streaming mode until true incremental UI delivery lands.
 - **Configurable `anthropic_stream` model setting.** Anthropic-format models now expose an `anthropic_stream` switch through `AgentConfig`, CLI client construction, subagent model overlays, and the HTTP server model-test/build paths, with backward-compatible defaulting to `true` when the field is omitted.
 - **Thinking blocks preserved from Anthropic SSE responses.** The Anthropic stream parser now captures `thinking` / `thinking_delta` blocks in addition to normal text/tool-use blocks, so compatible gateways can expose reasoning data without corrupting the assistant text output.
+
+### Fixed
+- **Anthropic streaming usage/accounting now tolerates provider-specific SSE usage timing.** When compatible gateways report final `input_tokens` / cache usage on `message_delta` instead of `message_start`, the parser now uses the latest values so prompt/completion/total token counts remain correct.
+- **Anthropic tool-result formatting now accepts canonical `tool_call_id` / `result` payloads.** This fixes follow-up turns where tool results were provided in the newer canonical shape instead of the older `id` / `content` pair.
+
+## [1.0.4] - 2026-05-11
+
+### Added
 - **`persist-memory` subagent skill — agents can now save things to long-term memory.** New built-in `persist-memory` skill (forked subagent, auto-summarized, no web tools) handles file naming, topic merging, frontmatter, and size limits when writing to `~/.clacky/memories/`. The memory updater and skill manager now route persistence requests through this subagent for cleaner separation of concerns. Covered by new specs in `memory_updater_spec.rb` and `skill_manager_memories_spec.rb`.
 - **System prompts aligned with Claude Code behavioral rules.** Rewrote `base_prompt.md` and the coding/general system prompts with 6 new sections (Code Style, File Modification Rules, Response Style, Git Safety Protocol, Error Handling, Task Tracking). Internal benchmark on 5 tasks showed −40% response verbosity, −24% task duration, and qualitative improvement on 4/5 tasks with no regression in completion rate. (#96)
 - **Local image proxy via `GET /api/local-image` (C-5523).** New HTTP server endpoint exposes local images (e.g. screenshots written by tools) to the Web UI through a controlled proxy, with new `FileProcessor` utilities backing it. 86 new specs in `file_processor_spec.rb`. (#93)
@@ -19,8 +27,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Ruby 4.0 added to CI matrix.** GitHub Actions main workflow now runs the test suite against Ruby 4.0 in addition to existing versions, catching forward-compat issues early.
 
 ### Fixed
-- **Anthropic streaming usage/accounting now tolerates provider-specific SSE usage timing.** When compatible gateways report final `input_tokens` / cache usage on `message_delta` instead of `message_start`, the parser now uses the latest values so prompt/completion/total token counts remain correct.
-- **Anthropic tool-result formatting now accepts canonical `tool_call_id` / `result` payloads.** This fixes follow-up turns where tool results were provided in the newer canonical shape instead of the older `id` / `content` pair.
 - **Session bar correctly attributes cost & skill reflection in subagents.** Fixed `cost_tracker` and `skill_reflector` so the parent session's bar no longer mis-counts subagent activity, giving accurate per-session cost and skill stats when forked subagents (like `persist-memory`) run.
 
 ### More
