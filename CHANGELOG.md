@@ -11,10 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Anthropic SSE transport wired into the live client path.** Anthropic-format requests now go through the SSE-based `/v1/messages` stream parser (while still returning only after the full response is assembled), which improves compatibility with gateways that only support streaming responses. Added integration coverage for the Faraday `on_data` path and kept session latency reporting in non-streaming mode until true incremental UI delivery lands.
 - **Configurable `anthropic_stream` model setting.** Anthropic-format models now expose an `anthropic_stream` switch through `AgentConfig`, CLI client construction, subagent model overlays, and the HTTP server model-test/build paths, with backward-compatible defaulting to `true` when the field is omitted.
 - **Thinking blocks preserved from Anthropic SSE responses.** The Anthropic stream parser now captures `thinking` / `thinking_delta` blocks in addition to normal text/tool-use blocks, so compatible gateways can expose reasoning data without corrupting the assistant text output.
-
-### Fixed
-- **Anthropic streaming usage/accounting now tolerates provider-specific SSE usage timing.** When compatible gateways report final `input_tokens` / cache usage on `message_delta` instead of `message_start`, the parser now uses the latest values so prompt/completion/total token counts remain correct.
-- **Anthropic tool-result formatting now accepts canonical `tool_call_id` / `result` payloads.** This fixes follow-up turns where tool results were provided in the newer canonical shape instead of the older `id` / `content` pair.
+- **Anthropic streaming usage/accounting supports provider-specific SSE timing.** The parser now accepts final `input_tokens` / cache usage reported on `message_delta`, so compatible gateways that emit final usage late still produce correct prompt/completion/total token counts.
+- **Anthropic tool-result formatting accepts canonical `tool_call_id` / `result` payloads.** Anthropic follow-up turns now work with both the older `id` / `content` shape and the canonical tool-result shape used elsewhere in the codebase.
 
 ## [1.0.4] - 2026-05-11
 
