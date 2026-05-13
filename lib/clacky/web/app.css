@@ -3257,6 +3257,56 @@ body {
   color: var(--color-accent-primary);
 }
 
+/* Provider recommended badge (inside dropdown option) */
+.provider-badge-recommended {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  margin-left: 6px;
+  border-radius: 4px;
+  background: var(--color-accent-primary, #4f46e5);
+  color: #fff;
+  vertical-align: middle;
+  letter-spacing: 0.3px;
+  line-height: 1.6;
+}
+
+/* Provider promo hint (shown when openclacky is selected) */
+.provider-promo-hint {
+  display: none;
+  margin-top: 2px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--color-bg-hover, #fafafa);
+}
+.provider-promo-hint.visible {
+  display: block;
+}
+.provider-promo-hint .promo-inner {
+  padding: 0;
+}
+.provider-promo-hint .promo-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  margin-bottom: 3px;
+}
+.provider-promo-hint .promo-item {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--color-text-tertiary, #9ca3af);
+}
+.provider-promo-hint .promo-icon {
+  flex-shrink: 0;
+  font-size: 6px;
+  opacity: 0.3;
+  line-height: 2;
+}
+
 /* Model name combobox */
 .model-name-combobox {
   position: relative;
