@@ -77,8 +77,12 @@ Gem::Specification.new do |spec|
   # rubyzip 3.x requires Ruby >= 3.0; pin to ~> 2.4.1 for cross-version compatibility
   spec.add_dependency "rubyzip", "~> 2.4.1"
 
-  # rouge >= 4.0 requires Ruby >= 2.7; cap at < 4.0 so Ruby 2.6 gets 3.30.0
-  spec.add_dependency "rouge", ">= 3.14", "< 4.0"
+  # rouge 4.x requires Ruby >= 2.7 but fixes CGI.parse incompatibility on Ruby 4.0+
+  if RUBY_VERSION >= "2.7.0"
+    spec.add_dependency "rouge", ">= 3.14", "< 5.0"
+  else
+    spec.add_dependency "rouge", ">= 3.14", "< 4.0"
+  end
   spec.add_dependency "chunky_png", "~> 1.4"
 
   # For more information and examples about making a new gem, check out our
