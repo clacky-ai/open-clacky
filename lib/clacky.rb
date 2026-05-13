@@ -38,7 +38,6 @@ end
 # CGI.escape encodes spaces as '+'; replace with '%20' to match URI encoding.
 require "uri"
 require "cgi"
-
 unless URI.respond_to?(:encode_uri_component)
   def URI.encode_uri_component(str)
     CGI.escape(str.to_s).gsub("+", "%20")
