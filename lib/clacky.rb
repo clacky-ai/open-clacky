@@ -38,6 +38,16 @@ end
 # CGI.escape encodes spaces as '+'; replace with '%20' to match URI encoding.
 require "uri"
 require "cgi"
+
+# Ruby 4.0 compatibility: CGI is a class without .parse method.
+# Rouge (used by tty-markdown) calls CGI.parse to parse lexer options.
+class CGI
+  def self.parse(qs)
+    return {} if qs.nil? || qs.empty?
+    URI.decode_www_form(qs).group_by(&:first).transform_values { |v| v.map(&:last) }
+  end
+end
+
 unless URI.respond_to?(:encode_uri_component)
   def URI.encode_uri_component(str)
     CGI.escape(str.to_s).gsub("+", "%20")
