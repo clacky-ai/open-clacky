@@ -26,7 +26,7 @@ module Clacky
 
           parsed
         rescue StandardError => e
-          # Fallback to plain content if rendering fails
+          warn "[markdown] render failed: #{e.class}: #{e.message}" if ENV["CLACKY_DEBUG"]
           content
         end
 

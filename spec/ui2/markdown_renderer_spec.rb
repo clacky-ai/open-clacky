@@ -16,9 +16,9 @@ RSpec.describe Clacky::UI2::MarkdownRenderer do
     end
 
     # Regression: rouge 3.x calls CGI.parse internally, which was removed in Ruby 4.0.
-    # Pinning rouge to >= 3.14, < 5.0 lets bundler pick rouge 4.x on Ruby >= 2.7,
-    # which dropped the CGI.parse dependency. Without that pin, this test would
-    # fail with NoMethodError on Ruby 4.0+.
+    # Pinning rouge to < 5.0 lets bundler pick rouge 4.x on Ruby >= 2.7, which dropped
+    # the CGI.parse dependency. MarkdownRenderer.render swallows StandardError, so we
+    # assert against TTY::Markdown.parse directly to actually catch the regression.
     it "renders fenced code blocks without raising (rouge + Ruby 4.0 regression)" do
       markdown = <<~MD
         ```ruby
@@ -28,21 +28,9 @@ RSpec.describe Clacky::UI2::MarkdownRenderer do
         ```
       MD
 
-      raised = nil
-      original = TTY::Markdown.method(:parse)
-      allow(TTY::Markdown).to receive(:parse) do |*args, **kwargs|
-        begin
-          original.call(*args, **kwargs)
-        rescue StandardError, NoMethodError => e
-          raised = e
-          raise
-        end
-      end
+      expect { TTY::Markdown.parse(markdown) }.not_to raise_error
 
       result = described_class.render(markdown)
-
-      expect(raised).to be_nil,
-        "TTY::Markdown.parse raised #{raised&.class}: #{raised&.message} — likely rouge/CGI.parse incompatibility"
       expect(result).to include("hello")
       expect(result).to include("world")
     end
