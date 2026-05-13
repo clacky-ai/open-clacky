@@ -140,6 +140,15 @@ module Clacky
       @channels[key]["enabled"] = true unless @channels[key].key?("enabled")
     end
 
+    # Enable a platform (requires it to already be configured).
+    # @param platform [Symbol, String]
+    # @raise [ArgumentError] if the platform has no stored credentials yet.
+    def enable_platform(platform)
+      key = platform.to_s
+      raise ArgumentError, "Platform #{platform} is not configured" unless @channels.key?(key)
+      @channels[key]["enabled"] = true
+    end
+
     # Disable a platform (keeps credentials, just sets enabled: false).
     # @param platform [Symbol, String]
     def disable_platform(platform)

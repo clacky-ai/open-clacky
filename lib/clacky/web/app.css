@@ -5795,6 +5795,13 @@ body.setup-mode[data-theme="dark"] {
 }
 
 /* Status badge */
+.channel-card-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
 .channel-status-badge {
   display: inline-flex;
   align-items: center;

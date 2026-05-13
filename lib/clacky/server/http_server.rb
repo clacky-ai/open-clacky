@@ -423,6 +423,9 @@ module Clacky
           elsif method == "POST" && path.match?(%r{^/api/channels/[^/]+/test$})
             platform = path.sub("/api/channels/", "").sub("/test", "")
             api_test_channel(platform, req, res)
+          elsif method == "PATCH" && path.match?(%r{^/api/channels/[^/]+/enabled$})
+            platform = path.sub("/api/channels/", "").sub("/enabled", "")
+            api_toggle_channel(platform, req, res)
           elsif method == "POST" && path.start_with?("/api/channels/")
             platform = path.sub("/api/channels/", "")
             api_save_channel(platform, req, res)
@@ -1657,6 +1660,34 @@ module Clacky
         @channel_manager.reload_platform(platform, config)
 
         json_response(res, 200, { ok: true })
+      rescue StandardError => e
+        json_response(res, 422, { ok: false, error: e.message })
+      end
+
+      # PATCH /api/channels/:platform/enabled
+      # Body: { enabled: true|false }
+      # Toggles the platform on/off without touching credentials.
+      # Enabling requires the platform to already be configured.
+      def api_toggle_channel(platform, req, res)
+        platform = platform.to_sym
+        enabled  = parse_json_body(req)["enabled"] == true
+
+        config = Clacky::ChannelConfig.load
+
+        if enabled
+          unless config.platform_config(platform)
+            json_response(res, 422, { ok: false, error: "Platform is not configured yet" })
+            return
+          end
+          config.enable_platform(platform)
+        else
+          config.disable_platform(platform)
+        end
+
+        config.save
+        @channel_manager.reload_platform(platform, config)
+
+        json_response(res, 200, { ok: true, enabled: config.enabled?(platform) })
       rescue StandardError => e
         json_response(res, 422, { ok: false, error: e.message })
       end
