@@ -87,7 +87,13 @@ module Clacky
       def show_assistant_message(content, files:)
         return if (content.nil? || content.to_s.strip.empty?) && files.empty?
 
-        emit("assistant_message", content: content.to_s, files: files)
+        # Rewrite local image paths (file:// and bare absolute) to /api/local-image
+        # proxy URLs only for the browser, which runs on http://localhost and is
+        # blocked by browser security policy from loading file:// directly.
+        # Channel subscribers receive the original content so they can deliver
+        # local images as native attachments via send_file().
+        web_content = Clacky::Utils::FileProcessor.rewrite_local_image_urls(content.to_s)
+        emit("assistant_message", content: web_content, files: files)
         forward_to_subscribers { |sub| sub.show_assistant_message(content, files: files) }
       end
 

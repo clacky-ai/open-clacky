@@ -1514,7 +1514,7 @@ module Clacky
         inline = $1 == "!"
         # URL-decode percent-encoded characters (e.g. Chinese filenames encoded by AI)
         raw_path = CGI.unescape($3)
-        name   = $2.empty? ? File.basename(raw_path) : $2
+        name   = File.basename(raw_path)
         path   = File.expand_path(raw_path)
         Clacky::Logger.info("[parse_file_links] raw=#{$3.inspect} expanded=#{path.inspect} exist=#{File.exist?(path)}")
         files << { name: name, path: path, inline: inline }
@@ -1523,12 +1523,14 @@ module Clacky
     end
 
     # Emit assistant message to UI, parsing any embedded file:// links first.
+    #
+    # Local image URL rewriting (file:// → /api/local-image) is intentionally
+    # NOT done here. It is browser-specific (the Web UI runs on http://localhost
+    # and cannot load file:// directly) and must stay scoped to the Web UI
+    # controller. IM channel subscribers need the original file:// markdown so
+    # parse_file_links can extract paths and deliver images as native attachments.
     private def emit_assistant_message(content)
       return if content.nil? || content.empty?
-
-      # Rewrite local image paths (file:// and bare absolute) to /api/local-image proxy URLs
-      # so the browser can render them without file:// security blocks.
-      content = Clacky::Utils::FileProcessor.rewrite_local_image_urls(content)
 
       parsed = parse_file_links(content)
       @ui&.show_assistant_message(parsed[:text], files: parsed[:files])
