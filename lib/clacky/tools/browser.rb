@@ -516,20 +516,44 @@ module Clacky
         raise unless page_closed
 
         # The daemon's `selectedPage` reference points at a closed pptr Page.
-        # chrome-devtools-mcp throws this error at the tool entry (before the
-        # handler runs), so even `list_pages`/`select_page` cannot heal it
-        # — every mcp call has to go through `getSelectedMcpPage()` first.
+        # As of chrome-devtools-mcp 0.26.0, non-page-scoped tools
+        # (list_pages / select_page / new_page / close_page) no longer route
+        # through getSelectedMcpPage(), so we can heal in-place without
+        # restarting the daemon (which would force a fresh Chrome remote-
+        # debugging authorization prompt).
         #
-        # The only reliable recovery is to restart the daemon: a fresh
-        # chrome-devtools-mcp process reconnects to the same Chrome via the
-        # existing wsEndpoint and rebuilds its page map from scratch, with
-        # `selectedPage` defaulting to whatever Chrome currently has open.
+        # Recovery:
+        #   1. list_pages   — get the live page set (works even when the
+        #                     previously-selected page is dead)
+        #   2. select_page  — pick the first live tab so subsequent
+        #                     page-scoped calls have a valid context
+        #   3. retry the original tool call
+        #
+        # If no live tab exists and the caller is new_page, the new_page call
+        # itself will succeed (it's non-page-scoped). Otherwise we raise and
+        # let the AI know it needs to open a tab first.
         Clacky::Logger.warn(
-          "[Browser] Daemon's selected page is dead — restarting daemon to recover"
+          "[Browser] Selected page is dead — healing via list_pages + select_page"
         )
-        Clacky::BrowserManager.instance.force_stop
-        # ensure_daemon! runs lazily inside the next mcp_call.
-        Clacky::BrowserManager.instance.mcp_call(tool_name, arguments)
+
+        pages = extract_pages(Clacky::BrowserManager.instance.mcp_call("list_pages")) rescue []
+        alive = pages.find { |p| p[:id] }
+
+        if alive
+          Clacky::BrowserManager.instance.mcp_call(
+            "select_page",
+            { pageId: alive[:id].to_i, bringToFront: !background_mode? }
+          )
+          return Clacky::BrowserManager.instance.mcp_call(tool_name, arguments)
+        end
+
+        # No live tabs anywhere. new_page is non-page-scoped on 0.26.0+ and
+        # can run without a selected page; let it through.
+        if tool_name == "new_page"
+          return Clacky::BrowserManager.instance.mcp_call(tool_name, arguments)
+        end
+
+        raise "The browser tab was closed. Use action=open to open a new tab, then retry."
       end
 
       # Before every tool call that needs a page context, verify that:
