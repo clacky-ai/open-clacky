@@ -47,41 +47,11 @@ module Clacky
     #   through to a "no active tab" error — the AI is expected to
     #   action=open a new one.
     class Browser < Base
-      # ──────────────────────────────────────────────────────────────────
-      # Instance registry — for graceful "close owned tabs on exit"
-      # ──────────────────────────────────────────────────────────────────
-      @instances        = []
-      @instances_mutex  = Mutex.new
-
-      class << self
-        attr_reader :instances, :instances_mutex
-
-        def register_instance(inst)
-          @instances_mutex.synchronize { @instances << inst }
-        end
-
-        def unregister_instance(inst)
-          @instances_mutex.synchronize { @instances.delete(inst) }
-        end
-
-        # Close every owned tab held by every live Browser instance in this
-        # process. Called on graceful shutdown when browser.yml has
-        # `close_owned_tabs_on_exit: true`. Safe to call multiple times.
-        def close_all_owned_tabs_across_instances!
-          @instances_mutex.synchronize do
-            @instances.dup.each do |inst|
-              inst.close_all_owned_tabs! rescue nil
-            end
-          end
-        end
-      end
-
       def initialize
         super
         @owned_pages  = []     # Array<Integer> — keeps open-order
         @last_page_id = nil    # Integer, must always be ∈ @owned_pages or nil
         @known_page_ids = nil  # Snapshot of all live page ids at start of last act; used to detect new tabs spawned by act
-        self.class.register_instance(self)
       end
 
       self.tool_name = "browser"
@@ -545,27 +515,21 @@ module Clacky
                       msg.include?("tab was closed")
         raise unless page_closed
 
-        # MCP daemon checks getSelectedMcpPage() before every tool call,
-        # even for new_page. If the selected page died we must re-select
-        # a live one first; otherwise restart the daemon as last resort.
-        pages = extract_pages(Clacky::BrowserManager.instance.mcp_call("list_pages")) rescue []
-        alive = pages.find { |p| p[:id] }
-
-        if alive
-          @last_page_id = alive[:id]
-          ensure_page_selected!(tool_name)
-          return Clacky::BrowserManager.instance.mcp_call(tool_name, arguments)
-        end
-
-        if tool_name == "new_page"
-          # No live tabs anywhere — daemon is stuck on a dead reference.
-          # Force-restart it so Chrome can hand us a fresh page.
-          Clacky::BrowserManager.instance.force_stop
-          sleep 0.5
-          return Clacky::BrowserManager.instance.mcp_call(tool_name, arguments)
-        end
-
-        raise RuntimeError, "The browser tab was closed. Use action=open to open a new tab, then retry."
+        # The daemon's `selectedPage` reference points at a closed pptr Page.
+        # chrome-devtools-mcp throws this error at the tool entry (before the
+        # handler runs), so even `list_pages`/`select_page` cannot heal it
+        # — every mcp call has to go through `getSelectedMcpPage()` first.
+        #
+        # The only reliable recovery is to restart the daemon: a fresh
+        # chrome-devtools-mcp process reconnects to the same Chrome via the
+        # existing wsEndpoint and rebuilds its page map from scratch, with
+        # `selectedPage` defaulting to whatever Chrome currently has open.
+        Clacky::Logger.warn(
+          "[Browser] Daemon's selected page is dead — restarting daemon to recover"
+        )
+        Clacky::BrowserManager.instance.force_stop
+        # ensure_daemon! runs lazily inside the next mcp_call.
+        Clacky::BrowserManager.instance.mcp_call(tool_name, arguments)
       end
 
       # Before every tool call that needs a page context, verify that:
@@ -800,16 +764,6 @@ module Clacky
           @owned_pages.delete(id)
           @last_page_id = nil if @last_page_id == id
         end
-      end
-
-      # Close all tabs owned by this process. Called on process exit when
-      # browser.yml close_owned_tabs_on_exit is true.
-      def close_all_owned_tabs!
-        @owned_pages.dup.each do |id|
-          Clacky::BrowserManager.instance.mcp_call("close_page", { pageId: id }) rescue nil
-        end
-        @owned_pages.clear
-        @last_page_id = nil
       end
 
       # -----------------------------------------------------------------------

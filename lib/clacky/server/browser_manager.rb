@@ -70,23 +70,8 @@ module Clacky
     # On Clacky shutdown we intentionally LEAVE the daemon running so that
     # the next Clacky startup can reuse the existing Chrome connection and
     # avoid re-authorization.
-    #
-    # If browser.yml has `close_owned_tabs_on_exit: true`, we first close
-    # every tab owned by Browser instances in this process — so the daemon
-    # is left clean for the next startup.
     def stop
-      close_owned_tabs_if_configured
       Clacky::Logger.info("[BrowserManager] Stop (daemon left running for restart reuse)")
-    end
-
-    private def close_owned_tabs_if_configured
-      cfg = load_config
-      return unless cfg["close_owned_tabs_on_exit"] == true
-      require "clacky/tools/browser"
-      Clacky::Tools::Browser.close_all_owned_tabs_across_instances!
-      Clacky::Logger.info("[BrowserManager] Closed all owned tabs on shutdown")
-    rescue StandardError => e
-      Clacky::Logger.warn("[BrowserManager] Failed to close owned tabs on shutdown: #{e.message}")
     end
 
     public
