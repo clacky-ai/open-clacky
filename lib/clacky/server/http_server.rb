@@ -1746,6 +1746,11 @@ module Clacky
             allowed_users: raw["allowed_users"] || [],
             has_token:     !raw["bot_token"].to_s.strip.empty?
           }
+        when :dingtalk
+          {
+            client_id:     raw["client_id"] || "",
+            allowed_users: raw["allowed_users"] || []
+          }
         else
           {}
         end

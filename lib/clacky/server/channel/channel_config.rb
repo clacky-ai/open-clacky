@@ -113,6 +113,12 @@ module Clacky
         {
           bot_token:     raw["bot_token"]
         }.compact
+      when :dingtalk
+        {
+          client_id:     raw["client_id"],
+          client_secret: raw["client_secret"],
+          allowed_users: raw["allowed_users"]
+        }.compact
       when :telegram
         {
           bot_token:     raw["bot_token"],

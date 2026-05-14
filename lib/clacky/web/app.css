@@ -5782,6 +5782,11 @@ body.setup-mode[data-theme="dark"] {
   color: #fff;
 }
 
+.channel-logo-dingtalk {
+  background: linear-gradient(135deg, #3296fa, #1677ff);
+  color: #fff;
+}
+
 .channel-card-name {
   font-size: 15px;
   font-weight: 600;

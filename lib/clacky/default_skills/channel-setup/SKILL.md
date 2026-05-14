@@ -1,11 +1,11 @@
 ---
 name: channel-setup
 description: |
-  Configure IM platform channels (Feishu, WeCom, Weixin, Discord, Telegram) for openclacky.
+  Configure IM platform channels (Feishu, WeCom, Weixin, Discord, Telegram, DingTalk) for openclacky.
   Uses browser automation for navigation; guides the user to paste credentials and perform UI steps.
-  Trigger on: "channel setup", "setup feishu", "setup wecom", "setup weixin", "setup wechat", "setup discord", "setup telegram",
+  Trigger on: "channel setup", "setup feishu", "setup wecom", "setup weixin", "setup wechat", "setup discord", "setup telegram", "setup dingtalk",
   "channel config", "channel status", "channel enable", "channel disable", "channel reconfigure", "channel doctor",
-  "send message to weixin", "send message to feishu", "send message to wecom", "send message to discord", "send message to telegram".
+  "send message to weixin", "send message to feishu", "send message to wecom", "send message to discord", "send message to telegram", "send message to dingtalk".
   Subcommands: setup, status, enable <platform>, disable <platform>, reconfigure, doctor, send.
 argument-hint: "setup | status | enable <platform> | disable <platform> | reconfigure | doctor | send <platform> <message>"
 allowed-tools:
@@ -28,13 +28,13 @@ Configure IM platform channels for openclacky.
 
 | User says | Subcommand |
 |---|---|
-| `channel setup`, `setup feishu`, `setup wecom`, `setup weixin`, `setup wechat`, `setup discord`, `setup telegram` | setup |
+| `channel setup`, `setup feishu`, `setup wecom`, `setup weixin`, `setup wechat`, `setup discord`, `setup telegram`, `setup dingtalk` | setup |
 | `channel status` | status |
-| `channel enable feishu/wecom/weixin/discord/telegram` | enable |
-| `channel disable feishu/wecom/weixin/discord/telegram` | disable |
+| `channel enable feishu/wecom/weixin/discord/telegram/dingtalk` | enable |
+| `channel disable feishu/wecom/weixin/discord/telegram/dingtalk` | disable |
 | `channel reconfigure` | reconfigure |
 | `channel doctor` | doctor |
-| `send <message> to weixin/feishu/wecom/discord/telegram` | send |
+| `send <message> to weixin/feishu/wecom/discord/telegram/dingtalk` | send |
 
 ---
 
@@ -68,6 +68,7 @@ wecom      ❌ no     ❌ no     (not configured)
 weixin     ✅ yes    ✅ yes    has_token: true
 discord    ✅ yes    ✅ yes    has_token: true
 telegram   ✅ yes    ✅ yes    has_token: true
+dingtalk   ✅ yes    ✅ yes    client_id: ding_xxx...
 ─────────────────────────────────────────────────────
 ```
 
@@ -76,6 +77,7 @@ telegram   ✅ yes    ✅ yes    has_token: true
 - Weixin: show `has_token: true/false` (token value is never displayed)
 - Discord: show `has_token: true/false` (token value is never displayed)
 - Telegram: show `has_token: true/false` (bot token is never displayed)
+- DingTalk: show `client_id` (truncated to 12 chars)
 
 If the API is unreachable or returns an empty list: "No channels configured yet. Run `/channel-setup setup` to get started."
 
@@ -91,6 +93,7 @@ Ask:
 > 3. Weixin (Personal WeChat via iLink QR login)
 > 4. Discord
 > 5. Telegram (Bot API)
+> 6. DingTalk
 
 ---
 
@@ -479,6 +482,32 @@ Say: "❌ `<platform>` channel disabled."
 
 ---
 
+### DingTalk setup
+
+#### Step 1 — Get QR code
+
+```bash
+ruby "SKILL_DIR/dingtalk_setup.rb" --print-qr
+```
+
+Parse the last line starting with `{` to get `qr_url` and `device_code`. On non-0 exit, show the error and abort.
+
+#### Step 2 — Show QR and wait
+
+Show `qr_url` to the user, ask them to scan with the DingTalk mobile app and tap "Create New Robot", then call `request_user_feedback`.
+
+#### Step 3 — Poll for authorization
+
+```bash
+ruby "SKILL_DIR/dingtalk_setup.rb" --poll "<device_code>"
+```
+
+- **0** → "✅ DingTalk channel configured! Find your robot in DingTalk and send it a message." Stop.
+- **2** → not scanned yet. Ask user to confirm, then re-poll. If output contains `WAITING_TIMEOUT` or `expired`, restart from Step 1.
+- **1** → show the error and abort.
+
+---
+
 ## `reconfigure`
 
 1. Show current config via `GET /api/channels` (mask secrets — show last 4 chars only).
@@ -522,6 +551,13 @@ Check each item, report ✅ / ❌ with remediation:
    ```
    - `/users/@me failed` → ❌ "Discord token invalid or revoked — re-run setup"
    - `authenticated as` with no error → ✅
+7. **DingTalk credentials** (if enabled) — search today's log:
+   ```bash
+   grep -iE "dingtalk-ws|DingTalk.*error|stream.*error" \
+     ~/.clacky/logger/clacky-$(date +%Y-%m-%d).log
+   ```
+   - `WebSocket connected` → ✅
+   - `Stream endpoint error` or `token error` → ❌ "DingTalk credentials invalid — re-run setup"
 
 ---
 
@@ -532,7 +568,7 @@ Proactively send a message to a user via an IM channel adapter.
 ### Parse the request
 
 Extract two things from the user's instruction:
-- **platform** — one of `weixin`, `feishu`, `wecom`, `discord`, `telegram`
+- **platform** — one of `weixin`, `feishu`, `wecom`, `discord`, `telegram`, `dingtalk`
 - **message** — the text content to send
 
 If the platform cannot be inferred, ask the user to clarify.
