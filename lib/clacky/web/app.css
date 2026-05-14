@@ -3598,6 +3598,9 @@ body {
   outline: none;
   border-color: var(--color-accent-primary);
 }
+.modal-input.input-error {
+  border-color: var(--color-error);
+}
 .modal-select {
   cursor: pointer;
   appearance: none;
