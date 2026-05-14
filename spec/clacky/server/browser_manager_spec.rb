@@ -449,6 +449,30 @@ RSpec.describe Clacky::BrowserManager do
   end
 
   # ---------------------------------------------------------------------------
+  # background_mode?
+  # ---------------------------------------------------------------------------
+  describe "#background_mode?" do
+    it "returns true when browser.yml is missing (default)" do
+      expect(manager.background_mode?).to be true
+    end
+
+    it "returns true when background_mode is explicitly true" do
+      write_config("enabled" => true, "background_mode" => true)
+      expect(manager.background_mode?).to be true
+    end
+
+    it "returns false when background_mode is explicitly false" do
+      write_config("enabled" => true, "background_mode" => false)
+      expect(manager.background_mode?).to be false
+    end
+
+    it "returns true when background_mode key is absent (default)" do
+      write_config("enabled" => true)
+      expect(manager.background_mode?).to be true
+    end
+  end
+
+  # ---------------------------------------------------------------------------
   # Private: #load_config
   # ---------------------------------------------------------------------------
   describe "#load_config (private)" do

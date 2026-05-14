@@ -296,7 +296,7 @@ module Clacky
         when "open"
           url = require_url(opts)
           return url if url.is_a?(Hash)
-          result = mcp_call("new_page", { url: url })
+          result = mcp_call("new_page", { url: url, background: background_mode? })
           new_id = extract_new_page_id(result)
           @owned_pages << new_id unless @owned_pages.include?(new_id)
           @last_page_id = new_id
@@ -528,6 +528,13 @@ module Clacky
         click click_at hover drag fill press_key evaluate_script wait_for
       ].freeze
 
+      # Whether the agent should operate the browser silently in the background
+      # (i.e. never steal focus from the user's current tab / terminal).
+      # Default: true. Controlled by ~/.clacky/browser.yml `background_mode`.
+      private def background_mode?
+        Clacky::BrowserManager.instance.background_mode?
+      end
+
       private def mcp_call(tool_name, arguments = {})
         ensure_page_selected!(tool_name)
         Clacky::BrowserManager.instance.mcp_call(tool_name, arguments)
@@ -583,7 +590,7 @@ module Clacky
 
         Clacky::BrowserManager.instance.mcp_call(
           "select_page",
-          { pageId: @last_page_id.to_i, bringToFront: true }
+          { pageId: @last_page_id.to_i, bringToFront: !background_mode? }
         )
       rescue RuntimeError => e
         msg = e.message.to_s.downcase

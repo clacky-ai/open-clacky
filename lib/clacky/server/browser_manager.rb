@@ -125,18 +125,31 @@ module Clacky
       cfg     = load_config
       enabled = cfg["enabled"] == true
       {
-        enabled:        enabled,
-        daemon_running: daemon_responding?,
-        chrome_version: cfg["chrome_version"]
+        enabled:         enabled,
+        daemon_running:  daemon_responding?,
+        chrome_version:  cfg["chrome_version"],
+        background_mode: background_mode?(cfg)
       }
+    end
+
+    # Whether the agent should operate the browser silently in the background
+    # — i.e. NOT bring tabs to the front when selecting/opening pages.
+    # Default: true (agent never steals focus from the user).
+    # Override per-config via `background_mode: false` in browser.yml.
+    def background_mode?(cfg = nil)
+      cfg ||= load_config
+      val = cfg["background_mode"]
+      return true if val.nil?  # default ON
+      val == true
     end
 
     def configure(chrome_version:)
       cfg = {
-        "enabled"        => true,
-        "browser"        => "chrome",
-        "chrome_version" => chrome_version.to_s,
-        "configured_at"  => Date.today.to_s
+        "enabled"         => true,
+        "browser"         => "chrome",
+        "chrome_version"  => chrome_version.to_s,
+        "background_mode" => true,
+        "configured_at"   => Date.today.to_s
       }
       FileUtils.mkdir_p(File.dirname(BROWSER_CONFIG_PATH))
       File.write(BROWSER_CONFIG_PATH, cfg.to_yaml)

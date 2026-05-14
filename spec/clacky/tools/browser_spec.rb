@@ -274,6 +274,65 @@ RSpec.describe Clacky::Tools::Browser do
   # Tool metadata
   # ---------------------------------------------------------------------------
   # ---------------------------------------------------------------------------
+  # Background mode (agent does not steal focus from user)
+  # ---------------------------------------------------------------------------
+  describe "background_mode" do
+    let(:tool) { described_class.new }
+    let(:manager) { double("BrowserManager") }
+
+    before do
+      allow(Clacky::BrowserManager).to receive(:instance).and_return(manager)
+    end
+
+    describe "#open (action=open)" do
+      it "passes background: true to new_page when background_mode is on" do
+        allow(manager).to receive(:background_mode?).and_return(true)
+        expect(manager).to receive(:mcp_call)
+          .with("new_page", { url: "https://example.com", background: true })
+          .and_return({ "structuredContent" => { "pageId" => 42 } })
+
+        result = tool.send(:execute_user_browser, "open", { url: "https://example.com" })
+        expect(result[:success]).to be true
+      end
+
+      it "passes background: false to new_page when background_mode is off" do
+        allow(manager).to receive(:background_mode?).and_return(false)
+        expect(manager).to receive(:mcp_call)
+          .with("new_page", { url: "https://example.com", background: false })
+          .and_return({ "structuredContent" => { "pageId" => 42 } })
+
+        tool.send(:execute_user_browser, "open", { url: "https://example.com" })
+      end
+    end
+
+    describe "#ensure_page_selected!" do
+      it "passes bringToFront: false when background_mode is on" do
+        tool.instance_variable_set(:@owned_pages, [42])
+        tool.instance_variable_set(:@last_page_id, 42)
+        allow(manager).to receive(:background_mode?).and_return(true)
+
+        expect(manager).to receive(:mcp_call)
+          .with("select_page", { pageId: 42, bringToFront: false })
+          .and_return({})
+
+        tool.send(:ensure_page_selected!, "take_snapshot")
+      end
+
+      it "passes bringToFront: true when background_mode is off" do
+        tool.instance_variable_set(:@owned_pages, [42])
+        tool.instance_variable_set(:@last_page_id, 42)
+        allow(manager).to receive(:background_mode?).and_return(false)
+
+        expect(manager).to receive(:mcp_call)
+          .with("select_page", { pageId: 42, bringToFront: true })
+          .and_return({})
+
+        tool.send(:ensure_page_selected!, "take_snapshot")
+      end
+    end
+  end
+
+  # ---------------------------------------------------------------------------
   # Page ownership (Browser instances are isolated from each other)
   # ---------------------------------------------------------------------------
   describe "page ownership" do
