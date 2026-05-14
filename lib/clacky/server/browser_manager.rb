@@ -30,6 +30,12 @@ module Clacky
     PID_PATH            = File.expand_path("~/.clacky/mcp-daemon.pid").freeze
     DAEMON_SCRIPT       = File.expand_path("mcp_daemon.rb", __dir__).freeze
     DAEMON_STARTUP_TIMEOUT = 15
+    # While Clacky is running we send `daemon.keepalive` every 30 min so the
+    # daemon's 24h idle timer never expires. This way the chrome-devtools-mcp
+    # WebSocket session — and Chrome's remote-debugging authorization — sticks
+    # around as long as any Clacky-server is alive (matters for IM-driven
+    # agents where the user can't re-authorize Chrome from outside).
+    KEEPALIVE_INTERVAL = 1_800
 
     class << self
       def instance
@@ -44,8 +50,11 @@ module Clacky
       # @call_id_mutex protects the @call_id counter. The actual RPC roundtrip
       # (send_to_daemon) runs lock-free; the daemon serializes via its own
       # @write_mutex when forwarding to chrome-devtools-mcp.
+      # @keepalive_mutex protects @keepalive_thread (which we replace on reload).
       @daemon_setup_mutex = Mutex.new
       @call_id_mutex      = Mutex.new
+      @keepalive_mutex    = Mutex.new
+      @keepalive_thread   = nil
       @call_id            = 2
       @config             = {}
     end
@@ -72,6 +81,8 @@ module Clacky
         msg = e.message.to_s.lines.first&.strip || e.message.to_s
         Clacky::Logger.warn("[BrowserManager] Pre-warm failed: #{msg}")
       end
+
+      start_keepalive_thread!
     end
 
     # Detach from the daemon — no-op by design. Each mcp_call uses a one-shot
@@ -87,12 +98,14 @@ module Clacky
     # Hard daemon teardown — only used when chrome config changes or on
     # `reload`. NOT called on Clacky shutdown.
     def terminate_daemon!
+      stop_keepalive_thread!
       @daemon_setup_mutex.synchronize { kill_daemon! }
       Clacky::Logger.info("[BrowserManager] Daemon terminated")
     end
 
     def reload
       Clacky::Logger.info("[BrowserManager] Reloading...")
+      stop_keepalive_thread!
       @daemon_setup_mutex.synchronize { kill_daemon! }
 
       cfg = load_config
@@ -109,6 +122,7 @@ module Clacky
           msg = e.message.to_s.lines.first&.strip || e.message.to_s
           Clacky::Logger.warn("[BrowserManager] Reload start failed: #{msg}")
         end
+        start_keepalive_thread!
       else
         Clacky::Logger.info("[BrowserManager] Browser disabled after reload — daemon not started")
       end
@@ -216,6 +230,43 @@ module Clacky
     # ------------------------------------------------------------------
     # Private
     # ------------------------------------------------------------------
+
+    # Spawn (or replace) the per-Clacky-process keepalive thread. Fires
+    # `daemon.keepalive` every KEEPALIVE_INTERVAL so the daemon's 24h idle
+    # timer never trips while this Clacky is alive. Errors are swallowed —
+    # if the daemon is briefly unreachable, the next tick will retry.
+    private def start_keepalive_thread!
+      @keepalive_mutex.synchronize do
+        stop_keepalive_thread_locked!
+        @keepalive_thread = Thread.new do
+          Thread.current.name = "browser-manager-keepalive"
+          loop do
+            sleep KEEPALIVE_INTERVAL
+            send_daemon_keepalive
+          end
+        end
+      end
+    end
+
+    private def stop_keepalive_thread!
+      @keepalive_mutex.synchronize { stop_keepalive_thread_locked! }
+    end
+
+    private def stop_keepalive_thread_locked!
+      thr = @keepalive_thread
+      return unless thr
+      thr.kill if thr.alive?
+      @keepalive_thread = nil
+    end
+
+    private def send_daemon_keepalive
+      return unless File.exist?(SOCKET_PATH)
+      req = { jsonrpc: "2.0", id: 0, method: "daemon.keepalive" }
+      send_to_daemon(req, timeout: 2)
+    rescue StandardError
+      # Daemon may be down transiently; we'll try again next tick.
+      nil
+    end
 
     private def load_config
       return {} unless File.exist?(BROWSER_CONFIG_PATH)

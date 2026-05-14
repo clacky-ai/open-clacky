@@ -227,6 +227,114 @@ RSpec.describe Clacky::BrowserManager do
   end
 
   # ---------------------------------------------------------------------------
+  # Private: keepalive
+  # ---------------------------------------------------------------------------
+  describe "keepalive" do
+    describe "#start_keepalive_thread! (private)" do
+      it "spawns a thread tracked in @keepalive_thread" do
+        fake = double("Thread", name: nil, alive?: true, kill: nil)
+        allow(Thread).to receive(:new).and_return(fake)
+        manager.send(:start_keepalive_thread!)
+        expect(manager.instance_variable_get(:@keepalive_thread)).to eq(fake)
+      end
+
+      it "kills any existing keepalive thread first" do
+        old = double("Thread", alive?: true)
+        expect(old).to receive(:kill)
+        manager.instance_variable_set(:@keepalive_thread, old)
+        allow(Thread).to receive(:new).and_return(double("Thread", name: nil, alive?: true, kill: nil))
+        manager.send(:start_keepalive_thread!)
+      end
+    end
+
+    describe "#stop_keepalive_thread! (private)" do
+      it "is a no-op when no thread is running" do
+        expect { manager.send(:stop_keepalive_thread!) }.not_to raise_error
+        expect(manager.instance_variable_get(:@keepalive_thread)).to be_nil
+      end
+
+      it "kills the tracked thread and clears the slot" do
+        thr = double("Thread", alive?: true)
+        expect(thr).to receive(:kill)
+        manager.instance_variable_set(:@keepalive_thread, thr)
+        manager.send(:stop_keepalive_thread!)
+        expect(manager.instance_variable_get(:@keepalive_thread)).to be_nil
+      end
+    end
+
+    describe "#send_daemon_keepalive (private)" do
+      it "is a no-op when the socket file is missing" do
+        expect(manager).not_to receive(:send_to_daemon)
+        manager.send(:send_daemon_keepalive)
+      end
+
+      it "sends daemon.keepalive when socket exists" do
+        FileUtils.touch(socket_path)
+        expect(manager).to receive(:send_to_daemon).with(
+          hash_including(method: "daemon.keepalive"), timeout: 2
+        )
+        manager.send(:send_daemon_keepalive)
+      end
+
+      it "swallows errors silently" do
+        FileUtils.touch(socket_path)
+        allow(manager).to receive(:send_to_daemon).and_raise(Errno::ECONNREFUSED)
+        expect { manager.send(:send_daemon_keepalive) }.not_to raise_error
+      end
+    end
+
+    describe "#start (lifecycle integration)" do
+      it "starts a keepalive thread when enabled" do
+        write_config("enabled" => true, "chrome_version" => "148")
+        allow(Thread).to receive(:new).and_return(double("Thread", name: nil, alive?: true, kill: nil))
+        expect(manager).to receive(:start_keepalive_thread!)
+        manager.start
+      end
+
+      it "does not start a keepalive thread when disabled" do
+        write_config("enabled" => false)
+        expect(manager).not_to receive(:start_keepalive_thread!)
+        manager.start
+      end
+    end
+
+    describe "#reload (lifecycle integration)" do
+      it "stops the existing keepalive thread before killing the daemon" do
+        write_config("enabled" => true, "chrome_version" => "148")
+        allow(manager).to receive(:kill_daemon!)
+        allow(Thread).to receive(:new).and_return(double("Thread", name: nil, alive?: true, kill: nil))
+        expect(manager).to receive(:stop_keepalive_thread!)
+        manager.reload
+      end
+
+      it "starts a new keepalive thread when reload leaves browser enabled" do
+        write_config("enabled" => true, "chrome_version" => "148")
+        allow(manager).to receive(:kill_daemon!)
+        allow(manager).to receive(:stop_keepalive_thread!)
+        allow(Thread).to receive(:new).and_return(double("Thread", name: nil, alive?: true, kill: nil))
+        expect(manager).to receive(:start_keepalive_thread!)
+        manager.reload
+      end
+
+      it "does not start a keepalive thread when reload leaves browser disabled" do
+        write_config("enabled" => false)
+        allow(manager).to receive(:kill_daemon!)
+        allow(manager).to receive(:stop_keepalive_thread!)
+        expect(manager).not_to receive(:start_keepalive_thread!)
+        manager.reload
+      end
+    end
+
+    describe "#terminate_daemon!" do
+      it "stops the keepalive thread along with the daemon" do
+        allow(manager).to receive(:kill_daemon!)
+        expect(manager).to receive(:stop_keepalive_thread!)
+        manager.terminate_daemon!
+      end
+    end
+  end
+
+  # ---------------------------------------------------------------------------
   # Private: #daemon_endpoint
   # ---------------------------------------------------------------------------
   describe "#daemon_endpoint (private)" do

@@ -40,10 +40,12 @@ module Clacky
     LOG_PATH       = File.expand_path("~/.clacky/mcp-daemon.log").freeze
     READ_TIMEOUT   = 90   # max wait for chrome-devtools-mcp to answer a single call
     HANDSHAKE_TIMEOUT = 15
-    # Reap the daemon after 24h of zero forwarded requests. Held long because the
-    # whole point of the daemon is to outlive Clacky restarts — but unbounded
-    # liveness means the chrome-devtools-mcp Node process (~30–80MB RSS) lingers
-    # forever for users who try the browser once and never again.
+    # Reap the daemon after 24h of zero forwarded requests AND zero keepalives.
+    # Held long because the whole point of the daemon is to outlive Clacky
+    # restarts — but unbounded liveness means the chrome-devtools-mcp Node
+    # process (~30–80MB RSS) lingers forever for users who try the browser once
+    # and never again. Live Clacky-server processes call `daemon.keepalive`
+    # periodically so the daemon survives as long as Clacky cares.
     IDLE_TIMEOUT_SECONDS = 86_400
     IDLE_CHECK_INTERVAL  = 3_600
 
@@ -214,6 +216,15 @@ module Clacky
         if method == "daemon.ping"
           endpoint = File.exist?(ENDPOINT_PATH) ? File.read(ENDPOINT_PATH) : ""
           client.puts(JSON.generate(id: req["id"], result: { ok: true, pid: Process.pid, endpoint: endpoint }))
+          next
+        end
+        if method == "daemon.keepalive"
+          # Heartbeat from a live Clacky process. Resets the idle timer so the
+          # daemon outlives Clacky-server uptime — important for IM-driven agents
+          # where the user isn't at the machine and can't re-authorize Chrome
+          # remote debugging if the daemon were to idle-reap.
+          @activity_mutex.synchronize { @last_activity = Time.now }
+          client.puts(JSON.generate(id: req["id"], result: { ok: true }))
           next
         end
         if method == "daemon.shutdown"
