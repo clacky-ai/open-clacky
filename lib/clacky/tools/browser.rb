@@ -24,25 +24,75 @@ module Clacky
     # The MCP server process is started once, kept alive across all tool calls,
     # and only restarted when the process dies unexpectedly.
     #
-    # Each Clacky process remembers its own last-selected page id via
-    # @last_page_id.  Before every tool call that needs page context we
-    # re-issue select_page so we don't accidentally operate on a page
-    # chosen by another Clacky process.  This is "optimistic isolation":
-    # not atomic, but good enough for the interactive workloads Clacky
-    # handles.  When the selected page has been closed, mcp_call
-    # automatically retries once after picking a live page.
+    # Page ownership model (strict isolation, since 2026-05):
+    #   Every Browser instance maintains its own @owned_pages — the list
+    #   of Chrome page ids that this Clacky process has explicitly opened
+    #   (via action=open) or adopted (via action=adopt).  Tabs opened by
+    #   other Clacky processes, by the user, or as side-effects of clicks
+    #   (target=_blank / window.open) are INVISIBLE to this process:
+    #     • action=tabs   only lists owned tabs
+    #     • action=focus  only accepts owned tab ids
+    #     • action=close  only closes owned tabs
+    #     • snapshot/act/navigate only operate on the owned @last_page_id
+    #   This eliminates cross-session race conditions on shared pages
+    #   (uid reuse, page-state interference, tab-close-from-under-me) by
+    #   simply forbidding two Clacky processes from touching the same tab.
+    #
+    #   New tabs spawned by a user-initiated act (e.g. middle-click, JS
+    #   window.open) are surfaced to the AI as a hint with id, and must
+    #   be explicitly claimed via action=adopt before any operation can
+    #   be performed against them.
+    #
+    #   When the selected page has been closed externally, mcp_call falls
+    #   through to a "no active tab" error — the AI is expected to
+    #   action=open a new one.
     class Browser < Base
+      # ──────────────────────────────────────────────────────────────────
+      # Instance registry — for graceful "close owned tabs on exit"
+      # ──────────────────────────────────────────────────────────────────
+      @instances        = []
+      @instances_mutex  = Mutex.new
+
+      class << self
+        attr_reader :instances, :instances_mutex
+
+        def register_instance(inst)
+          @instances_mutex.synchronize { @instances << inst }
+        end
+
+        def unregister_instance(inst)
+          @instances_mutex.synchronize { @instances.delete(inst) }
+        end
+
+        # Close every owned tab held by every live Browser instance in this
+        # process. Called on graceful shutdown when browser.yml has
+        # `close_owned_tabs_on_exit: true`. Safe to call multiple times.
+        def close_all_owned_tabs_across_instances!
+          @instances_mutex.synchronize do
+            @instances.dup.each do |inst|
+              inst.close_all_owned_tabs! rescue nil
+            end
+          end
+        end
+      end
+
       def initialize
         super
-        @last_page_id = nil
+        @owned_pages  = []     # Array<Integer> — keeps open-order
+        @last_page_id = nil    # Integer, must always be ∈ @owned_pages or nil
+        @known_page_ids = nil  # Snapshot of all live page ids at start of last act; used to detect new tabs spawned by act
+        self.class.register_instance(self)
       end
 
       self.tool_name = "browser"
       self.tool_description = <<~DESC.strip
         Control user's real Chrome (146+) for web automation. Prefer web_fetch/web_search for read-only pages.
-        Actions: snapshot | act | open | navigate | tabs | focus | close | screenshot | status.
+        Actions: snapshot | act | open | navigate | tabs | focus | close | screenshot | status | adopt.
         Always snapshot(interactive:true) before act. screenshot is EXPENSIVE — use ref= for a single element.
         act kinds: click, dblclick, type, fill, press, hover, scroll, drag, select, wait, evaluate, click_at (coord fallback).
+
+        Page ownership: each Clacky process only sees tabs it opened (action=open) or adopted (action=adopt).
+        Other tabs are invisible. If a click spawns a new tab, the AI will receive a hint with the tab id and must adopt it first.
       DESC
       self.tool_category = "web"
       self.tool_parameters = {
@@ -50,7 +100,7 @@ module Clacky
         properties: {
           action: {
             type: "string",
-            enum: %w[snapshot act open navigate tabs focus close screenshot status]
+            enum: %w[snapshot act open navigate tabs focus close screenshot status adopt]
           },
           kind: {
             type: "string",
@@ -70,7 +120,7 @@ module Clacky
           x:           { type: "number",  description: "click_at x px" },
           y:           { type: "number",  description: "click_at y px" },
           url:         { type: "string",  description: "open/navigate URL" },
-          target_id:   { type: "string",  description: "focus/close tab id" },
+          target_id:   { type: "string",  description: "focus/close/adopt tab id" },
           interactive: { type: "boolean", description: "snapshot: interactive only" },
           compact:     { type: "boolean", description: "snapshot: compact" },
           depth:       { type: "integer", description: "snapshot: max depth" },
@@ -230,8 +280,10 @@ module Clacky
 
         case action.to_s
         when "tabs"
-          pages = extract_pages(mcp_call("list_pages"))
-          { action: "tabs", success: true, profile: "user", output: format_tabs(pages), tabs: pages }
+          all_pages = extract_pages(mcp_call("list_pages"))
+          reconcile_owned_pages!(all_pages)
+          mine = all_pages.select { |p| @owned_pages.include?(p[:id]) }
+          { action: "tabs", success: true, profile: "user", output: format_tabs(mine), tabs: mine }
 
         when "snapshot"
           raw  = mcp_call("take_snapshot")
@@ -245,7 +297,9 @@ module Clacky
           url = require_url(opts)
           return url if url.is_a?(Hash)
           result = mcp_call("new_page", { url: url })
-          @last_page_id = extract_new_page_id(result)
+          new_id = extract_new_page_id(result)
+          @owned_pages << new_id unless @owned_pages.include?(new_id)
+          @last_page_id = new_id
           { action: "open", success: true, profile: "user", url: url, output: "Opened: #{url}" }
 
         when "navigate"
@@ -255,18 +309,38 @@ module Clacky
           { action: "navigate", success: true, profile: "user", url: url, output: "Navigated to: #{url}" }
 
         when "focus"
+          target = require_owned_target_id(opts, "focus")
+          return target if target.is_a?(Hash)
+          mcp_call("select_page", { pageId: target, bringToFront: true })
+          @last_page_id = target
+          { action: "focus", success: true, profile: "user", output: "Focused tab #{target}" }
+
+        when "adopt"
           target_id = opts[:target_id] || opts["target_id"]
-          return { error: "target_id is required for focus. Use action=tabs to list open tabs." } if target_id.nil? || target_id.to_s.empty?
-          mcp_call("select_page", { pageId: target_id.to_i, bringToFront: true })
-          @last_page_id = target_id.to_i
-          { action: "focus", success: true, profile: "user", output: "Focused tab #{target_id}" }
+          return { error: "target_id is required for adopt." } if target_id.nil? || target_id.to_s.empty?
+          target = target_id.to_i
+          # Verify the page actually exists in Chrome.
+          all_pages = extract_pages(mcp_call("list_pages"))
+          unless all_pages.any? { |p| p[:id] == target }
+            return { error: "Tab #{target} does not exist (was it closed?)." }
+          end
+          @owned_pages << target unless @owned_pages.include?(target)
+          mcp_call("select_page", { pageId: target, bringToFront: true })
+          @last_page_id = target
+          { action: "adopt", success: true, profile: "user", output: "Adopted tab #{target}" }
 
         when "close"
-          target_id = opts[:target_id] || opts["target_id"]
-          return { error: "target_id is required for close. Use action=tabs to list open tabs." } if target_id.nil? || target_id.to_s.empty?
-          mcp_call("close_page", { pageId: target_id.to_i })
-          @last_page_id = nil if @last_page_id == target_id.to_i
-          { action: "close", success: true, profile: "user", output: "Closed tab #{target_id}" }
+          target = require_owned_target_id(opts, "close")
+          return target if target.is_a?(Hash)
+          mcp_call("close_page", { pageId: target })
+          @owned_pages.delete(target)
+          @last_page_id = nil if @last_page_id == target
+          # Auto-focus the most-recently opened remaining owned tab, if any.
+          if @last_page_id.nil? && !@owned_pages.empty?
+            @last_page_id = @owned_pages.last
+            mcp_call("select_page", { pageId: @last_page_id, bringToFront: true }) rescue nil
+          end
+          { action: "close", success: true, profile: "user", output: "Closed tab #{target}" }
 
         when "act"
           do_user_act(opts)
@@ -275,9 +349,12 @@ module Clacky
           do_user_screenshot(opts)
 
         when "status"
-          pages = extract_pages(mcp_call("list_pages"))
+          all_pages = extract_pages(mcp_call("list_pages"))
+          reconcile_owned_pages!(all_pages)
+          mine = all_pages.select { |p| @owned_pages.include?(p[:id]) }
           { action: "status", success: true, profile: "user",
-            output: "Browser running. #{pages.size} tab(s) open.", tabs: pages }
+            output: "Browser running. #{mine.size} owned tab(s) (of #{all_pages.size} total).",
+            tabs: mine }
 
         else
           { error: "Action '#{action}' is not supported." }
@@ -287,6 +364,16 @@ module Clacky
       private def do_user_act(opts)
         kind = (opts[:kind] || opts["kind"] || "click").to_s
         ref  = opts[:ref]   || opts["ref"]
+
+        # Capture all live page ids BEFORE acting, so we can detect new tabs
+        # spawned by the action (target=_blank, window.open, ctrl-click, etc.).
+        # Skip cheap actions that can't spawn tabs (wait, scroll, evaluate via JS-only).
+        if %w[click dblclick press hover drag select click_at evaluate].include?(kind)
+          pages = extract_pages(Clacky::BrowserManager.instance.mcp_call("list_pages")) rescue []
+          @known_page_ids = pages.map { |p| p[:id] }
+        else
+          @known_page_ids = nil
+        end
 
         case kind
         when "click", "dblclick"
@@ -340,13 +427,10 @@ module Clacky
           end
 
         when "evaluate"
-          js      = opts[:js] || opts["js"] || ""
-          pages   = extract_pages(mcp_call("list_pages"))
-          sel     = pages.find { |p| p[:selected] }
-          page_id = sel ? sel[:id] : (pages.first && pages.first[:id])
-          eval_args = { function: "() => { return (#{js}) }" }
-          eval_args[:pageId] = page_id if page_id
-          result = mcp_call("evaluate_script", eval_args)
+          js = opts[:js] || opts["js"] || ""
+          # evaluate_script is a PAGE_CONTEXT_TOOL, so ensure_page_selected!
+          # has already validated @last_page_id is owned and selected.
+          result = mcp_call("evaluate_script", { function: "() => { return (#{js}) }" })
           return { action: "act", success: true, profile: "user", output: extract_message(result).to_s }
 
         when "click_at"
@@ -360,7 +444,13 @@ module Clacky
           return { error: "Unknown act kind: #{kind}" }
         end
 
-        { action: "act", success: true, profile: "user", output: "#{kind} completed." }
+        # After any act that might have opened a new tab (click, dblclick, evaluate, etc.),
+        # detect new tabs and surface them to the AI so they can adopt them if needed.
+        hint = detect_new_tab_hint
+        output = "#{kind} completed."
+        output += "\n\n#{hint}" if hint
+
+        { action: "act", success: true, profile: "user", output: output }
       end
 
       SCREENSHOT_MAX_WIDTH        = 800
@@ -471,18 +561,38 @@ module Clacky
         raise RuntimeError, "The browser tab was closed. Use action=open to open a new tab, then retry."
       end
 
-      # If this process remembers a page and the upcoming tool needs page
-      # context, send select_page first so we don't accidentally operate on
-      # a page chosen by another Clacky process.
+      # Before every tool call that needs a page context, verify that:
+      #   1) We have a remembered page
+      #   2) That page is still in our ownership list
+      #   3) Re-issue select_page so Chrome MCP routes the call correctly.
+      #
+      # If the page was closed externally we remove it from @owned_pages and
+      # raise — the AI must open/adopt a new one.
       private def ensure_page_selected!(tool_name)
-        return unless @last_page_id && PAGE_CONTEXT_TOOLS.include?(tool_name)
+        return unless PAGE_CONTEXT_TOOLS.include?(tool_name)
+
+        unless @last_page_id
+          raise "No active tab. Use action=open to create a new tab first."
+        end
+
+        unless @owned_pages.include?(@last_page_id)
+          @last_page_id = nil
+          raise "The active tab was closed or is no longer owned. " \
+                "Use action=open to create a new tab, or action=adopt to claim one."
+        end
 
         Clacky::BrowserManager.instance.mcp_call(
           "select_page",
           { pageId: @last_page_id.to_i, bringToFront: true }
         )
-      rescue RuntimeError
-        # Page may have been closed; let the caller handle it.
+      rescue RuntimeError => e
+        msg = e.message.to_s.downcase
+        if msg.include?("selected page has been closed") || msg.include?("page has been closed") || msg.include?("tab was closed")
+          @owned_pages.delete(@last_page_id)
+          @last_page_id = nil
+          raise "The browser tab was closed. Use action=open to open a new tab, then retry."
+        end
+        raise
       end
 
       # -----------------------------------------------------------------------
@@ -647,6 +757,71 @@ module Clacky
       # -----------------------------------------------------------------------
       # Output helpers
       # -----------------------------------------------------------------------
+
+      # After an act, compare current live page ids with the snapshot taken
+      # before the act. Any new ids that are not yet owned belong to tabs
+      # spawned by the act (target=_blank, window.open, etc.). Surface a
+      # hint so the AI can adopt them.
+      private def detect_new_tab_hint
+        return nil unless @known_page_ids
+
+        current = extract_pages(mcp_call("list_pages")) rescue []
+        current_ids = current.map { |p| p[:id] }
+        new_ids = current_ids - @known_page_ids - @owned_pages
+        @known_page_ids = nil
+
+        return nil if new_ids.empty?
+
+        lines = new_ids.map do |id|
+          page = current.find { |p| p[:id] == id }
+          url  = page ? page[:url] : "unknown"
+          "  • tab #{id}: #{url}"
+        end
+        "New tab(s) detected:\n#{lines.join("\n")}\nUse action=adopt with target_id to claim one."
+      end
+
+      # -----------------------------------------------------------------------
+      # Page ownership helpers
+      # -----------------------------------------------------------------------
+
+      # Remove from @owned_pages any ids that are no longer alive in Chrome.
+      # Also clear @last_page_id if it was among the dead.
+      private def reconcile_owned_pages!(all_pages)
+        alive_ids = all_pages.map { |p| p[:id] }
+        dead = @owned_pages.reject { |id| alive_ids.include?(id) }
+        dead.each do |id|
+          @owned_pages.delete(id)
+          @last_page_id = nil if @last_page_id == id
+        end
+      end
+
+      # Close all tabs owned by this process. Called on process exit when
+      # browser.yml close_owned_tabs_on_exit is true.
+      def close_all_owned_tabs!
+        @owned_pages.dup.each do |id|
+          Clacky::BrowserManager.instance.mcp_call("close_page", { pageId: id }) rescue nil
+        end
+        @owned_pages.clear
+        @last_page_id = nil
+      end
+
+      # -----------------------------------------------------------------------
+      # Ownership-aware parameter helpers
+      # -----------------------------------------------------------------------
+
+      private def require_owned_target_id(opts, action_name)
+        target_id = opts[:target_id] || opts["target_id"]
+        if target_id.nil? || target_id.to_s.empty?
+          return { error: "target_id is required for #{action_name}. Use action=tabs to list your tabs." }
+        end
+        target = target_id.to_i
+        unless @owned_pages.include?(target)
+          return { error: "Tab #{target} is not owned by this session. " \
+                          "Owned tabs: #{@owned_pages.inspect}. " \
+                          "Use action=open to create a new tab, or action=adopt to claim one." }
+        end
+        target
+      end
 
       private def compress_snapshot(output)
         return output if output.empty?

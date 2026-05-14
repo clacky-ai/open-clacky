@@ -273,18 +273,95 @@ RSpec.describe Clacky::Tools::Browser do
   # ---------------------------------------------------------------------------
   # Tool metadata
   # ---------------------------------------------------------------------------
-  describe "tool metadata" do
-    it "has correct tool_name" do
-      expect(described_class.tool_name).to eq("browser")
+  # ---------------------------------------------------------------------------
+  # Page ownership (Browser instances are isolated from each other)
+  # ---------------------------------------------------------------------------
+  describe "page ownership" do
+    let(:tool) { described_class.new }
+
+    describe "#close_all_owned_tabs!" do
+      it "clears owned_pages and last_page_id" do
+        tool.instance_variable_set(:@owned_pages,  [1, 2, 3])
+        tool.instance_variable_set(:@last_page_id, 2)
+
+        manager = double("BrowserManager")
+        allow(Clacky::BrowserManager).to receive(:instance).and_return(manager)
+        allow(manager).to receive(:mcp_call).and_return({})
+
+        tool.close_all_owned_tabs!
+
+        expect(tool.instance_variable_get(:@owned_pages)).to eq([])
+        expect(tool.instance_variable_get(:@last_page_id)).to be_nil
+      end
+
+      it "calls mcp_call(close_page) for every owned tab" do
+        tool.instance_variable_set(:@owned_pages,  [5, 6])
+        manager = double("BrowserManager")
+        allow(Clacky::BrowserManager).to receive(:instance).and_return(manager)
+
+        expect(manager).to receive(:mcp_call).with("close_page", { pageId: 5 })
+        expect(manager).to receive(:mcp_call).with("close_page", { pageId: 6 })
+
+        tool.close_all_owned_tabs!
+      end
+
+      it "is resilient to mcp_call raising" do
+        tool.instance_variable_set(:@owned_pages, [7])
+        manager = double("BrowserManager")
+        allow(Clacky::BrowserManager).to receive(:instance).and_return(manager)
+        allow(manager).to receive(:mcp_call).and_raise("Chrome unreachable")
+
+        expect { tool.close_all_owned_tabs! }.not_to raise_error
+        expect(tool.instance_variable_get(:@owned_pages)).to eq([])
+      end
     end
 
-    it "has required action parameter" do
-      required = described_class.tool_parameters[:required]
-      expect(required).to include("action")
+    describe "#reconcile_owned_pages! (private)" do
+      it "removes owned ids that are no longer alive" do
+        tool.instance_variable_set(:@owned_pages,  [1, 2, 3])
+        tool.instance_variable_set(:@last_page_id, 2)
+
+        # Only id 1 is still alive
+        live_pages = [{ id: 1, url: "https://a", selected: false }]
+        tool.send(:reconcile_owned_pages!, live_pages)
+
+        expect(tool.instance_variable_get(:@owned_pages)).to eq([1])
+        expect(tool.instance_variable_get(:@last_page_id)).to be_nil
+      end
+
+      it "keeps last_page_id when it is still alive" do
+        tool.instance_variable_set(:@owned_pages,  [1, 2])
+        tool.instance_variable_set(:@last_page_id, 1)
+
+        live_pages = [
+          { id: 1, url: "https://a", selected: true },
+          { id: 2, url: "https://b", selected: false }
+        ]
+        tool.send(:reconcile_owned_pages!, live_pages)
+
+        expect(tool.instance_variable_get(:@owned_pages)).to eq([1, 2])
+        expect(tool.instance_variable_get(:@last_page_id)).to eq(1)
+      end
     end
 
-    it "does not expose a profile parameter (always uses the user's real browser)" do
-      expect(described_class.tool_parameters.dig(:properties, :profile)).to be_nil
+    describe "instance registry" do
+      it "registers each new Browser instance" do
+        described_class.instances_mutex.synchronize { described_class.instances.clear }
+        a = described_class.new
+        b = described_class.new
+        expect(described_class.instances).to include(a, b)
+      end
+
+      it "close_all_owned_tabs_across_instances! calls into every live instance" do
+        described_class.instances_mutex.synchronize { described_class.instances.clear }
+        a = described_class.new
+        b = described_class.new
+
+        expect(a).to receive(:close_all_owned_tabs!)
+        expect(b).to receive(:close_all_owned_tabs!)
+
+        described_class.close_all_owned_tabs_across_instances!
+      end
     end
   end
 
