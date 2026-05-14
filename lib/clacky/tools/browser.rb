@@ -24,10 +24,19 @@ module Clacky
     # The MCP server process is started once, kept alive across all tool calls,
     # and only restarted when the process dies unexpectedly.
     #
-    # pageId is intentionally NOT passed to most MCP calls — the MCP server
-    # maintains its own selected page state. Only focus/close actions need pageId.
-    # When the selected page has been closed, mcp_call automatically retries once.
+    # Each Clacky process remembers its own last-selected page id via
+    # @last_page_id.  Before every tool call that needs page context we
+    # re-issue select_page so we don't accidentally operate on a page
+    # chosen by another Clacky process.  This is "optimistic isolation":
+    # not atomic, but good enough for the interactive workloads Clacky
+    # handles.  When the selected page has been closed, mcp_call
+    # automatically retries once after picking a live page.
     class Browser < Base
+      def initialize
+        super
+        @last_page_id = nil
+      end
+
       self.tool_name = "browser"
       self.tool_description = <<~DESC.strip
         Control user's real Chrome (146+) for web automation. Prefer web_fetch/web_search for read-only pages.
@@ -235,7 +244,8 @@ module Clacky
         when "open"
           url = require_url(opts)
           return url if url.is_a?(Hash)
-          mcp_call("new_page", { url: url })
+          result = mcp_call("new_page", { url: url })
+          @last_page_id = extract_new_page_id(result)
           { action: "open", success: true, profile: "user", url: url, output: "Opened: #{url}" }
 
         when "navigate"
@@ -248,12 +258,14 @@ module Clacky
           target_id = opts[:target_id] || opts["target_id"]
           return { error: "target_id is required for focus. Use action=tabs to list open tabs." } if target_id.nil? || target_id.to_s.empty?
           mcp_call("select_page", { pageId: target_id.to_i, bringToFront: true })
+          @last_page_id = target_id.to_i
           { action: "focus", success: true, profile: "user", output: "Focused tab #{target_id}" }
 
         when "close"
           target_id = opts[:target_id] || opts["target_id"]
           return { error: "target_id is required for close. Use action=tabs to list open tabs." } if target_id.nil? || target_id.to_s.empty?
           mcp_call("close_page", { pageId: target_id.to_i })
+          @last_page_id = nil if @last_page_id == target_id.to_i
           { action: "close", success: true, profile: "user", output: "Closed tab #{target_id}" }
 
         when "act"
@@ -419,7 +431,15 @@ module Clacky
       # Chrome MCP
       # -----------------------------------------------------------------------
 
+      # Tools that operate on the "currently selected page" and therefore
+      # need a preceding select_page if this process has a remembered page.
+      PAGE_CONTEXT_TOOLS = %w[
+        take_snapshot take_screenshot navigate_page
+        click click_at hover drag fill press_key evaluate_script wait_for
+      ].freeze
+
       private def mcp_call(tool_name, arguments = {})
+        ensure_page_selected!(tool_name)
         Clacky::BrowserManager.instance.mcp_call(tool_name, arguments)
       rescue RuntimeError => e
         msg = e.message.to_s.downcase
@@ -435,7 +455,8 @@ module Clacky
         alive = pages.find { |p| p[:id] }
 
         if alive
-          Clacky::BrowserManager.instance.mcp_call("select_page", { pageId: alive[:id].to_i, bringToFront: true })
+          @last_page_id = alive[:id]
+          ensure_page_selected!(tool_name)
           return Clacky::BrowserManager.instance.mcp_call(tool_name, arguments)
         end
 
@@ -450,9 +471,41 @@ module Clacky
         raise RuntimeError, "The browser tab was closed. Use action=open to open a new tab, then retry."
       end
 
+      # If this process remembers a page and the upcoming tool needs page
+      # context, send select_page first so we don't accidentally operate on
+      # a page chosen by another Clacky process.
+      private def ensure_page_selected!(tool_name)
+        return unless @last_page_id && PAGE_CONTEXT_TOOLS.include?(tool_name)
+
+        Clacky::BrowserManager.instance.mcp_call(
+          "select_page",
+          { pageId: @last_page_id.to_i, bringToFront: true }
+        )
+      rescue RuntimeError
+        # Page may have been closed; let the caller handle it.
+      end
+
       # -----------------------------------------------------------------------
       # MCP response extractors
       # -----------------------------------------------------------------------
+
+      private def extract_new_page_id(result)
+        return nil unless result.is_a?(Hash)
+
+        structured = result["structuredContent"]
+        if structured.is_a?(Hash)
+          return structured["pageId"] if structured["pageId"]
+          pages = structured["pages"]
+          if pages.is_a?(Array)
+            new_page = pages.find { |p| p["selected"] == true }
+            return new_page["id"] if new_page
+          end
+        end
+
+        text = extract_text_content(result)
+        m = text.match(/page\s*id[:\s]+(\d+)/i)
+        m[1].to_i if m
+      end
 
       private def extract_pages(result)
         return [] unless result.is_a?(Hash)
