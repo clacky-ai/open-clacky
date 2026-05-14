@@ -3,23 +3,29 @@
 require "spec_helper"
 require "tmpdir"
 require "fileutils"
-require "stringio"
 require "json"
 require "clacky/server/browser_manager"
 require "clacky/tools/browser"
 
 RSpec.describe Clacky::BrowserManager do
-  # Each test gets a fresh instance — avoids singleton state leaking between examples.
   let(:manager) { described_class.new }
 
-  # Temp dir to isolate browser.yml reads/writes from the real ~/.clacky/browser.yml
   let(:tmp_dir)     { Dir.mktmpdir }
   let(:config_path) { File.join(tmp_dir, "browser.yml") }
+  let(:socket_path) { File.join(tmp_dir, "mcp-daemon.sock") }
+  let(:pid_path)    { File.join(tmp_dir, "mcp-daemon.pid") }
+  let(:lock_path)   { File.join(tmp_dir, "mcp-daemon.spawn.lock") }
 
   before do
     stub_const("Clacky::BrowserManager::BROWSER_CONFIG_PATH", config_path)
+    stub_const("Clacky::BrowserManager::SOCKET_PATH",         socket_path)
+    stub_const("Clacky::BrowserManager::PID_PATH",            pid_path)
+    allow(File).to receive(:expand_path).and_call_original
+    allow(File).to receive(:expand_path).with("~/.clacky/mcp-daemon.spawn.lock").and_return(lock_path)
+    allow(File).to receive(:expand_path).with("~/.clacky/mcp-daemon.spawn.log").and_return(File.join(tmp_dir, "mcp-daemon.spawn.log"))
     allow(Clacky::Logger).to receive(:info)
     allow(Clacky::Logger).to receive(:warn)
+    allow(Clacky::Logger).to receive(:debug)
   end
 
   after { FileUtils.rm_rf(tmp_dir) }
@@ -32,29 +38,21 @@ RSpec.describe Clacky::BrowserManager do
     File.write(config_path, hash.to_yaml)
   end
 
-  # Inject a fake live daemon into the manager's @process ivar.
-  # Stubs process_alive? to return true so callers don't need to pre-fill
-  # responses in fake_stdout.
-  def inject_process(responses = [])
-    all_output   = responses.map { |r| r + "\n" }.join
-    fake_stdin   = StringIO.new
-    fake_stdout  = StringIO.new(all_output)
-    fake_wait    = double("wait_thr", alive?: true, pid: 99_888)
-    allow(fake_wait).to receive(:join).and_return(fake_wait)
-    manager.instance_variable_set(:@process, {
-      stdin:    fake_stdin,
-      stdout:   fake_stdout,
-      pid:      99_888,
-      wait_thr: fake_wait
-    })
-    allow(manager).to receive(:process_alive?).and_return(true)
-    [fake_stdin, fake_stdout]
+  def stub_daemon_responsive(endpoint: "")
+    ping_result = { "result" => { "ok" => true, "endpoint" => endpoint } }
+    allow(manager).to receive(:send_to_daemon) do |req, **|
+      case req[:method]
+      when "daemon.ping"     then ping_result
+      when "daemon.shutdown" then { "result" => { "ok" => true } }
+      else
+        raise "unexpected send_to_daemon call in stub: #{req[:method]}"
+      end
+    end
+    FileUtils.touch(socket_path)
   end
 
-  def json_rpc_response(id:, result: nil, error: nil)
-    msg = { "jsonrpc" => "2.0", "id" => id }
-    result ? msg["result"] = result : msg["error"] = error
-    JSON.generate(msg)
+  def stub_daemon_unresponsive
+    allow(manager).to receive(:send_to_daemon).and_raise(Errno::ECONNREFUSED)
   end
 
   # ---------------------------------------------------------------------------
@@ -62,9 +60,7 @@ RSpec.describe Clacky::BrowserManager do
   # ---------------------------------------------------------------------------
   describe ".instance" do
     it "returns the same object on repeated calls" do
-      a = described_class.instance
-      b = described_class.instance
-      expect(a).to be(b)
+      expect(described_class.instance).to be(described_class.instance)
     end
 
     it "is a BrowserManager" do
@@ -83,8 +79,8 @@ RSpec.describe Clacky::BrowserManager do
       end
     end
 
-    context "when configured: false" do
-      before { write_config("configured" => false) }
+    context "when enabled is missing or false" do
+      before { write_config("enabled" => false) }
 
       it "does not start a daemon thread" do
         expect(Thread).not_to receive(:new)
@@ -96,10 +92,10 @@ RSpec.describe Clacky::BrowserManager do
       before { write_config("enabled" => true, "chrome_version" => "148") }
 
       it "spawns a background thread to pre-warm the daemon" do
-        thread_spawned = false
-        allow(Thread).to receive(:new) { thread_spawned = true; Thread.current }
+        spawned = false
+        allow(Thread).to receive(:new) { spawned = true; Thread.current }
         manager.start
-        expect(thread_spawned).to be true
+        expect(spawned).to be true
       end
     end
   end
@@ -108,14 +104,20 @@ RSpec.describe Clacky::BrowserManager do
   # #stop
   # ---------------------------------------------------------------------------
   describe "#stop" do
-    it "is a no-op when no daemon is running" do
+    it "is a no-op even when a daemon is running (daemon survives Clacky shutdown)" do
+      stub_daemon_responsive
+      expect(manager).not_to receive(:kill_daemon!)
       expect { manager.stop }.not_to raise_error
     end
+  end
 
-    it "kills the daemon and clears @process" do
-      inject_process
-      manager.stop
-      expect(manager.instance_variable_get(:@process)).to be_nil
+  # ---------------------------------------------------------------------------
+  # #force_stop
+  # ---------------------------------------------------------------------------
+  describe "#force_stop" do
+    it "kills the daemon under the mutex" do
+      expect(manager).to receive(:kill_daemon!)
+      manager.force_stop
     end
   end
 
@@ -123,35 +125,36 @@ RSpec.describe Clacky::BrowserManager do
   # #reload
   # ---------------------------------------------------------------------------
   describe "#reload" do
-    it "stops any existing daemon" do
-      inject_process
-      write_config("configured" => false)
+    it "always kills any existing daemon first" do
+      expect(manager).to receive(:kill_daemon!)
       manager.reload
-      expect(manager.instance_variable_get(:@process)).to be_nil
     end
 
-    context "when yml is now enabled: true" do
+    context "when yml says enabled: true" do
       before { write_config("enabled" => true, "chrome_version" => "148") }
 
       it "spawns a restart thread" do
-        thread_spawned = false
-        allow(Thread).to receive(:new) { thread_spawned = true; Thread.current }
+        allow(manager).to receive(:kill_daemon!)
+        spawned = false
+        allow(Thread).to receive(:new) { spawned = true; Thread.current }
         manager.reload
-        expect(thread_spawned).to be true
+        expect(spawned).to be true
       end
     end
 
-    context "when yml is configured: false" do
-      before { write_config("configured" => false) }
+    context "when yml says enabled: false" do
+      before { write_config("enabled" => false) }
 
-      it "does not spawn a thread" do
+      it "does not spawn a restart thread" do
+        allow(manager).to receive(:kill_daemon!)
         expect(Thread).not_to receive(:new)
         manager.reload
       end
     end
 
     context "when yml does not exist" do
-      it "does not spawn a thread" do
+      it "does not spawn a restart thread" do
+        allow(manager).to receive(:kill_daemon!)
         expect(Thread).not_to receive(:new)
         manager.reload
       end
@@ -164,6 +167,7 @@ RSpec.describe Clacky::BrowserManager do
   describe "#status" do
     context "when browser.yml is missing" do
       it "returns not enabled and daemon not running" do
+        stub_daemon_unresponsive
         s = manager.status
         expect(s[:enabled]).to be false
         expect(s[:daemon_running]).to be false
@@ -171,195 +175,197 @@ RSpec.describe Clacky::BrowserManager do
       end
     end
 
-    context "when enabled: true and chrome_version set" do
+    context "when enabled: true and chrome_version is set" do
       before { write_config("enabled" => true, "chrome_version" => "148") }
 
       it "reports enabled: true" do
+        stub_daemon_unresponsive
         expect(manager.status[:enabled]).to be true
       end
 
       it "returns the chrome_version" do
+        stub_daemon_unresponsive
         expect(manager.status[:chrome_version]).to eq("148")
       end
 
-      it "reports daemon_running: false when no process" do
+      it "reports daemon_running: false when daemon is unreachable" do
+        stub_daemon_unresponsive
         expect(manager.status[:daemon_running]).to be false
       end
 
-      it "reports daemon_running: true when process is alive" do
-        inject_process
+      it "reports daemon_running: true when daemon answers daemon.ping" do
+        stub_daemon_responsive
         expect(manager.status[:daemon_running]).to be true
       end
     end
   end
 
   # ---------------------------------------------------------------------------
-  # Private: #process_alive?
+  # Private: #daemon_responding?
   # ---------------------------------------------------------------------------
-  describe "#process_alive? (private)" do
-    it "returns false when @process is nil" do
-      expect(manager.send(:process_alive?)).to be false
+  describe "#daemon_responding? (private)" do
+    it "returns false when the socket file is missing" do
+      expect(manager.send(:daemon_responding?)).to be false
     end
 
-    it "returns false when wait_thr reports the process has exited" do
-      fake_wait = double("wait_thr", alive?: false)
-      manager.instance_variable_set(:@process, {
-        stdin: StringIO.new, stdout: StringIO.new, pid: 99_999, wait_thr: fake_wait
-      })
-      expect(manager.send(:process_alive?)).to be false
+    it "returns true when daemon.ping result includes ok: true" do
+      stub_daemon_responsive
+      expect(manager.send(:daemon_responding?)).to be true
     end
 
-    it "returns false when wait_thr is nil (process not tracked)" do
-      manager.instance_variable_set(:@process, {
-        stdin: StringIO.new, stdout: StringIO.new, pid: 99_999, wait_thr: nil
-      })
-      expect(manager.send(:process_alive?)).to be false
+    it "returns false when daemon.ping result is missing ok" do
+      FileUtils.touch(socket_path)
+      allow(manager).to receive(:send_to_daemon).and_return({ "result" => {} })
+      expect(!!manager.send(:daemon_responding?)).to be false
     end
 
-    it "returns true when wait_thr is alive and IO handles are open" do
-      fake_wait = double("wait_thr", alive?: true)
-      manager.instance_variable_set(:@process, {
-        stdin: StringIO.new, stdout: StringIO.new, pid: 99_888, wait_thr: fake_wait
-      })
-      expect(manager.send(:process_alive?)).to be true
-    end
-
-
-  end
-
-  # ---------------------------------------------------------------------------
-  # Private: #kill_process!
-  # ---------------------------------------------------------------------------
-  describe "#kill_process! (private)" do
-    it "is a no-op when @process is nil" do
-      expect { manager.send(:kill_process!) }.not_to raise_error
-    end
-
-    it "clears @process after killing" do
-      inject_process
-      manager.send(:kill_process!)
-      expect(manager.instance_variable_get(:@process)).to be_nil
+    it "returns false when send_to_daemon raises" do
+      FileUtils.touch(socket_path)
+      allow(manager).to receive(:send_to_daemon).and_raise(Errno::ECONNREFUSED)
+      expect(manager.send(:daemon_responding?)).to be false
     end
   end
 
   # ---------------------------------------------------------------------------
-  # Private: #ensure_process!
+  # Private: #daemon_endpoint
   # ---------------------------------------------------------------------------
-  describe "#ensure_process! (private)" do
-    it "does nothing if process is already alive" do
-      inject_process
-      expect(Open3).not_to receive(:popen3)
-      manager.send(:ensure_process!)
-      expect(manager.instance_variable_get(:@process)[:pid]).to eq(99_888)
+  describe "#daemon_endpoint (private)" do
+    it "returns empty string when socket file is missing" do
+      expect(manager.send(:daemon_endpoint)).to eq("")
     end
 
-    it "starts a new daemon and completes the MCP handshake" do
-      # Mock browser detection to return success
-      allow(Clacky::Utils::BrowserDetector).to receive(:detect).and_return({
-        status: :ok,
-        mode: :ws_endpoint,
-        value: "ws://127.0.0.1:9222/devtools/browser/test"
-      })
-
-      init_resp   = json_rpc_response(id: 1, result: { "protocolVersion" => "2024-11-05", "capabilities" => {} })
-      fake_stdin  = StringIO.new
-      fake_stdout = StringIO.new(init_resp + "\n")
-      fake_stderr = StringIO.new
-      fake_wait   = double("wait_thr", pid: 12_345)
-
-      allow(Open3).to receive(:popen3).and_return([fake_stdin, fake_stdout, fake_stderr, fake_wait])
-
-      manager.send(:ensure_process!)
-
-      ps = manager.instance_variable_get(:@process)
-      expect(ps).not_to be_nil
-      expect(ps[:pid]).to eq(12_345)
-      expect(fake_stdin.string).to include('"initialize"')
-      expect(fake_stdin.string).to include('"notifications/initialized"')
+    it "returns the endpoint advertised by daemon.ping" do
+      stub_daemon_responsive(endpoint: "ws://127.0.0.1:9222/devtools/browser/abc")
+      expect(manager.send(:daemon_endpoint)).to eq("ws://127.0.0.1:9222/devtools/browser/abc")
     end
 
-    it "raises when the initialize handshake times out" do
-      # Mock browser detection to return success
-      allow(Clacky::Utils::BrowserDetector).to receive(:detect).and_return({
-        status: :ok,
-        mode: :ws_endpoint,
-        value: "ws://127.0.0.1:9222/devtools/browser/test"
-      })
+    it "returns empty string when send_to_daemon raises" do
+      FileUtils.touch(socket_path)
+      allow(manager).to receive(:send_to_daemon).and_raise(StandardError)
+      expect(manager.send(:daemon_endpoint)).to eq("")
+    end
+  end
 
-      fake_stdin  = StringIO.new
-      fake_stderr = StringIO.new
-      fake_wait   = double("wait_thr", pid: 12_346)
-
-      allow(Open3).to receive(:popen3).and_return([fake_stdin, StringIO.new, fake_stderr, fake_wait])
-      allow(Process).to receive(:kill).and_return(nil)
-      allow(manager).to receive(:read_response).and_return(nil)
-
-      expect { manager.send(:ensure_process!) }.to raise_error(/initialize handshake timed out/)
+  # ---------------------------------------------------------------------------
+  # Private: #kill_daemon!
+  # ---------------------------------------------------------------------------
+  describe "#kill_daemon! (private)" do
+    it "is a no-op when no socket and no pid file exist" do
+      expect { manager.send(:kill_daemon!) }.not_to raise_error
     end
 
-    it "raises BrowserNotReachableError when browser is not found" do
+    it "attempts graceful shutdown via daemon.shutdown when daemon is responsive" do
+      stub_daemon_responsive
+      expect(manager).to receive(:send_to_daemon).with(
+        hash_including(method: "daemon.shutdown"), timeout: 3
+      ).and_return({ "result" => { "ok" => true } })
+      # Allow ping calls too
+      allow(manager).to receive(:send_to_daemon).with(
+        hash_including(method: "daemon.ping"), any_args
+      ).and_return({ "result" => { "ok" => true } })
+      manager.send(:kill_daemon!)
+    end
+
+    it "sends SIGTERM to the pid in PID_PATH when present" do
+      File.write(pid_path, "12345")
+      allow(manager).to receive(:daemon_responding?).and_return(false)
+      allow(manager).to receive(:pid_alive?).and_return(true, false)
+      expect(Process).to receive(:kill).with("TERM", 12_345)
+      manager.send(:kill_daemon!)
+    end
+
+    it "removes socket and pid files after killing" do
+      FileUtils.touch(socket_path)
+      File.write(pid_path, "99999")
+      allow(manager).to receive(:daemon_responding?).and_return(false)
+      allow(manager).to receive(:pid_alive?).and_return(false)
+      manager.send(:kill_daemon!)
+      expect(File.exist?(socket_path)).to be false
+      expect(File.exist?(pid_path)).to be false
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Private: #ensure_daemon!
+  # ---------------------------------------------------------------------------
+  describe "#ensure_daemon! (private)" do
+    it "raises BrowserNotReachableError when Chrome is not running" do
       allow(Clacky::Utils::BrowserDetector).to receive(:detect).and_return({ status: :not_found })
 
-      expect { manager.send(:ensure_process!) }.to raise_error(
+      expect { manager.send(:ensure_daemon!) }.to raise_error(
         Clacky::BrowserNotReachableError,
         /Chrome\/Edge is not running/
       )
     end
-  end
 
-  # ---------------------------------------------------------------------------
-  # Private: #json_rpc
-  # ---------------------------------------------------------------------------
-  describe "#json_rpc (private)" do
-    it "builds a valid JSON-RPC 2.0 message" do
-      msg    = manager.send(:json_rpc, "tools/call", { name: "list_pages" }, id: 42)
-      parsed = JSON.parse(msg)
-      expect(parsed["jsonrpc"]).to eq("2.0")
-      expect(parsed["id"]).to eq(42)
-      expect(parsed["method"]).to eq("tools/call")
-      expect(parsed["params"]["name"]).to eq("list_pages")
+    it "does nothing if daemon is responding with the matching endpoint" do
+      endpoint = "ws://127.0.0.1:9222/devtools/browser/test"
+      allow(Clacky::Utils::BrowserDetector).to receive(:detect).and_return({
+        status: :ok, mode: :ws_endpoint, value: endpoint
+      })
+      stub_daemon_responsive(endpoint: endpoint)
+
+      expect(manager).not_to receive(:spawn_daemon!)
+      manager.send(:ensure_daemon!)
+    end
+
+    it "respawns the daemon when the endpoint is stale" do
+      endpoint = "ws://127.0.0.1:9222/devtools/browser/new"
+      allow(Clacky::Utils::BrowserDetector).to receive(:detect).and_return({
+        status: :ok, mode: :ws_endpoint, value: endpoint
+      })
+      stub_daemon_responsive(endpoint: "ws://127.0.0.1:9222/devtools/browser/old")
+
+      expect(manager).to receive(:kill_daemon!)
+      expect(manager).to receive(:spawn_daemon!)
+      expect(manager).to receive(:wait_for_daemon!)
+      manager.send(:ensure_daemon!)
+    end
+
+    it "spawns and waits when no daemon is running" do
+      endpoint = "ws://127.0.0.1:9222/devtools/browser/test"
+      allow(Clacky::Utils::BrowserDetector).to receive(:detect).and_return({
+        status: :ok, mode: :ws_endpoint, value: endpoint
+      })
+      # No socket file, no daemon
+      expect(manager).to receive(:spawn_daemon!)
+      expect(manager).to receive(:wait_for_daemon!)
+      manager.send(:ensure_daemon!)
     end
   end
 
   # ---------------------------------------------------------------------------
-  # Private: #read_response
+  # Private: #send_to_daemon
   # ---------------------------------------------------------------------------
-  describe "#read_response (private)" do
-    it "reads and returns the matching JSON response" do
-      resp = json_rpc_response(id: 2, result: { "ok" => true })
-      io   = StringIO.new(resp + "\n")
-      result = manager.send(:read_response, io, target_id: 2, timeout: 2)
-      expect(result).to be_a(Hash)
-      expect(result["id"]).to eq(2)
-      expect(result["result"]["ok"]).to be true
+  describe "#send_to_daemon (private)" do
+    it "writes a JSON line to the socket and parses the response line" do
+      server = UNIXServer.new(socket_path)
+      server_thread = Thread.new do
+        client = server.accept
+        line   = client.gets
+        parsed = JSON.parse(line)
+        client.puts(JSON.generate("jsonrpc" => "2.0", "id" => parsed["id"], "result" => { "echoed" => true }))
+        client.close
+      end
+
+      result = manager.send(:send_to_daemon, { jsonrpc: "2.0", id: 7, method: "daemon.ping" }, timeout: 2)
+      server_thread.join
+      server.close
+
+      expect(result["id"]).to eq(7)
+      expect(result["result"]["echoed"]).to be true
     end
 
-    it "skips responses with non-matching ids" do
-      line1 = json_rpc_response(id: 1, result: {})
-      line2 = json_rpc_response(id: 2, result: { "found" => true })
-      io = StringIO.new("#{line1}\n#{line2}\n")
-      result = manager.send(:read_response, io, target_id: 2, timeout: 2)
-      expect(result["result"]["found"]).to be true
-    end
+    it "raises a timeout error when no response arrives" do
+      server = UNIXServer.new(socket_path)
+      hang_thread = Thread.new { server.accept; sleep 3 }
 
-    it "returns nil when IO closes without a match" do
-      io = StringIO.new("")
-      expect(manager.send(:read_response, io, target_id: 99, timeout: 1)).to be_nil
-    end
+      expect {
+        manager.send(:send_to_daemon, { jsonrpc: "2.0", id: 7, method: "daemon.ping" }, timeout: 1)
+      }.to raise_error(/timed out after 1s/)
 
-    it "returns nil on timeout" do
-      read_io, write_io = IO.pipe
-      write_io.close
-      result = manager.send(:read_response, read_io, target_id: 99, timeout: 1)
-      expect(result).to be_nil
-      read_io.close
-    end
-
-    it "skips malformed JSON lines and continues" do
-      valid = json_rpc_response(id: 5, result: { "x" => 1 })
-      io    = StringIO.new("not-json\n#{valid}\n")
-      result = manager.send(:read_response, io, target_id: 5, timeout: 2)
-      expect(result["id"]).to eq(5)
+      hang_thread.kill
+      server.close
     end
   end
 
@@ -367,24 +373,29 @@ RSpec.describe Clacky::BrowserManager do
   # #mcp_call
   # ---------------------------------------------------------------------------
   describe "#mcp_call" do
+    before do
+      allow(manager).to receive(:ensure_daemon!)
+    end
+
     it "sends a tools/call message and returns the result" do
-      call_id  = manager.instance_variable_get(:@call_id)
-      tool_resp = json_rpc_response(id: call_id, result: { "structuredContent" => { "pages" => [] } })
-      fake_stdin, = inject_process([tool_resp])
+      received_req = nil
+      allow(manager).to receive(:send_to_daemon) do |req, **|
+        received_req = req
+        { "jsonrpc" => "2.0", "id" => req[:id], "result" => { "structuredContent" => { "pages" => [] } } }
+      end
 
       result = manager.mcp_call("list_pages", {})
 
       expect(result).to be_a(Hash)
-      expect(fake_stdin.string).to include('"tools/call"')
-      expect(fake_stdin.string).to include('"list_pages"')
+      expect(received_req[:method]).to eq("tools/call")
+      expect(received_req[:params][:name]).to eq("list_pages")
     end
 
     it "increments @call_id on each invocation" do
       id1 = manager.instance_variable_get(:@call_id)
-
-      resp1 = json_rpc_response(id: id1, result: {})
-      resp2 = json_rpc_response(id: id1 + 1, result: {})
-      inject_process([resp1, resp2])
+      allow(manager).to receive(:send_to_daemon) do |req, **|
+        { "jsonrpc" => "2.0", "id" => req[:id], "result" => {} }
+      end
 
       manager.mcp_call("list_pages", {})
       expect(manager.instance_variable_get(:@call_id)).to eq(id1 + 1)
@@ -393,32 +404,47 @@ RSpec.describe Clacky::BrowserManager do
       expect(manager.instance_variable_get(:@call_id)).to eq(id1 + 2)
     end
 
-    it "raises on timeout but keeps the daemon alive" do
-      inject_process([])  # empty stdout → no response
-      allow(manager).to receive(:read_response).and_return(nil)
-
-      expect { manager.mcp_call("list_pages", {}) }.to raise_error(/timed out/)
-      # Process must NOT be killed — it may still be healthy
-      expect(manager.instance_variable_get(:@process)).not_to be_nil
-    end
-
     it "raises on JSON-RPC error response" do
-      call_id  = manager.instance_variable_get(:@call_id)
-      err_resp = json_rpc_response(id: call_id, error: { "message" => "some rpc error" })
-      inject_process([err_resp])
+      allow(manager).to receive(:send_to_daemon) do |req, **|
+        { "jsonrpc" => "2.0", "id" => req[:id], "error" => { "message" => "some rpc error" } }
+      end
 
       expect { manager.mcp_call("list_pages", {}) }.to raise_error(/some rpc error/)
     end
 
     it "raises when result has isError: true" do
-      call_id  = manager.instance_variable_get(:@call_id)
-      err_resp = json_rpc_response(id: call_id, result: {
-        "isError" => true,
-        "content" => [{ "type" => "text", "text" => "navigation failed" }]
-      })
-      inject_process([err_resp])
+      allow(manager).to receive(:send_to_daemon) do |req, **|
+        {
+          "jsonrpc" => "2.0", "id" => req[:id],
+          "result" => {
+            "isError" => true,
+            "content" => [{ "type" => "text", "text" => "navigation failed" }]
+          }
+        }
+      end
 
       expect { manager.mcp_call("navigate_page", { url: "bad" }) }.to raise_error(/navigation failed/)
+    end
+
+    it "retries once when the socket connection is refused, then re-raises" do
+      attempts = 0
+      allow(manager).to receive(:send_to_daemon) do
+        attempts += 1
+        raise Errno::ECONNREFUSED
+      end
+
+      expect { manager.mcp_call("list_pages", {}) }.to raise_error(Errno::ECONNREFUSED)
+      expect(attempts).to eq(2)
+    end
+
+    it "wraps BrowserNotReachableError into Clacky::AgentError" do
+      allow(manager).to receive(:ensure_daemon!).and_raise(
+        Clacky::BrowserNotReachableError, "Chrome not running"
+      )
+
+      expect { manager.mcp_call("list_pages", {}) }.to raise_error(
+        Clacky::AgentError, /Chrome not running/
+      )
     end
   end
 
@@ -431,15 +457,36 @@ RSpec.describe Clacky::BrowserManager do
     end
 
     it "returns parsed YAML when file exists" do
-      write_config("configured" => true, "chrome_version" => "148")
+      write_config("enabled" => true, "chrome_version" => "148")
       cfg = manager.send(:load_config)
-      expect(cfg["configured"]).to be true
+      expect(cfg["enabled"]).to be true
       expect(cfg["chrome_version"]).to eq("148")
     end
 
     it "returns {} when file is malformed" do
       File.write(config_path, ":\tinvalid:\n  yaml: [unclosed")
       expect(manager.send(:load_config)).to eq({})
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Private: #build_chrome_mcp_command
+  # ---------------------------------------------------------------------------
+  describe "#build_chrome_mcp_command (private)" do
+    it "builds the chrome-devtools-mcp argv with --wsEndpoint for :ws_endpoint detection" do
+      cmd = manager.send(:build_chrome_mcp_command, {
+        mode: :ws_endpoint, value: "ws://127.0.0.1:9222/devtools/browser/abc"
+      })
+      expect(cmd.first).to eq("chrome-devtools-mcp")
+      expect(cmd).to include("--wsEndpoint", "ws://127.0.0.1:9222/devtools/browser/abc")
+      expect(cmd).to include("--experimentalStructuredContent")
+      expect(cmd).to include("--experimental-page-id-routing")
+    end
+
+    it "raises for unknown detection modes" do
+      expect {
+        manager.send(:build_chrome_mcp_command, { mode: :unknown })
+      }.to raise_error(/Unknown detection mode/)
     end
   end
 end

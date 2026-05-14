@@ -13,7 +13,10 @@
 #     forwards to chrome-devtools-mcp and writes the matching response back.
 #   - The chrome-devtools-mcp stdio protocol is single-client; daemon serializes
 #     concurrent client requests with a mutex.
-#   - Daemon auto-exits after IDLE_TIMEOUT seconds with no client activity.
+#   - Daemon exits only on: explicit daemon.shutdown, SIGINT/SIGTERM, or when
+#     chrome-devtools-mcp itself dies. Idle clients do NOT trigger exit — the
+#     whole point of this daemon is to outlive Clacky restarts so Chrome's
+#     remote-debugging authorization sticks.
 #
 # Wire protocol (between Clacky and daemon):
 #   Client → daemon: one JSON-RPC line (utf-8) followed by '\n'
@@ -35,7 +38,6 @@ module Clacky
     PID_PATH       = File.expand_path("~/.clacky/mcp-daemon.pid").freeze
     ENDPOINT_PATH  = File.expand_path("~/.clacky/mcp-daemon.endpoint").freeze
     LOG_PATH       = File.expand_path("~/.clacky/mcp-daemon.log").freeze
-    IDLE_TIMEOUT   = 3600 # exit after 1h of no traffic
     READ_TIMEOUT   = 90   # max wait for chrome-devtools-mcp to answer a single call
     HANDSHAKE_TIMEOUT = 15
 
@@ -55,7 +57,6 @@ module Clacky
       @stdout = nil
       @wait_thr = nil
       @write_mutex = Mutex.new
-      @last_activity = Time.now
     end
 
     def run
@@ -63,7 +64,6 @@ module Clacky
       write_endpoint
       install_signal_handlers
       start_chrome_mcp!
-      start_idle_watcher
       serve!
     rescue => e
       @logger.error("fatal: #{e.class}: #{e.message}\n#{e.backtrace.first(10).join("\n")}")
@@ -71,9 +71,7 @@ module Clacky
       exit 1
     end
 
-    private
-
-    def write_pid
+    private def write_pid
       FileUtils.mkdir_p(File.dirname(PID_PATH))
       File.write(PID_PATH, Process.pid.to_s)
     end
@@ -160,18 +158,7 @@ module Clacky
     end
 
     def start_idle_watcher
-      Thread.new do
-        Thread.current.name = "idle-watcher"
-        loop do
-          sleep 60
-          idle = Time.now - @last_activity
-          if idle > IDLE_TIMEOUT
-            @logger.info("idle for #{idle.to_i}s, exiting")
-            cleanup
-            exit 0
-          end
-        end
-      end
+      # removed: daemon must survive idle periods to preserve Chrome auth
     end
 
     def serve!
@@ -192,7 +179,6 @@ module Clacky
       client.each_line do |line|
         line = line.strip
         next if line.empty?
-        @last_activity = Time.now
 
         req =
           begin

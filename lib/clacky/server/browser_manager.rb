@@ -191,9 +191,7 @@ module Clacky
     # Private
     # ------------------------------------------------------------------
 
-    private
-
-    def load_config
+    private def load_config
       return {} unless File.exist?(BROWSER_CONFIG_PATH)
       YAMLCompat.safe_load(File.read(BROWSER_CONFIG_PATH), permitted_classes: [Date, Time, Symbol]) || {}
     rescue StandardError => e
