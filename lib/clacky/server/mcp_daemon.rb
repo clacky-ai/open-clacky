@@ -40,6 +40,12 @@ module Clacky
     LOG_PATH       = File.expand_path("~/.clacky/mcp-daemon.log").freeze
     READ_TIMEOUT   = 90   # max wait for chrome-devtools-mcp to answer a single call
     HANDSHAKE_TIMEOUT = 15
+    # Reap the daemon after 24h of zero forwarded requests. Held long because the
+    # whole point of the daemon is to outlive Clacky restarts — but unbounded
+    # liveness means the chrome-devtools-mcp Node process (~30–80MB RSS) lingers
+    # forever for users who try the browser once and never again.
+    IDLE_TIMEOUT_SECONDS = 86_400
+    IDLE_CHECK_INTERVAL  = 3_600
 
     def self.run(argv)
       cmd = argv.dup
@@ -57,6 +63,8 @@ module Clacky
       @stdout = nil
       @wait_thr = nil
       @write_mutex = Mutex.new
+      @last_activity = Time.now
+      @activity_mutex = Mutex.new
     end
 
     def run
@@ -64,6 +72,7 @@ module Clacky
       write_endpoint
       install_signal_handlers
       start_chrome_mcp!
+      start_idle_watcher
       serve!
     rescue => e
       @logger.error("fatal: #{e.class}: #{e.message}\n#{e.backtrace.first(10).join("\n")}")
@@ -158,7 +167,20 @@ module Clacky
     end
 
     def start_idle_watcher
-      # removed: daemon must survive idle periods to preserve Chrome auth
+      Thread.new do
+        Thread.current.name = "idle-watcher"
+        loop do
+          sleep IDLE_CHECK_INTERVAL
+          last = @activity_mutex.synchronize { @last_activity }
+          idle = Time.now - last
+          next if idle < IDLE_TIMEOUT_SECONDS
+          @logger.info("idle for #{idle.to_i}s (> #{IDLE_TIMEOUT_SECONDS}s); shutting down")
+          cleanup
+          exit 0
+        end
+      rescue StandardError => e
+        @logger.warn("idle-watcher crashed: #{e.class}: #{e.message}")
+      end
     end
 
     def serve!
@@ -213,6 +235,10 @@ module Clacky
     def forward_to_chrome_mcp(req)
       id = req["id"]
       raise "request missing id" unless id
+
+      # Real activity — reset the idle timer. daemon.ping does NOT call here,
+      # so liveness probes from BrowserManager don't keep an unused daemon alive.
+      @activity_mutex.synchronize { @last_activity = Time.now }
 
       @write_mutex.synchronize do
         @stdin.puts(JSON.generate(req))

@@ -254,7 +254,7 @@ module Clacky
             Clacky::Logger.info("[HttpServer PID=#{Process.pid}] detached inherited socket fd=#{@inherited_socket.fileno} before shutdown")
           end
           t1 = Thread.new { @channel_manager.stop rescue nil }
-          t2 = Thread.new { Clacky::BrowserManager.instance.stop rescue nil }
+          t2 = Thread.new { Clacky::BrowserManager.instance.disconnect rescue nil }
           t1.join(1.5)
           t2.join(1.5)
           server.shutdown rescue nil

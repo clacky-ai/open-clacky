@@ -38,9 +38,16 @@ module Clacky
     end
 
     def initialize
-      @mutex   = Mutex.new
-      @call_id = 2
-      @config  = {}
+      # @daemon_setup_mutex protects ensure_daemon!/kill_daemon!. Only contended
+      # on cold start, respawn, or shutdown — the per-call hot path doesn't
+      # serialize through it.
+      # @call_id_mutex protects the @call_id counter. The actual RPC roundtrip
+      # (send_to_daemon) runs lock-free; the daemon serializes via its own
+      # @write_mutex when forwarding to chrome-devtools-mcp.
+      @daemon_setup_mutex = Mutex.new
+      @call_id_mutex      = Mutex.new
+      @call_id            = 2
+      @config             = {}
     end
 
     # ------------------------------------------------------------------
@@ -58,7 +65,7 @@ module Clacky
       Clacky::Logger.info("[BrowserManager] Browser enabled, ensuring MCP daemon is running...")
       Thread.new do
         Thread.current.name = "browser-manager-start"
-        @mutex.synchronize { ensure_daemon! }
+        @daemon_setup_mutex.synchronize { ensure_daemon! }
       rescue Clacky::BrowserNotReachableError
         Clacky::Logger.debug("[BrowserManager] Skipping pre-warm: Chrome not running")
       rescue StandardError => e
@@ -67,25 +74,26 @@ module Clacky
       end
     end
 
-    # On Clacky shutdown we intentionally LEAVE the daemon running so that
-    # the next Clacky startup can reuse the existing Chrome connection and
-    # avoid re-authorization.
-    def stop
-      Clacky::Logger.info("[BrowserManager] Stop (daemon left running for restart reuse)")
+    # Detach from the daemon — no-op by design. Each mcp_call uses a one-shot
+    # UNIX socket, so this process holds no connection state to release.
+    # The daemon survives Clacky shutdown so the next startup can reuse the
+    # existing Chrome remote-debugging authorization.
+    def disconnect
+      Clacky::Logger.info("[BrowserManager] Disconnect (daemon left running for restart reuse)")
     end
 
     public
 
-    # Explicit daemon kill — only used when chrome config changes or on
+    # Hard daemon teardown — only used when chrome config changes or on
     # `reload`. NOT called on Clacky shutdown.
-    def force_stop
-      @mutex.synchronize { kill_daemon! }
-      Clacky::Logger.info("[BrowserManager] Daemon force-stopped")
+    def terminate_daemon!
+      @daemon_setup_mutex.synchronize { kill_daemon! }
+      Clacky::Logger.info("[BrowserManager] Daemon terminated")
     end
 
     def reload
       Clacky::Logger.info("[BrowserManager] Reloading...")
-      @mutex.synchronize { kill_daemon! }
+      @daemon_setup_mutex.synchronize { kill_daemon! }
 
       cfg = load_config
       @config = cfg
@@ -94,7 +102,7 @@ module Clacky
         Clacky::Logger.info("[BrowserManager] Browser enabled, restarting daemon")
         Thread.new do
           Thread.current.name = "browser-manager-reload"
-          @mutex.synchronize { ensure_daemon! }
+          @daemon_setup_mutex.synchronize { ensure_daemon! }
         rescue Clacky::BrowserNotReachableError
           Clacky::Logger.debug("[BrowserManager] Skipping reload start: Chrome not running")
         rescue StandardError => e
@@ -160,35 +168,38 @@ module Clacky
     def mcp_call(tool_name, arguments = {})
       attempts = 0
       begin
-        @mutex.synchronize do
-          ensure_daemon!
+        @daemon_setup_mutex.synchronize { ensure_daemon! }
 
-          call_id  = @call_id
+        call_id = @call_id_mutex.synchronize do
+          id = @call_id
           @call_id += 1
-
-          req = {
-            jsonrpc: "2.0",
-            id:      call_id,
-            method:  "tools/call",
-            params:  { name: tool_name, arguments: arguments }
-          }
-
-          resp = send_to_daemon(req, timeout: Clacky::Tools::Browser::MCP_CALL_TIMEOUT)
-
-          if resp["error"]
-            err = resp["error"]
-            raise "Chrome MCP error: #{err.is_a?(Hash) ? err["message"] : err}"
-          end
-
-          result = resp["result"] || {}
-
-          if result["isError"]
-            text = extract_text_content(result)
-            raise text.empty? ? "Chrome MCP tool '#{tool_name}' failed" : text
-          end
-
-          result
+          id
         end
+
+        req = {
+          jsonrpc: "2.0",
+          id:      call_id,
+          method:  "tools/call",
+          params:  { name: tool_name, arguments: arguments }
+        }
+
+        # send_to_daemon runs lock-free; the daemon's @write_mutex serializes
+        # the actual chrome-devtools-mcp forwarding.
+        resp = send_to_daemon(req, timeout: Clacky::Tools::Browser::MCP_CALL_TIMEOUT)
+
+        if resp["error"]
+          err = resp["error"]
+          raise "Chrome MCP error: #{err.is_a?(Hash) ? err["message"] : err}"
+        end
+
+        result = resp["result"] || {}
+
+        if result["isError"]
+          text = extract_text_content(result)
+          raise text.empty? ? "Chrome MCP tool '#{tool_name}' failed" : text
+        end
+
+        result
       rescue Errno::ECONNREFUSED, Errno::ENOENT, Errno::EPIPE, IOError => e
         attempts += 1
         if attempts <= 1
@@ -214,7 +225,7 @@ module Clacky
       {}
     end
 
-    # Called inside @mutex.
+    # Called inside @daemon_setup_mutex.
     # Ensures the mcp_daemon process exists and the Unix socket answers ping.
     # Also verifies the daemon's wsEndpoint matches the current Chrome instance —
     # if Chrome was restarted (new UUID), the daemon's WebSocket is dead and we
@@ -290,10 +301,13 @@ module Clacky
       end
     end
 
+    SPAWN_LOG_MAX_BYTES = 1_000_000
+
     def spawn_daemon_locked!(detected)
       chrome_cmd = build_chrome_mcp_command(detected)
       log_path   = File.expand_path("~/.clacky/mcp-daemon.spawn.log")
       FileUtils.mkdir_p(File.dirname(log_path))
+      rotate_log_if_oversized(log_path)
 
       # Build the daemon argv. We use Bundler's ruby if available.
       ruby_bin = RbConfig.ruby
@@ -402,6 +416,18 @@ module Clacky
         .select { |b| b.is_a?(Hash) && b["type"] == "text" }
         .map { |b| b["text"].to_s }
         .join("\n")
+    end
+
+    # Roll spawn.log → spawn.log.1 when it grows past SPAWN_LOG_MAX_BYTES.
+    # Only one historical copy is kept. spawn.log is append-only (spawn-time
+    # rc-shell output, MCP startup banner, mise warnings) so a single rollover
+    # is enough to bound disk use without losing recent debug context.
+    def rotate_log_if_oversized(log_path)
+      return unless File.exist?(log_path)
+      return if File.size(log_path) < SPAWN_LOG_MAX_BYTES
+      FileUtils.mv(log_path, "#{log_path}.1", force: true)
+    rescue StandardError => e
+      Clacky::Logger.warn("[BrowserManager] Failed to rotate spawn log: #{e.message}")
     end
   end
 end

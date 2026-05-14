@@ -369,4 +369,118 @@ RSpec.describe Clacky::Tools::Browser do
 
   end
 
+  # ---------------------------------------------------------------------------
+  # Persistence — owned pages survive Clacky restarts
+  # ---------------------------------------------------------------------------
+  describe "page ownership persistence" do
+    let(:tool)        { described_class.new }
+    let(:tmp_dir)     { Dir.mktmpdir }
+    let(:working_dir) { File.join(tmp_dir, "project") }
+
+    before do
+      FileUtils.mkdir_p(working_dir)
+      stub_const("Clacky::Tools::Browser::STATE_DIR", File.join(tmp_dir, "browser-tabs"))
+    end
+
+    after { FileUtils.rm_rf(tmp_dir) }
+
+    def state_path
+      digest = Digest::SHA256.hexdigest(File.expand_path(working_dir))
+      File.join(tmp_dir, "browser-tabs", "#{digest}.json")
+    end
+
+    def write_state(payload)
+      FileUtils.mkdir_p(File.dirname(state_path))
+      File.write(state_path, JSON.generate(payload))
+    end
+
+    describe "#ensure_state_loaded! (private)" do
+      it "is a no-op when working_dir is nil" do
+        expect(Clacky::BrowserManager.instance).not_to receive(:mcp_call)
+        tool.send(:ensure_state_loaded!, nil)
+        expect(tool.instance_variable_get(:@state_loaded)).to be false
+      end
+
+      it "is a no-op when the state file does not exist" do
+        expect(Clacky::BrowserManager.instance).not_to receive(:mcp_call)
+        tool.send(:ensure_state_loaded!, working_dir)
+        expect(tool.instance_variable_get(:@state_loaded)).to be false
+      end
+
+      it "restores owned ids that are still alive" do
+        write_state("owned" => [{ "id" => 1, "url" => "https://a" }, { "id" => 2, "url" => "https://b" }],
+                    "last_id" => 2)
+        allow(Clacky::BrowserManager.instance).to receive(:mcp_call).with("list_pages").and_return(
+          "structuredContent" => { "pages" => [
+            { "id" => 1, "url" => "https://a", "selected" => false },
+            { "id" => 2, "url" => "https://b", "selected" => true }
+          ] }
+        )
+
+        tool.send(:ensure_state_loaded!, working_dir)
+        expect(tool.instance_variable_get(:@owned_pages)).to eq([1, 2])
+        expect(tool.instance_variable_get(:@last_page_id)).to eq(2)
+        expect(tool.instance_variable_get(:@state_loaded)).to be true
+      end
+
+      it "drops persisted ids that are no longer alive" do
+        write_state("owned" => [{ "id" => 1, "url" => "https://a" }, { "id" => 99, "url" => "https://dead" }],
+                    "last_id" => 99)
+        allow(Clacky::BrowserManager.instance).to receive(:mcp_call).with("list_pages").and_return(
+          "structuredContent" => { "pages" => [
+            { "id" => 1, "url" => "https://a", "selected" => true }
+          ] }
+        )
+
+        tool.send(:ensure_state_loaded!, working_dir)
+        expect(tool.instance_variable_get(:@owned_pages)).to eq([1])
+        expect(tool.instance_variable_get(:@last_page_id)).to eq(1)
+      end
+
+      it "remaps an id when the daemon respawned but URL still matches" do
+        # Persisted id 7 no longer exists; a different id (42) has the same URL.
+        write_state("owned" => [{ "id" => 7, "url" => "https://example.com/x" }], "last_id" => 7)
+        allow(Clacky::BrowserManager.instance).to receive(:mcp_call).with("list_pages").and_return(
+          "structuredContent" => { "pages" => [
+            { "id" => 42, "url" => "https://example.com/x", "selected" => true }
+          ] }
+        )
+
+        tool.send(:ensure_state_loaded!, working_dir)
+        expect(tool.instance_variable_get(:@owned_pages)).to eq([42])
+        expect(tool.instance_variable_get(:@last_page_id)).to eq(42)
+      end
+
+      it "skips silently when list_pages fails (will retry next call)" do
+        write_state("owned" => [{ "id" => 1, "url" => "https://a" }], "last_id" => 1)
+        allow(Clacky::BrowserManager.instance).to receive(:mcp_call).and_raise("Chrome not running")
+
+        tool.send(:ensure_state_loaded!, working_dir)
+        expect(tool.instance_variable_get(:@state_loaded)).to be false
+      end
+    end
+
+    describe "#save_state! (private)" do
+      it "writes owned pages and last_id to the working_dir-keyed file" do
+        tool.instance_variable_set(:@state_path, state_path)
+        tool.instance_variable_set(:@owned_pages, [10, 20])
+        tool.instance_variable_set(:@owned_urls, { 10 => "https://a", 20 => "https://b" })
+        tool.instance_variable_set(:@last_page_id, 20)
+
+        tool.send(:save_state!)
+
+        raw = JSON.parse(File.read(state_path))
+        expect(raw["owned"]).to eq([
+          { "id" => 10, "url" => "https://a" },
+          { "id" => 20, "url" => "https://b" }
+        ])
+        expect(raw["last_id"]).to eq(20)
+      end
+
+      it "is a no-op when state_path is not set" do
+        tool.instance_variable_set(:@state_path, nil)
+        expect { tool.send(:save_state!) }.not_to raise_error
+      end
+    end
+  end
 end

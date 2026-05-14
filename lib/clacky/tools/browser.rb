@@ -9,6 +9,7 @@ require "yaml"
 require "base64"
 require "fileutils"
 require "securerandom"
+require "digest"
 require_relative "base"
 
 module Clacky
@@ -52,6 +53,9 @@ module Clacky
         @owned_pages  = []     # Array<Integer> — keeps open-order
         @last_page_id = nil    # Integer, must always be ∈ @owned_pages or nil
         @known_page_ids = nil  # Snapshot of all live page ids at start of last act; used to detect new tabs spawned by act
+        @owned_urls   = {}     # Hash<Integer, String> — id → last-known url, for cross-restart URL match
+        @state_loaded = false  # one-shot lazy load of persisted state on first execute with working_dir
+        @state_path   = nil    # absolute path to this session's persistence file
       end
 
       self.tool_name = "browser"
@@ -113,6 +117,7 @@ module Clacky
           return browser_not_setup_error unless File.exist?(BROWSER_CONFIG_PATH)
           return browser_disabled_error  unless browser_enabled?
         end
+        ensure_state_loaded!(working_dir)
         execute_user_browser(action, opts)
       rescue StandardError => e
         { error: classify_browser_error(e) }
@@ -269,13 +274,17 @@ module Clacky
           result = mcp_call("new_page", { url: url, background: background_mode? })
           new_id = extract_new_page_id(result)
           @owned_pages << new_id unless @owned_pages.include?(new_id)
+          @owned_urls[new_id] = url
           @last_page_id = new_id
+          save_state!
           { action: "open", success: true, profile: "user", url: url, output: "Opened: #{url}" }
 
         when "navigate"
           url = require_url(opts)
           return url if url.is_a?(Hash)
           mcp_call("navigate_page", { type: "url", url: url })
+          @owned_urls[@last_page_id] = url if @last_page_id
+          save_state!
           { action: "navigate", success: true, profile: "user", url: url, output: "Navigated to: #{url}" }
 
         when "focus"
@@ -283,6 +292,7 @@ module Clacky
           return target if target.is_a?(Hash)
           mcp_call("select_page", { pageId: target, bringToFront: true })
           @last_page_id = target
+          save_state!
           { action: "focus", success: true, profile: "user", output: "Focused tab #{target}" }
 
         when "adopt"
@@ -291,12 +301,15 @@ module Clacky
           target = target_id.to_i
           # Verify the page actually exists in Chrome.
           all_pages = extract_pages(mcp_call("list_pages"))
-          unless all_pages.any? { |p| p[:id] == target }
+          adopted = all_pages.find { |p| p[:id] == target }
+          unless adopted
             return { error: "Tab #{target} does not exist (was it closed?)." }
           end
           @owned_pages << target unless @owned_pages.include?(target)
+          @owned_urls[target] = adopted[:url].to_s
           mcp_call("select_page", { pageId: target, bringToFront: true })
           @last_page_id = target
+          save_state!
           { action: "adopt", success: true, profile: "user", output: "Adopted tab #{target}" }
 
         when "close"
@@ -304,12 +317,14 @@ module Clacky
           return target if target.is_a?(Hash)
           mcp_call("close_page", { pageId: target })
           @owned_pages.delete(target)
+          @owned_urls.delete(target)
           @last_page_id = nil if @last_page_id == target
           # Auto-focus the most-recently opened remaining owned tab, if any.
           if @last_page_id.nil? && !@owned_pages.empty?
             @last_page_id = @owned_pages.last
             mcp_call("select_page", { pageId: @last_page_id, bringToFront: true }) rescue nil
           end
+          save_state!
           { action: "close", success: true, profile: "user", output: "Closed tab #{target}" }
 
         when "act"
@@ -784,10 +799,98 @@ module Clacky
       private def reconcile_owned_pages!(all_pages)
         alive_ids = all_pages.map { |p| p[:id] }
         dead = @owned_pages.reject { |id| alive_ids.include?(id) }
+        return if dead.empty?
         dead.each do |id|
           @owned_pages.delete(id)
+          @owned_urls.delete(id)
           @last_page_id = nil if @last_page_id == id
         end
+        save_state!
+      end
+
+      # -----------------------------------------------------------------------
+      # Page ownership persistence
+      # -----------------------------------------------------------------------
+
+      STATE_DIR = File.expand_path("~/.clacky/browser-tabs").freeze
+
+      # On the first execute call that knows the working_dir, load this
+      # session's previously-persisted ownership and reconcile it against the
+      # current set of live pages in Chrome. Subsequent calls are no-ops.
+      #
+      # If MCP isn't reachable yet (Chrome not running), recovery is silently
+      # skipped and will retry on the next execute. This avoids surfacing
+      # restart-time noise — the user's next real action will see the state.
+      private def ensure_state_loaded!(working_dir)
+        return if @state_loaded
+        return if working_dir.nil? || working_dir.to_s.empty?
+
+        @state_path = state_file_for(working_dir)
+        return unless File.exist?(@state_path)
+
+        raw = begin
+                JSON.parse(File.read(@state_path))
+              rescue StandardError
+                nil
+              end
+        return unless raw.is_a?(Hash)
+
+        # Resolve the persisted list against the live pages.
+        live_pages = begin
+                       extract_pages(Clacky::BrowserManager.instance.mcp_call("list_pages"))
+                     rescue StandardError
+                       nil
+                     end
+        return if live_pages.nil?  # try again next call
+
+        live_by_id  = live_pages.each_with_object({}) { |p, h| h[p[:id]] = p }
+        live_by_url = live_pages.each_with_object({}) { |p, h| h[p[:url]] = p if p[:url] }
+
+        owned   = Array(raw["owned"])
+        new_ids = []
+        new_urls = {}
+
+        owned.each do |entry|
+          next unless entry.is_a?(Hash)
+          id  = entry["id"]
+          url = entry["url"].to_s
+          if id.is_a?(Integer) && live_by_id.key?(id)
+            new_ids << id
+            new_urls[id] = live_by_id[id][:url].to_s
+          elsif !url.empty? && live_by_url.key?(url)
+            match_id = live_by_url[url][:id]
+            unless new_ids.include?(match_id)
+              new_ids << match_id
+              new_urls[match_id] = url
+            end
+          end
+        end
+
+        @owned_pages  = new_ids
+        @owned_urls   = new_urls
+        last          = raw["last_id"]
+        @last_page_id = last if last.is_a?(Integer) && new_ids.include?(last)
+        @last_page_id ||= new_ids.last
+        @state_loaded = true
+        # Persist the reconciled view — drops dead ids, may remap on URL match.
+        save_state!
+      end
+
+      private def save_state!
+        return unless @state_path
+        FileUtils.mkdir_p(File.dirname(@state_path))
+        payload = {
+          "owned"   => @owned_pages.map { |id| { "id" => id, "url" => @owned_urls[id].to_s } },
+          "last_id" => @last_page_id
+        }
+        File.write(@state_path, JSON.generate(payload))
+      rescue StandardError => e
+        Clacky::Logger.warn("[Browser] Failed to persist tab state: #{e.message}")
+      end
+
+      private def state_file_for(working_dir)
+        digest = Digest::SHA256.hexdigest(File.expand_path(working_dir))
+        File.join(STATE_DIR, "#{digest}.json")
       end
 
       # -----------------------------------------------------------------------

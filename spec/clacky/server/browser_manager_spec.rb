@@ -101,23 +101,23 @@ RSpec.describe Clacky::BrowserManager do
   end
 
   # ---------------------------------------------------------------------------
-  # #stop
+  # #disconnect
   # ---------------------------------------------------------------------------
-  describe "#stop" do
+  describe "#disconnect" do
     it "is a no-op even when a daemon is running (daemon survives Clacky shutdown)" do
       stub_daemon_responsive
       expect(manager).not_to receive(:kill_daemon!)
-      expect { manager.stop }.not_to raise_error
+      expect { manager.disconnect }.not_to raise_error
     end
   end
 
   # ---------------------------------------------------------------------------
-  # #force_stop
+  # #terminate_daemon!
   # ---------------------------------------------------------------------------
-  describe "#force_stop" do
+  describe "#terminate_daemon!" do
     it "kills the daemon under the mutex" do
       expect(manager).to receive(:kill_daemon!)
-      manager.force_stop
+      manager.terminate_daemon!
     end
   end
 
@@ -511,6 +511,33 @@ RSpec.describe Clacky::BrowserManager do
       expect {
         manager.send(:build_chrome_mcp_command, { mode: :unknown })
       }.to raise_error(/Unknown detection mode/)
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # #rotate_log_if_oversized (private)
+  # ---------------------------------------------------------------------------
+  describe "#rotate_log_if_oversized (private)" do
+    let(:log_path) { File.join(tmp_dir, "spawn.log") }
+
+    it "is a no-op when the log does not exist" do
+      manager.send(:rotate_log_if_oversized, log_path)
+      expect(File.exist?(log_path)).to be false
+    end
+
+    it "leaves a small log in place" do
+      File.write(log_path, "small")
+      manager.send(:rotate_log_if_oversized, log_path)
+      expect(File.exist?(log_path)).to be true
+      expect(File.exist?("#{log_path}.1")).to be false
+    end
+
+    it "renames an oversized log to .1 and clears the original" do
+      stub_const("Clacky::BrowserManager::SPAWN_LOG_MAX_BYTES", 16)
+      File.write(log_path, "x" * 32)
+      manager.send(:rotate_log_if_oversized, log_path)
+      expect(File.exist?("#{log_path}.1")).to be true
+      expect(File.exist?(log_path)).to be false
     end
   end
 end
