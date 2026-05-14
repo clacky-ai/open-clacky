@@ -444,11 +444,16 @@ curl -s -X POST http://${CLACKY_SERVER_HOST}:${CLACKY_SERVER_PORT}/api/channels/
 
 On success:
 
-> ✅ Telegram channel configured. Open your bot in Telegram and send any message to start chatting. In group chats, the bot only replies when you @-mention it.
+> ✅ Telegram channel configured. Open your bot in Telegram and send any message to start chatting.
+> 
+> **For group chats**: You must disable Privacy Mode in @BotFather first (`/mybots → Bot Settings → Group Privacy → Turn off`), then remove and re-add the bot to the group. Otherwise the bot cannot receive any messages — including @-mentions.
 
 #### Notes
 
-- **Group chats**: Telegram bots respond only when @-mentioned or directly replied to (matches Feishu behaviour). For unrestricted reading in groups, the bot owner must disable "Group Privacy" in @BotFather (`/mybots → Bot Settings → Group Privacy → Turn off`), but `@-mention only` is recommended to avoid spam.
+- **Group chats — Privacy Mode (IMPORTANT)**: By default Telegram enables Privacy Mode for all bots, which means the bot **cannot receive any group messages, including @-mentions**. To use the bot in a group you MUST disable Privacy Mode first:
+  1. Open @BotFather → `/mybots` → select your bot → `Bot Settings` → `Group Privacy` → **Turn off**
+  2. **Remove the bot from the group and re-add it** — the permission change does not apply to groups the bot is already in.
+  After that, the bot will respond whenever it is @-mentioned or directly replied to.
 - **Self-hosted Bot API**: set `base_url` when `api.telegram.org` is unreachable. See https://github.com/tdlib/telegram-bot-api for the official self-hosted server.
 - **`allowed_users`**: restrict which Telegram user IDs the bot will respond to. Find a user's numeric ID by messaging @userinfobot.
 
