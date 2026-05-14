@@ -419,15 +419,35 @@ module Clacky
       # Chrome MCP
       # -----------------------------------------------------------------------
 
-      # Delegate to BrowserManager. Auto-retries once on "selected page has been closed".
       private def mcp_call(tool_name, arguments = {})
         Clacky::BrowserManager.instance.mcp_call(tool_name, arguments)
       rescue RuntimeError => e
-        if e.message.include?("selected page has been closed")
-          raise RuntimeError, "The browser tab was closed. Use action=open to open a new tab, then retry."
-        else
-          raise
+        msg = e.message.to_s.downcase
+        page_closed = msg.include?("selected page has been closed") ||
+                      msg.include?("page has been closed") ||
+                      msg.include?("tab was closed")
+        raise unless page_closed
+
+        # MCP daemon checks getSelectedMcpPage() before every tool call,
+        # even for new_page. If the selected page died we must re-select
+        # a live one first; otherwise restart the daemon as last resort.
+        pages = extract_pages(Clacky::BrowserManager.instance.mcp_call("list_pages")) rescue []
+        alive = pages.find { |p| p[:id] }
+
+        if alive
+          Clacky::BrowserManager.instance.mcp_call("select_page", { pageId: alive[:id].to_i, bringToFront: true })
+          return Clacky::BrowserManager.instance.mcp_call(tool_name, arguments)
         end
+
+        if tool_name == "new_page"
+          # No live tabs anywhere — daemon is stuck on a dead reference.
+          # Force-restart it so Chrome can hand us a fresh page.
+          Clacky::BrowserManager.instance.force_stop
+          sleep 0.5
+          return Clacky::BrowserManager.instance.mcp_call(tool_name, arguments)
+        end
+
+        raise RuntimeError, "The browser tab was closed. Use action=open to open a new tab, then retry."
       end
 
       # -----------------------------------------------------------------------
