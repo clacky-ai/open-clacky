@@ -23,7 +23,7 @@ Skills must not read local config files directly.
 - ❌ `cat ~/.clacky/browser.yml`
 - ✅ `curl http://${CLACKY_SERVER_HOST}:${CLACKY_SERVER_PORT}/api/browser/status`
 
-Exception: lightweight `enable` / `disable` operations may read/write yml directly (see `channel-setup`).
+Exception: lightweight `enable` / `disable` operations may read/write yml directly (see `channel-manager`).
 
 ---
 

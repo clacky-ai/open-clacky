@@ -536,7 +536,7 @@ module Clacky
         profile = "general" if profile.empty?
 
         # Optional source; defaults to :manual. Accept "system" for skill-launched sessions
-        # (e.g. /onboard, /browser-setup, /channel-setup).
+        # (e.g. /onboard, /browser-setup, /channel-manager).
         raw_source = body["source"].to_s.strip
         source = %w[manual cron channel setup].include?(raw_source) ? raw_source.to_sym : :manual
 

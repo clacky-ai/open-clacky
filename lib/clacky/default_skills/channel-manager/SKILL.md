@@ -1,5 +1,5 @@
 ---
-name: channel-setup
+name: channel-manager
 description: |
   Configure IM platform channels (Feishu, WeCom, Weixin, Discord, Telegram, DingTalk) for openclacky.
   Uses browser automation for navigation; guides the user to paste credentials and perform UI steps.
@@ -79,7 +79,7 @@ dingtalk   ✅ yes    ✅ yes    client_id: ding_xxx...
 - Telegram: show `has_token: true/false` (bot token is never displayed)
 - DingTalk: show `client_id` (truncated to 12 chars)
 
-If the API is unreachable or returns an empty list: "No channels configured yet. Run `/channel-setup setup` to get started."
+If the API is unreachable or returns an empty list: "No channels configured yet. Run `/channel-manager setup` to get started."
 
 ---
 

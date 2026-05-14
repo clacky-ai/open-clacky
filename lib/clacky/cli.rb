@@ -172,7 +172,7 @@ module Clacky
       # is booted by this process), and only when the user hasn't already set
       # CLACKY_SERVER_HOST / CLACKY_SERVER_PORT explicitly.
       #
-      # Why: skills like `channel-setup` and `browser-setup` call back into
+      # Why: skills like `channel-manager` and `browser-setup` call back into
       # http://${CLACKY_SERVER_HOST}:${CLACKY_SERVER_PORT}/api/*. In server
       # mode those vars are injected by HTTPServer#start. In CLI mode they
       # would be blank, so the skill templates expand to an unreachable URL.
