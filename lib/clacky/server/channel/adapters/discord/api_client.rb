@@ -18,6 +18,7 @@ module Clacky
             @conn = Faraday.new(url: BASE_URL) do |f|
               f.headers["Authorization"] = "Bot #{@bot_token}"
               f.headers["User-Agent"]    = self.class.user_agent
+              f.request :multipart
               f.response :raise_error
               f.adapter Faraday.default_adapter
             end
