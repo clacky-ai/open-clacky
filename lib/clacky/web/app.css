@@ -717,7 +717,7 @@ body {
   position: fixed;
   z-index: 9999;
   background: var(--color-bg-primary, #fff);
-  border: 1px solid var(--color-border-primary, #e0e0e0);
+  border: 1px solid var(--color-border-primary);
   border-radius: 10px;
   box-shadow: 0 8px 24px rgba(0,0,0,0.12);
   padding: 10px;
@@ -746,7 +746,7 @@ body {
   border-radius: 4px;
   line-height: 1;
 }
-.dp-nav:hover { background: var(--color-bg-hover, rgba(0,0,0,0.06)); }
+.dp-nav:hover { background: var(--color-bg-hover); }
 .dp-grid {
   display: grid;
   grid-template-columns: repeat(7, 1fr);
@@ -755,7 +755,7 @@ body {
 .dp-dow {
   text-align: center;
   font-size: 10px;
-  color: var(--color-text-muted, #999);
+  color: var(--color-text-muted);
   padding: 3px 0;
   font-weight: 500;
 }
@@ -770,23 +770,23 @@ body {
   font-size: 12px;
   line-height: 1.4;
 }
-.dp-day:hover { background: var(--color-bg-hover, rgba(0,0,0,0.06)); }
+.dp-day:hover { background: var(--color-bg-hover); }
 .dp-day--today {
-  color: var(--color-accent-primary, #5865f2);
+  color: var(--color-accent-primary);
   font-weight: 700;
 }
 .dp-day--selected {
-  background: var(--color-accent-primary, #5865f2);
-  color: #fff !important;
+  background: var(--color-accent-primary);
+  color: var(--color-text-inverse) !important;
   font-weight: 600;
 }
-.dp-day--selected:hover { opacity: 0.88; }
+.dp-day--selected:hover { background: var(--color-accent-primary); opacity: 0.88; }
 .dp-footer {
   display: flex;
   justify-content: space-between;
   margin-top: 8px;
   padding-top: 8px;
-  border-top: 1px solid var(--color-border-primary, #e0e0e0);
+  border-top: 1px solid var(--color-border-primary);
 }
 .dp-btn-clear,
 .dp-btn-today {
@@ -794,12 +794,12 @@ body {
   border: none;
   cursor: pointer;
   font-size: 11px;
-  color: var(--color-accent-primary, #5865f2);
-  padding: 2px 4px;
+  color: var(--color-accent-primary);
+  padding: 4px 8px;
   border-radius: 4px;
 }
 .dp-btn-clear:hover,
-.dp-btn-today:hover { background: var(--color-bg-hover, rgba(0,0,0,0.06)); }
+.dp-btn-today:hover { background: var(--color-bg-hover); }
 
 /* 清除筛选 — small ✕ icon button */
 .btn-search-clear-all {
