@@ -954,10 +954,10 @@
 <!-- ── CONFIRMATION MODAL ────────────────────────────────────────────────── -->
 <div id="modal-overlay" class="modal-overlay" style="display:none">
   <div class="modal-box sm">
-    <div id="modal-message" style="font-size:14px;line-height:1.6;margin-bottom:20px;white-space:pre-wrap"></div>
+    <div id="modal-message" class="modal-confirm-message"></div>
     <div class="modal-actions">
-      <button id="modal-yes" class="btn-primary" data-i18n="modal.yes">Yes</button>
       <button id="modal-no"  class="btn-secondary" data-i18n="modal.no">No</button>
+      <button id="modal-yes" class="btn-primary" data-i18n="modal.yes">Yes</button>
     </div>
   </div>
 </div>
@@ -970,6 +970,26 @@
     <div class="modal-actions">
       <button id="prompt-modal-ok" class="btn-primary" data-i18n="modal.ok">OK</button>
       <button id="prompt-modal-cancel" class="btn-secondary" data-i18n="modal.cancel">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- Rename Session Modal -->
+<div id="rename-modal-overlay" class="modal-overlay" style="display:none">
+  <div class="modal-box sm">
+    <div class="modal-title" data-i18n="sessions.actions.rename">Rename</div>
+    <div class="modal-body">
+      <div class="modal-field">
+        <label class="modal-label" for="rename-modal-input">
+          <span data-i18n="sessions.modal.name">Name</span>
+          <span class="label-required">*</span>
+        </label>
+        <input type="text" id="rename-modal-input" class="modal-input" autocomplete="off" spellcheck="false">
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button id="rename-modal-cancel" class="btn-secondary" data-i18n="modal.cancel">Cancel</button>
+      <button id="rename-modal-save" class="btn-primary" data-i18n="modal.ok">OK</button>
     </div>
   </div>
 </div>

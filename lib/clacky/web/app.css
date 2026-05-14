@@ -3499,6 +3499,13 @@ body {
 .modal-box.sm { max-width: 480px; }
 .modal-box.lg { max-width: 680px; }
 .modal-title  { font-size: 16px; font-weight: 600; margin-bottom: 16px; color: var(--color-text-primary); }
+.modal-confirm-message {
+  font-size: 15px;
+  line-height: 1.6;
+  margin-bottom: 20px;
+  white-space: pre-wrap;
+  color: var(--color-text-primary);
+}
 .modal-actions {
   display: flex;
   gap: 10px;
@@ -3572,6 +3579,10 @@ body {
   font-size: 13px;
   font-weight: 500;
   color: var(--color-text-primary);
+}
+.label-required {
+  color: var(--color-error);
+  margin-left: 2px;
 }
 .modal-input, .modal-select {
   background: var(--color-bg-primary);
