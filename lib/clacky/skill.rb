@@ -387,6 +387,16 @@ module Clacky
         load_brand_skill
       else
         load_plain_skill
+        # Fast path for builtin skills: display fields (name / description / i18n)
+        # come from builtin_skills_meta.json, same pattern as brand_skills.json.
+        # Execution fields (user-invocable, allowed-tools, etc.) are already set
+        # by load_plain_skill via parse_frontmatter and are left untouched.
+        if @cached_metadata
+          @name           = @cached_metadata["name"]           if @cached_metadata["name"].to_s.length.positive?
+          @name_zh        = @cached_metadata["name_zh"]
+          @description    = @cached_metadata["description"]    if @cached_metadata["description"].to_s.length.positive?
+          @description_zh = @cached_metadata["description_zh"]
+        end
       end
 
       # Set defaults

@@ -1,10 +1,29 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
+# Install builtin skills into ~/.clacky/skills/.
+#
+# Fetches the server-curated builtin list from GET /api/v1/skills/builtin on
+# the openclacky platform (public, no auth), then downloads and installs each
+# skill's zip package in parallel (5 workers, 30s total timeout).
+#
+# The "builtin" whitelist is enforced server-side — this script takes no
+# filter flags. Admin toggles the `builtin` flag per skill on the platform.
+#
+# Called by onboard skill: `ruby install_builtin_skills.rb`
+#
+# Output:
+#   - Diagnostics → STDERR
+#   - Last line of STDOUT → JSON: {"installed":N,"attempted":N,"skipped_existing":N}
+#   - Exit code: always 0
+
 require 'uri'
 require 'net/http'
 require 'json'
+require 'timeout'
 
+# Reuse the downloader/extractor/installer from the skill-add skill.
+# Physical relocation to lib/clacky/ is deferred until a third caller appears.
 require_relative '../../skill-add/scripts/install_from_zip'
 
 class BuiltinSkillsInstaller
@@ -14,13 +33,22 @@ class BuiltinSkillsInstaller
   API_PATH         = '/api/v1/skills/builtin'
   API_OPEN_TIMEOUT = 5
   API_READ_TIMEOUT = 10
+  CONCURRENCY      = 5
+
+  LOCAL_SERVER_PORT = ENV.fetch('CLACKY_SERVER_PORT', '7070')
+  META_API_PATH     = '/api/onboard/builtin-skills-meta'
 
   def initialize
-    @target_dir       = File.join(Dir.home, '.clacky', 'skills')
-    @installed        = 0
-    @skipped_existing = 0
-    @attempted        = 0
-    @errors           = []
+    @target_dir        = File.join(Dir.home, '.clacky', 'skills')
+    @per_skill_timeout = 10
+    @total_timeout     = 30
+
+    @installed         = 0
+    @skipped_existing  = 0
+    @attempted         = 0
+    @errors            = []
+    @mutex             = Mutex.new
+    @meta              = {}
   end
 
   def run
@@ -30,11 +58,15 @@ class BuiltinSkillsInstaller
       return
     end
 
-    skills.each { |skill| install_one(skill) }
+    install_concurrently(skills)
   ensure
+    push_meta_to_server
     emit_summary
   end
 
+  # --- Internals -------------------------------------------------------------
+
+  # Returns an array of skill hashes, or nil on total failure.
   private def fetch_skill_list
     API_HOSTS.each do |host|
       begin
@@ -58,29 +90,108 @@ class BuiltinSkillsInstaller
     nil
   end
 
+  # Install skills in parallel, bounded by CONCURRENCY and @total_timeout.
+  # Workers pull from a shared queue and self-check the deadline, so the
+  # global timeout is enforced without killing threads mid-download (which
+  # would leak temp dirs). Whatever finishes before the deadline stays
+  # installed; the rest is recovered on the next onboard run via skip_if_exists.
+  private def install_concurrently(skills)
+    queue = Queue.new
+    skills.each { |s| queue << s }
+
+    deadline    = Time.now + @total_timeout
+    worker_pool = [CONCURRENCY, skills.size].min
+
+    workers = Array.new(worker_pool) do
+      Thread.new do
+        loop do
+          break if Time.now >= deadline
+          skill = queue.pop(true) rescue nil    # non-blocking pop
+          break if skill.nil?
+          install_one(skill)
+        end
+      end
+    end
+
+    workers.each(&:join)
+
+    # If the deadline cut us off with items still in the queue, record it.
+    remaining = queue.size
+    if remaining.positive?
+      @mutex.synchronize do
+        @errors << "overall timeout after #{@total_timeout}s " \
+                   "(installed=#{@installed}, attempted=#{@attempted}, remaining=#{remaining})"
+      end
+    end
+  end
+
+  # Install one skill entry (hash from the API payload).
+  # Bounded by @per_skill_timeout; any failure is swallowed into @errors.
+  # Thread-safe: all shared state writes go through @mutex.
   private def install_one(skill)
     name         = skill['name'].to_s
     download_url = skill['download_url'].to_s
-    @attempted  += 1
+
+    @mutex.synchronize { @attempted += 1 }
 
     if name.empty? || download_url.empty?
-      @errors << "skill payload missing name or download_url: #{skill.inspect}"
+      @mutex.synchronize do
+        @errors << "skill payload missing name or download_url: #{skill.inspect}"
+      end
       return
     end
 
-    result = ZipSkillInstaller.new(
-      download_url,
-      skill_name:     name,
-      target_dir:     @target_dir,
-      skip_if_exists: true
-    ).perform
-    @installed        += result[:installed].size
-    @skipped_existing += result[:skipped].size
-    @errors.concat(result[:errors]) if result[:errors].any?
+    Timeout.timeout(@per_skill_timeout) do
+      installer = ZipSkillInstaller.new(
+        download_url,
+        skill_name:     name,
+        target_dir:     @target_dir,
+        skip_if_exists: true
+      )
+      result = installer.perform
+      @mutex.synchronize do
+        @installed        += result[:installed].size
+        @skipped_existing += result[:skipped].size
+        @errors.concat(result[:errors]) if result[:errors].any?
+
+        # Collect i18n metadata from the API payload for later persistence.
+        name_zh        = skill['name_zh'].to_s
+        description_zh = skill['description_zh'].to_s
+        if name_zh.length.positive? || description_zh.length.positive?
+          @meta[name] = {
+            'name'           => name,
+            'description'    => skill['description'].to_s,
+            'name_zh'        => name_zh,
+            'description_zh' => description_zh
+          }
+        end
+      end
+    end
+  rescue Timeout::Error
+    @mutex.synchronize { @errors << "#{name}: install timeout after #{@per_skill_timeout}s" }
   rescue StandardError => e
-    @errors << "#{name}: #{e.class}: #{e.message}"
+    @mutex.synchronize { @errors << "#{name}: #{e.class}: #{e.message}" }
   end
 
+  # POST collected i18n metadata to the local clacky server, which delegates
+  # to SkillLoader.save_builtin_skills_meta — the single canonical write path.
+  # The server is always running when onboard executes (WebUI requires it).
+  private def push_meta_to_server
+    return if @meta.empty?
+
+    uri = URI.parse("http://127.0.0.1:#{LOCAL_SERVER_PORT}#{META_API_PATH}")
+    req = Net::HTTP::Post.new(uri.request_uri)
+    req['Content-Type'] = 'application/json'
+    req.body = JSON.generate({ 'meta' => @meta })
+    Net::HTTP.start(uri.host, uri.port, open_timeout: 3, read_timeout: 5) do |http|
+      http.request(req)
+    end
+  rescue StandardError => e
+    warn "[install_builtin_skills] failed to push meta to server: #{e.class}: #{e.message}"
+  end
+
+  # Diagnostics to stderr; single-line JSON summary to stdout.
+  # The caller (onboard) should parse the LAST stdout line.
   private def emit_summary
     unless @errors.empty?
       warn '[install_builtin_skills] non-fatal errors:'
@@ -94,4 +205,5 @@ class BuiltinSkillsInstaller
   end
 end
 
+# ── Entry point ───────────────────────────────────────────────────────────────
 BuiltinSkillsInstaller.new.run if __FILE__ == $0

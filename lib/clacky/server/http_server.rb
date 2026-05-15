@@ -390,6 +390,7 @@ module Clacky
         when ["POST",   "/api/browser/toggle"]    then api_browser_toggle(res)
         when ["POST",   "/api/onboard/complete"]  then api_onboard_complete(req, res)
         when ["POST",   "/api/onboard/skip-soul"] then api_onboard_skip_soul(req, res)
+        when ["POST",   "/api/onboard/builtin-skills-meta"] then api_onboard_builtin_skills_meta(req, res)
         when ["GET",    "/api/store/skills"]          then api_store_skills(res)
         when ["GET",    "/api/brand/status"]      then api_brand_status(res)
         when ["POST",   "/api/brand/activate"]    then api_brand_activate(req, res)
@@ -663,6 +664,22 @@ module Clacky
         unless File.exist?(soul_path)
           File.write(soul_path, soul_content)
         end
+        json_response(res, 200, { ok: true })
+      end
+
+      # POST /api/onboard/builtin-skills-meta
+      # Called by install_builtin_skills.rb after parallel installation completes.
+      # Persists i18n metadata (name_zh / description_zh) collected from the
+      # platform API response so SkillLoader can serve translated skill info
+      # without re-fetching. Body: { meta: { skill_name => { ... } } }
+      def api_onboard_builtin_skills_meta(req, res)
+        body = parse_json_body(req)
+        meta = body["meta"]
+        unless meta.is_a?(Hash)
+          json_response(res, 400, { ok: false, error: "meta must be a Hash" })
+          return
+        end
+        SkillLoader.save_builtin_skills_meta(meta)
         json_response(res, 200, { ok: true })
       end
 

@@ -125,7 +125,46 @@ module Clacky
     # @return [Array<Skill>]
     def load_global_clacky_skills
       global_clacky_dir = Pathname.new(ENV.fetch("HOME", "~")).join(".clacky", "skills")
-      load_skills_from_directory(global_clacky_dir, :global_clacky)
+      builtin_meta      = load_builtin_skills_meta
+      load_skills_from_directory(global_clacky_dir, :global_clacky, builtin_meta: builtin_meta)
+    end
+
+    # Read builtin_skills_meta.json — stores name_zh / description_zh collected
+    # during onboard so we don't have to re-parse SKILL.md frontmatter.
+    # @return [Hash] e.g. { "pdf" => { "name_zh" => "...", "description_zh" => "..." } }
+    private def load_builtin_skills_meta
+      path = self.class.builtin_skills_meta_path
+      return {} unless path.exist?
+
+      JSON.parse(path.read)
+    rescue StandardError
+      {}
+    end
+
+    # Canonical path to builtin_skills_meta.json.
+    # Shared by load_builtin_skills_meta and save_builtin_skills_meta.
+    def self.builtin_skills_meta_path
+      Pathname.new(ENV.fetch("HOME", "~")).join(".clacky", "skills", "builtin_skills_meta.json")
+    end
+
+    # Write (merge) builtin skill i18n metadata to builtin_skills_meta.json.
+    # Mirrors brand_config#record_installed_skill — the canonical write path for
+    # builtin skill metadata lives here so future callers (e.g. cloud skill platform)
+    # can persist metadata without depending on the onboard script.
+    # @param meta [Hash] { skill_name => { "name" => ..., "name_zh" => ..., ... } }
+    def self.save_builtin_skills_meta(meta)
+      return if meta.empty?
+
+      path = builtin_skills_meta_path
+      existing = begin
+        path.exist? ? JSON.parse(path.read) : {}
+      rescue StandardError
+        {}
+      end
+      FileUtils.mkdir_p(path.dirname)
+      path.write(JSON.generate(existing.merge(meta)))
+    rescue StandardError => e
+      warn "[SkillLoader] failed to write builtin_skills_meta.json: #{e.message}"
     end
 
     # Load skills from .clacky/skills/ (project-level, highest priority)
@@ -284,7 +323,7 @@ module Clacky
     end
 
 
-    def load_skills_from_directory(dir, source_type)
+    def load_skills_from_directory(dir, source_type, builtin_meta: {})
       return [] unless dir.exist?
 
       source_path = case source_type
@@ -300,7 +339,8 @@ module Clacky
       dir.children.select(&:directory?).each do |entry|
         if entry.join("SKILL.md").exist?
           # Direct skill directory
-          skill = load_single_skill(entry, source_path, entry.basename.to_s, source_type)
+          cached_metadata = builtin_meta[entry.basename.to_s]
+          skill = load_single_skill(entry, source_path, entry.basename.to_s, source_type, cached_metadata: cached_metadata)
           skills << skill if skill
         else
           # Treat as a category directory — scan one level deeper for skills.
@@ -309,7 +349,8 @@ module Clacky
           entry.children.select(&:directory?).each do |skill_dir|
             next unless skill_dir.join("SKILL.md").exist?
 
-            skill = load_single_skill(skill_dir, source_path, skill_dir.basename.to_s, source_type)
+            cached_metadata = builtin_meta[skill_dir.basename.to_s]
+            skill = load_single_skill(skill_dir, source_path, skill_dir.basename.to_s, source_type, cached_metadata: cached_metadata)
             skills << skill if skill
           end
         end
@@ -344,8 +385,8 @@ module Clacky
       nil
     end
 
-    private def load_single_skill(skill_dir, source_path, skill_name, source_type)
-      skill = Skill.new(skill_dir, source_path: source_path)
+    private def load_single_skill(skill_dir, source_path, skill_name, source_type, cached_metadata: nil)
+      skill = Skill.new(skill_dir, source_path: source_path, cached_metadata: cached_metadata)
       register_skill(skill, source: source_type)
       skill
     rescue Clacky::AgentError => e
