@@ -227,7 +227,7 @@ Call `request_user_feedback`:
 zh:
 ```json
 {
-  "question": "是否要安装「飞书 CLI」？装好之后 AI 可以帮你操作飞书云文档、电子表格、多维表格、知识库、日历、任务等几乎全部飞书能力，不只是聊天，而是能\"做事\"。不装也 OK。",
+  \"question\": \"是否要安装「飞书 CLI」？装好之后 AI 可以帮你操作飞书云文档等能力。不装也 OK。\",
   "options": ["启用", "跳过"]
 }
 ```
@@ -235,7 +235,7 @@ zh:
 en:
 ```json
 {
-  "question": "Install Feishu CLI? With it, the AI can operate Feishu Docs, Sheets, Bitable, Wiki, Calendar, Tasks and almost every Feishu capability — not just chat, but actually get things done. Skipping is fine.",
+  "question": "Install Feishu CLI? With it, the AI can help you work with Feishu Docs and more. Skipping is fine.",
   "options": ["Enable", "Skip"]
 }
 ```
@@ -247,8 +247,7 @@ If the user picks Enable, run:
 ```bash
 lark-cli --version > /dev/null 2>&1 || npm install -g @larksuite/cli
 echo -n "<APP_SECRET>" | lark-cli config init --app-id <APP_ID> --app-secret-stdin --brand feishu
-npx -y skills add larksuite/cli -y -g
-ruby "SKILL_DIR/import_lark_skills.rb"
+ruby "SKILL_DIR/install_feishu_skills.rb"
 lark-cli auth login --recommend
 ```
 

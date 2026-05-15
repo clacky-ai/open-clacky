@@ -8,7 +8,7 @@ require 'pathname'
 #
 # Supported sources:
 #   - OpenClaw: ~/.openclaw/skills/, ~/.openclaw/workspace/skills/,
-#               ~/.agents/skills/, ~/.openclaw/workspace/.agents/skills/
+#               ~/.openclaw/workspace/.agents/skills/
 #
 # Each source is imported into a dedicated category subdirectory under ~/.clacky/skills/,
 # e.g. ~/.clacky/skills/openclaw-imports/<skill-name>/. This keeps imported skills
@@ -178,16 +178,14 @@ class OpenClawImporter < ExternalSkillsImporter
   # Returns all directories that may contain OpenClaw skills.
   # Each entry is a hash: { root: Pathname, layout: :flat }
   #
-  # Mirrors the four sources from hermes openclaw_to_hermes.py:
+  # Mirrors the sources from hermes openclaw_to_hermes.py:
   #   - ~/.openclaw/workspace/skills/             (workspace skills)
   #   - ~/.openclaw/skills/                        (managed/shared skills)
-  #   - ~/.agents/skills/                          (personal cross-project skills)
   #   - ~/.openclaw/workspace/.agents/skills/      (project-level shared skills)
   private def source_dirs
     [
       @openclaw_dir.join('workspace', 'skills'),
       @openclaw_dir.join('skills'),
-      Pathname.new(Dir.home).join('.agents', 'skills'),
       @openclaw_dir.join('workspace', '.agents', 'skills')
     ].select(&:exist?)
   end

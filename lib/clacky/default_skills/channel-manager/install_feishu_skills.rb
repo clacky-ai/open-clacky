@@ -1,26 +1,39 @@
-#!/usr/bin/env ruby
 # frozen_string_literal: true
 
 require 'uri'
 require 'net/http'
 require 'json'
 
-require_relative '../../skill-add/scripts/install_from_zip'
+require_relative '../skill-add/scripts/install_from_zip'
 
-class BuiltinSkillsInstaller
+# Install Feishu-related skills from the openclacky platform.
+#
+# Calls GET /api/v1/skills/feishu — same payload shape as /api/v1/skills/builtin:
+#   { "skills": [{ "name": "lark-doc", "download_url": "https://..." }, ...] }
+#
+# Each skill is installed sequentially via ZipSkillInstaller into ~/.clacky/skills/<name>/.
+#
+# Usage:
+#   ruby install_feishu_skills.rb
+#
+# Output:
+#   Diagnostics  → STDERR
+#   Last line    → JSON: {"installed":N,"attempted":N}
+#   Exit code    → always 0
+
+class FeishuSkillsInstaller
   PRIMARY_HOST     = ENV.fetch('CLACKY_LICENSE_SERVER', 'https://www.openclacky.com')
   FALLBACK_HOST    = 'https://openclacky.up.railway.app'
   API_HOSTS        = ENV['CLACKY_LICENSE_SERVER'] ? [PRIMARY_HOST] : [PRIMARY_HOST, FALLBACK_HOST]
-  API_PATH         = '/api/v1/skills/builtin'
+  API_PATH         = '/api/v1/skills/feishu'
   API_OPEN_TIMEOUT = 5
   API_READ_TIMEOUT = 10
 
   def initialize
-    @target_dir       = File.join(Dir.home, '.clacky', 'skills')
-    @installed        = 0
-    @skipped_existing = 0
-    @attempted        = 0
-    @errors           = []
+    @target_dir = File.join(Dir.home, '.clacky', 'skills')
+    @installed  = 0
+    @attempted  = 0
+    @errors     = []
   end
 
   def run
@@ -72,10 +85,9 @@ class BuiltinSkillsInstaller
       download_url,
       skill_name:     name,
       target_dir:     @target_dir,
-      skip_if_exists: true
+      skip_if_exists: false
     ).perform
-    @installed        += result[:installed].size
-    @skipped_existing += result[:skipped].size
+    @installed += result[:installed].size
     @errors.concat(result[:errors]) if result[:errors].any?
   rescue StandardError => e
     @errors << "#{name}: #{e.class}: #{e.message}"
@@ -83,15 +95,11 @@ class BuiltinSkillsInstaller
 
   private def emit_summary
     unless @errors.empty?
-      warn '[install_builtin_skills] non-fatal errors:'
+      warn '[install-feishu-skills] non-fatal errors:'
       @errors.each { |e| warn "  - #{e}" }
     end
-    puts JSON.generate(
-      installed:        @installed,
-      attempted:        @attempted,
-      skipped_existing: @skipped_existing
-    )
+    puts JSON.generate(installed: @installed, attempted: @attempted)
   end
 end
 
-BuiltinSkillsInstaller.new.run if __FILE__ == $0
+FeishuSkillsInstaller.new.run if __FILE__ == $0

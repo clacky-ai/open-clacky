@@ -226,8 +226,8 @@ If `yes`:
 1. `ruby "SKILL_DIR/scripts/import_external_skills.rb" --source openclaw --dry-run`
 2. Parse the skill count N.
 3. Ask via `request_user_feedback`:
-   - zh: `{ "question": "检测到你安装过 OpenClaw，找到 N 个 Skills，导入到 Clacky 直接使用？", "options": ["导入", "跳过"] }`
-   - en: `{ "question": "OpenClaw detected. Found N skills. Import them into Clacky?", "options": ["Import", "Skip"] }`
+   - zh: `{ "question": "检测到你安装过 OpenClaw，找到 N 个 Skills。现在建议跳过，后续使用 /skill-add 按需安装。", "options": ["全部导入", "跳过"] }`
+   - en: `{ "question": "OpenClaw detected. Found N skills. We recommend skipping for now and installing only what you need later with /skill-add.", "options": ["Import all", "Skip"] }`
 4. If confirmed: `ruby "SKILL_DIR/scripts/import_external_skills.rb" --source openclaw --yes`
 
 ### A.11. Celebrate soul setup & offer browser
