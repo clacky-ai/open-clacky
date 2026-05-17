@@ -35,5 +35,7 @@ jobs:
       - name: Smoke-test gem install
         run: |
           gem --version
+          gem sources --add https://rubygems.org/ || true
+          gem sources
           gem build openclacky.gemspec
           gem install --local openclacky-*.gem --no-document
