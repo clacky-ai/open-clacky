@@ -39,10 +39,21 @@ jobs:
           gem --version
 
       # Probe: does this RubyGems correctly fall back to rouge 3.x on Ruby 2.6?
+      # Three scenarios:
+      #   (a) `gem install rouge` (no version constraint) — known-bad on old RubyGems
+      #   (b) `gem install rouge -v ">= 3.14"`             — open upper bound
+      #   (c) `gem install rouge -v ">= 3.14, < 5.0"`      — current openclacky.gemspec constraint
       - name: Probe rouge resolution (Ruby 2.6 only)
         if: matrix.ruby == '2.6'
         run: |
+          echo "=== (a) no constraint ==="
           gem install rouge --no-document || true
+          gem uninstall rouge -aIx || true
+          echo "=== (b) >= 3.14 (open upper) ==="
+          gem install rouge -v ">= 3.14" --no-document || true
+          gem uninstall rouge -aIx || true
+          echo "=== (c) >= 3.14, < 5.0 (current gemspec) ==="
+          gem install rouge -v ">= 3.14" -v "< 5.0" --no-document || true
           gem list rouge
 
       # Simulate `gem install openclacky` end-user path (not just bundle install).
