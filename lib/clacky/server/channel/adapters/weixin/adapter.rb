@@ -53,11 +53,11 @@ module Clacky
           def stop
             @running = false
             @flusher.join(30)
+            # Force-flush any remaining entries regardless of threshold.
+            drain_all_buffers
           end
 
-          private
-
-          def flush_loop
+          private def flush_loop
             while @running
               sleep 0.2
               begin
@@ -66,15 +66,9 @@ module Clacky
                 @logger.error("[WeixinSendQueue] drain_buffers error: #{e.message}")
               end
             end
-            # Final drain on stop
-            begin
-              drain_buffers
-            rescue => e
-              @logger.error("[WeixinSendQueue] final drain error: #{e.message}")
-            end
           end
 
-          def drain_buffers
+          private def drain_buffers
             now = Time.now
             ready = {}
 
@@ -95,7 +89,24 @@ module Clacky
             end
           end
 
-          def send_entries(chat_id, entries)
+          # Unconditionally drain every buffer. Used on stop to guarantee delivery.
+          private def drain_all_buffers
+            ready = @buffer_mutex.synchronize do
+              snapshot = @buffers.reject { |_, entries| entries.empty? }
+              @buffers.clear
+              snapshot
+            end
+
+            ready.each do |chat_id, entries|
+              begin
+                send_entries(chat_id, entries)
+              rescue => e
+                @logger.error("[WeixinSendQueue] final drain error for #{chat_id}: #{e.message}")
+              end
+            end
+          end
+
+          private def send_entries(chat_id, entries)
             return if entries.empty?
 
             combined = entries.map(&:text).join("\n")
@@ -109,7 +120,7 @@ module Clacky
             end
           end
 
-          def throttle
+          private def throttle
             @last_mutex.synchronize do
               last = @last_sent_at[:global] || Time.at(0)
               wait = MIN_SEND_INTERVAL - (Time.now - last)
@@ -118,7 +129,7 @@ module Clacky
             end
           end
 
-          def send_with_retry(chat_id, text, context_token)
+          private def send_with_retry(chat_id, text, context_token)
             RETRY_BACKOFFS.each_with_index do |delay, idx|
               begin
                 @api_client.send_text(to_user_id: chat_id, text: text, context_token: context_token)
@@ -137,7 +148,7 @@ module Clacky
           end
 
           # Split text into ≤2000 Unicode character chunks.
-          def split_message(text, limit: 2000)
+          private def split_message(text, limit: 2000)
             return [text] if text.chars.length <= limit
             chunks = []
             while text.chars.length > limit
