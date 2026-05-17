@@ -62,6 +62,7 @@ module Clacky
         # raw markdown links would just be noise in the chat.
         text = content.to_s.gsub(/!?\[[^\]]*\]\(file:\/\/[^)]+\)/, "").strip
         send_text(text) unless text.empty?
+        flush_adapter_pending
         files.each do |f|
           Clacky::Logger.info("[ChannelUI] sending file path=#{f[:path].inspect} name=#{f[:name].inspect}")
           send_file(f[:path], f[:name])
@@ -120,6 +121,7 @@ module Clacky
         end
         parts << "#{duration.round(1)}s" if duration
         send_text(parts.join(" · "))
+        flush_adapter_pending
       end
 
       def append_output(content)
@@ -217,6 +219,10 @@ module Clacky
 
         send_text(@buffer.join("\n"))
         @buffer.clear
+      end
+
+      def flush_adapter_pending
+        @adapter.flush_pending(@chat_id) if @adapter.respond_to?(:flush_pending)
       end
     end
   end

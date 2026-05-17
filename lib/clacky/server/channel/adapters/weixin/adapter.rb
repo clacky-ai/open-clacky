@@ -8,6 +8,152 @@ module Clacky
   module Channel
     module Adapters
       module Weixin
+        # Per-user send queue with buffering, throttling, and retry for Weixin iLink.
+        #
+        # Design:
+        #   - Each chat_id has a pending buffer of text fragments.
+        #   - A background flusher thread periodically checks all buffers.
+        #   - Flush triggers: char threshold reached, time interval elapsed, or explicit flush.
+        #   - Actual send calls are spaced by MIN_SEND_INTERVAL to avoid rate-limiting.
+        #   - ret:-2 (rate-limited) triggers exponential backoff retry.
+        class SendQueue
+          FLUSH_CHAR_THRESHOLD = 400
+          FLUSH_INTERVAL       = 0.8
+          MIN_SEND_INTERVAL    = 1.0
+          RETRY_BACKOFFS       = [1.0, 2.0, 4.0]
+
+          Entry = Struct.new(:text, :context_token, :enqueued_at, keyword_init: true)
+
+          def initialize(api_client, logger: Clacky::Logger)
+            @api_client   = api_client
+            @logger       = logger
+            @buffers      = {}
+            @buffer_mutex = Mutex.new
+            @last_sent_at = {}
+            @last_mutex   = Mutex.new
+            @running      = true
+            @flusher      = Thread.new { flush_loop }
+          end
+
+          # Enqueue text for a chat_id. Non-blocking.
+          def enqueue(chat_id, text, context_token)
+            @buffer_mutex.synchronize do
+              @buffers[chat_id] ||= []
+              @buffers[chat_id] << Entry.new(text: text, context_token: context_token, enqueued_at: Time.now)
+            end
+          end
+
+          # Force-flush all pending text for a chat_id. Non-blocking.
+          def flush(chat_id)
+            entries = @buffer_mutex.synchronize { @buffers.delete(chat_id) || [] }
+            send_entries(chat_id, entries) unless entries.empty?
+          end
+
+          # Stop the flusher thread. Waits up to 30s for pending messages to drain.
+          def stop
+            @running = false
+            @flusher.join(30)
+          end
+
+          private
+
+          def flush_loop
+            while @running
+              sleep 0.2
+              begin
+                drain_buffers
+              rescue => e
+                @logger.error("[WeixinSendQueue] drain_buffers error: #{e.message}")
+              end
+            end
+            # Final drain on stop
+            begin
+              drain_buffers
+            rescue => e
+              @logger.error("[WeixinSendQueue] final drain error: #{e.message}")
+            end
+          end
+
+          def drain_buffers
+            now = Time.now
+            ready = {}
+
+            @buffer_mutex.synchronize do
+              @buffers.each do |chat_id, entries|
+                next if entries.empty?
+                total_chars = entries.sum { |e| e.text.chars.length }
+                elapsed = now - entries.first.enqueued_at
+                if total_chars >= FLUSH_CHAR_THRESHOLD || elapsed >= FLUSH_INTERVAL
+                  ready[chat_id] = entries
+                end
+              end
+              ready.each_key { |chat_id| @buffers.delete(chat_id) }
+            end
+
+            ready.each do |chat_id, entries|
+              send_entries(chat_id, entries)
+            end
+          end
+
+          def send_entries(chat_id, entries)
+            return if entries.empty?
+
+            combined = entries.map(&:text).join("\n")
+            ctoken   = entries.last.context_token
+
+            # Split into ≤2000 char chunks
+            chunks = split_message(combined)
+            chunks.each do |chunk|
+              throttle
+              send_with_retry(chat_id, chunk, ctoken)
+            end
+          end
+
+          def throttle
+            @last_mutex.synchronize do
+              last = @last_sent_at[:global] || Time.at(0)
+              wait = MIN_SEND_INTERVAL - (Time.now - last)
+              sleep(wait) if wait > 0
+              @last_sent_at[:global] = Time.now
+            end
+          end
+
+          def send_with_retry(chat_id, text, context_token)
+            RETRY_BACKOFFS.each_with_index do |delay, idx|
+              begin
+                @api_client.send_text(to_user_id: chat_id, text: text, context_token: context_token)
+                return
+              rescue ApiClient::ApiError => e
+                if e.code == -2 && idx < RETRY_BACKOFFS.length - 1
+                  @logger.warn("[WeixinSendQueue] ret=-2 for #{chat_id}, retry in #{delay}s (#{idx + 1}/#{RETRY_BACKOFFS.length})")
+                  sleep delay
+                  next
+                end
+                raise
+              end
+            end
+          rescue => e
+            @logger.error("[WeixinSendQueue] send_text failed for #{chat_id}: #{e.message}")
+          end
+
+          # Split text into ≤2000 Unicode character chunks.
+          def split_message(text, limit: 2000)
+            return [text] if text.chars.length <= limit
+            chunks = []
+            while text.chars.length > limit
+              window = text.chars.first(limit).join
+              cut = window.rindex("\n\n")
+              cut = window.rindex("\n")   if cut.nil?
+              cut = window.rindex(" ")    if cut.nil?
+              cut = limit                 if cut.nil? || cut.zero?
+              chunks << text.chars.first(cut).join.rstrip
+              text = text.chars.drop(cut).join.lstrip
+            end
+            chunks << text unless text.empty?
+            chunks
+          end
+        end
+
         # Weixin (WeChat iLink) adapter.
         #
         # Protocol: HTTP long-poll via ilinkai.weixin.qq.com
@@ -76,6 +222,7 @@ module Clacky
             @context_tokens = {}
             @ctx_mutex      = Mutex.new
             @api_client     = ApiClient.new(base_url: @base_url, token: @token)
+            @send_queue     = SendQueue.new(@api_client)
             # Typing keepalive: user_id → { ticket:, thread:, cached_at: }
             @typing_tickets  = {}
             @typing_mutex    = Mutex.new
@@ -129,10 +276,12 @@ module Clacky
 
           def stop
             @running = false
+            @send_queue.stop
           end
 
           # Send a plain text reply to a user.
           # The context_token from the inbound message is required by the Weixin protocol.
+          # Text is enqueued and sent in batches by the background flusher to avoid rate-limiting.
           def send_text(chat_id, text, reply_to: nil)
             ctoken = lookup_context_token(chat_id)
             unless ctoken
@@ -141,14 +290,15 @@ module Clacky
             end
 
             plain = markdown_to_plain(text)
-            split_message(plain).each do |chunk|
-              @api_client.send_text(to_user_id: chat_id, text: chunk, context_token: ctoken)
-            end
+            return { message_id: nil } if plain.empty?
 
+            @send_queue.enqueue(chat_id, plain, ctoken)
             { message_id: nil }
-          rescue => e
-            Clacky::Logger.error("[WeixinAdapter] send_text failed for #{chat_id} (context_token=#{lookup_context_token(chat_id).to_s.slice(0, 20)}...): #{e.message}")
-            { message_id: nil }
+          end
+
+          # Force-flush pending text for a chat_id. Called before sending files or on task completion.
+          def flush_pending(chat_id)
+            @send_queue.flush(chat_id)
           end
 
           # Send a file to a user.
@@ -160,6 +310,8 @@ module Clacky
               Clacky::Logger.warn("[WeixinAdapter] send_file: no context_token for #{chat_id}, dropping")
               return { message_id: nil }
             end
+
+            @send_queue.flush(chat_id)
 
             @api_client.send_file(
               to_user_id:    chat_id,
