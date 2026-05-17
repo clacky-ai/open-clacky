@@ -31,33 +31,38 @@ jobs:
       - name: Run the default task
         run: bundle exec rake
 
-      # Reproduce the exact RubyGems shipped with macOS system Ruby 2.6.3 (RubyGems 2.7.6.2).
+      # Mimic the RubyGems shipped with macOS system Ruby 2.6.3 (RubyGems 2.7.x).
+      # Without this, GitHub-hosted Ruby 2.6 runners ship RubyGems 3.0.3.1, which has
+      # already-fixed resolver behavior and silently masks the regression that real users hit.
       - name: Downgrade RubyGems to mimic macOS system Ruby (Ruby 2.6 only)
         if: matrix.ruby == '2.6'
         run: |
           gem update --system 2.7.6.2 --no-document || gem update --system 2.7.11 --no-document
           gem --version
 
-      # Probe: does this RubyGems correctly fall back to rouge 3.x on Ruby 2.6?
-      # Three scenarios:
-      #   (a) `gem install rouge` (no version constraint) — known-bad on old RubyGems
-      #   (b) `gem install rouge -v ">= 3.14"`             — open upper bound
-      #   (c) `gem install rouge -v ">= 3.14, < 5.0"`      — current openclacky.gemspec constraint
-      #   (d) `gem install rouge -v ">= 3.14, < 4.0"`      — hard cap below the breaking version
-      - name: Probe rouge resolution (Ruby 2.6 only)
+      # Regression guard: simulate the bare `gem install rouge` path that real Ruby 2.6
+      # users hit (e.g. macOS system Ruby). Old RubyGems picks the highest matching version
+      # *before* checking required_ruby_version and refuses to fall back, so any constraint
+      # that allows rouge 4.x will fail here. The only constraint that survives is `< 4.0`.
+      - name: Regression guard — rouge install on Ruby 2.6 (old RubyGems)
         if: matrix.ruby == '2.6'
         run: |
-          echo "=== (a) no constraint ==="
-          gem install rouge --no-document || true
-          gem uninstall rouge -aIx || true
-          echo "=== (b) >= 3.14 (open upper) ==="
-          gem install rouge -v ">= 3.14" --no-document || true
-          gem uninstall rouge -aIx || true
-          echo "=== (c) >= 3.14, < 5.0 (current gemspec) ==="
-          gem install rouge -v ">= 3.14" -v "< 5.0" --no-document || true
-          gem uninstall rouge -aIx || true
-          echo "=== (d) >= 3.14, < 4.0 (proposed fix) ==="
-          gem install rouge -v ">= 3.14" -v "< 4.0" --no-document || true
+          set -e
+          ruby -r rubygems -e '
+            spec = Gem::Specification.load("openclacky.gemspec")
+            dep  = spec.dependencies.find { |d| d.name == "rouge" } or abort("rouge dep missing")
+            puts "openclacky.gemspec rouge constraint: #{dep.requirement}"
+            args = dep.requirement.requirements.map { |op, v| ["-v", "#{op} #{v}"] }.flatten
+            puts "Running: gem install rouge #{args.join(" ")} --no-document"
+            ok = system("gem", "install", "rouge", *args, "--no-document")
+            unless ok
+              warn ""
+              warn "❌ REGRESSION: rouge cannot be installed on Ruby 2.6 with the current"
+              warn "   gemspec constraint. End users on macOS system Ruby will see the"
+              warn "   exact same error. Tighten the upper bound (e.g. < 4.0)."
+              exit 1
+            end
+          '
           gem list rouge
 
       # Simulate `gem install openclacky` end-user path (not just bundle install).
