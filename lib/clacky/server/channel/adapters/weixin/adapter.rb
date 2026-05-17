@@ -53,6 +53,8 @@ module Clacky
           def stop
             @running = false
             @flusher.join(30)
+            # Force-flush any remaining entries regardless of threshold.
+            drain_all_buffers
           end
 
           private
@@ -65,12 +67,6 @@ module Clacky
               rescue => e
                 @logger.error("[WeixinSendQueue] drain_buffers error: #{e.message}")
               end
-            end
-            # Final drain on stop
-            begin
-              drain_buffers
-            rescue => e
-              @logger.error("[WeixinSendQueue] final drain error: #{e.message}")
             end
           end
 
@@ -92,6 +88,23 @@ module Clacky
 
             ready.each do |chat_id, entries|
               send_entries(chat_id, entries)
+            end
+          end
+
+          # Unconditionally drain every buffer. Used on stop to guarantee delivery.
+          def drain_all_buffers
+            ready = @buffer_mutex.synchronize do
+              snapshot = @buffers.reject { |_, entries| entries.empty? }
+              @buffers.clear
+              snapshot
+            end
+
+            ready.each do |chat_id, entries|
+              begin
+                send_entries(chat_id, entries)
+              rescue => e
+                @logger.error("[WeixinSendQueue] final drain error for #{chat_id}: #{e.message}")
+              end
             end
           end
 
