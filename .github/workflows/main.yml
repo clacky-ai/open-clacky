@@ -43,6 +43,7 @@ jobs:
       #   (a) `gem install rouge` (no version constraint) — known-bad on old RubyGems
       #   (b) `gem install rouge -v ">= 3.14"`             — open upper bound
       #   (c) `gem install rouge -v ">= 3.14, < 5.0"`      — current openclacky.gemspec constraint
+      #   (d) `gem install rouge -v ">= 3.14, < 4.0"`      — hard cap below the breaking version
       - name: Probe rouge resolution (Ruby 2.6 only)
         if: matrix.ruby == '2.6'
         run: |
@@ -54,6 +55,9 @@ jobs:
           gem uninstall rouge -aIx || true
           echo "=== (c) >= 3.14, < 5.0 (current gemspec) ==="
           gem install rouge -v ">= 3.14" -v "< 5.0" --no-document || true
+          gem uninstall rouge -aIx || true
+          echo "=== (d) >= 3.14, < 4.0 (proposed fix) ==="
+          gem install rouge -v ">= 3.14" -v "< 4.0" --no-document || true
           gem list rouge
 
       # Simulate `gem install openclacky` end-user path (not just bundle install).
