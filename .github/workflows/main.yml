@@ -38,6 +38,13 @@ jobs:
           gem update --system 2.7.6.2 --no-document || gem update --system 2.7.11 --no-document
           gem --version
 
+      # Probe: does this RubyGems correctly fall back to rouge 3.x on Ruby 2.6?
+      - name: Probe rouge resolution (Ruby 2.6 only)
+        if: matrix.ruby == '2.6'
+        run: |
+          gem install rouge --no-document || true
+          gem list rouge
+
       # Simulate `gem install openclacky` end-user path (not just bundle install).
       # Note: omit `--local` so transitive deps (chunky_png, rouge, ...) can be fetched from rubygems.org;
       # the openclacky-*.gem file itself is still picked up from the working dir (default --both).
