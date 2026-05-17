@@ -31,6 +31,13 @@ jobs:
       - name: Run the default task
         run: bundle exec rake
 
+      # Reproduce the exact RubyGems shipped with macOS system Ruby 2.6.3 (RubyGems 2.7.6.2).
+      - name: Downgrade RubyGems to mimic macOS system Ruby (Ruby 2.6 only)
+        if: matrix.ruby == '2.6'
+        run: |
+          gem update --system 2.7.6.2 --no-document || gem update --system 2.7.11 --no-document
+          gem --version
+
       # Simulate `gem install openclacky` end-user path (not just bundle install).
       # Note: omit `--local` so transitive deps (chunky_png, rouge, ...) can be fetched from rubygems.org;
       # the openclacky-*.gem file itself is still picked up from the working dir (default --both).
