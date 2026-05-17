@@ -30,3 +30,10 @@ jobs:
         run: bundle install --jobs 4
       - name: Run the default task
         run: bundle exec rake
+
+      # Simulate `gem install openclacky` end-user path (not just bundle install).
+      - name: Smoke-test gem install
+        run: |
+          gem --version
+          gem build openclacky.gemspec
+          gem install --local openclacky-*.gem --no-document
