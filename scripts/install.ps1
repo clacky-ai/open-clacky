@@ -27,6 +27,7 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+$env:WSL_UTF8 = "1"
 
 $global:DisplayName = if ($BrandName)   { $BrandName }   else { "OpenClacky" }
 $global:DisplayCmd  = if ($CommandName) { $CommandName } else { "openclacky" }
@@ -249,9 +250,10 @@ function Install-UbuntuRootfs {
 
     Write-Step "Importing Ubuntu into WSL$WslVersion (this may take a minute)..."
     New-Item -ItemType Directory -Force -Path $UBUNTU_WSL_DIR | Out-Null
-    wsl.exe --import Ubuntu $UBUNTU_WSL_DIR $TarPath --version $WslVersion
+    $wslOutput = wsl.exe --import Ubuntu $UBUNTU_WSL_DIR $TarPath --version $WslVersion 2>&1
     if ($LASTEXITCODE -ne 0) {
         Write-Fail "wsl --import failed (exit $LASTEXITCODE)."
+        if ($wslOutput) { Write-Fail "$wslOutput" }
         Write-Fail "Try removing $UBUNTU_WSL_DIR and running the script again."
         exit 1
     }
@@ -395,7 +397,7 @@ function Test-VirtualisationSupported {
     if ($ok) {
         Write-Info "WSL2 probe passed — using WSL2."
     } else {
-        Write-Info "WSL2 probe failed (Hyper-V not available) — falling back to WSL1."
+        Write-Info "WSL2 probe failed (Hyper-V not available)."
     }
     return $ok
 }
@@ -431,6 +433,7 @@ function Enable-WslFeatures {
     dism /online /enable-feature /featurename:VirtualMachinePlatform /all /norestart | Out-Null
     Write-Success "WSL components enabled."
     Install-WslKernel
+    Set-InstallReg -Name "WslFeaturesEnabled" -Value "1"
     Set-InstallReg -Name "InstallPhase" -Value "wsl-pending"
     Prompt-Reboot
 }
@@ -464,8 +467,10 @@ Write-Info "Windows Build $osBuild — OK."
 Write-Step "Checking WSL status..."
 $wslCode = Invoke-WslStatusExitCode
 Write-Info "WSL --status exit code: $wslCode"
-$installPhase = Get-InstallReg -Name "InstallPhase" -Default ""
+$installPhase       = Get-InstallReg -Name "InstallPhase"       -Default ""
+$wslFeaturesEnabled = Get-InstallReg -Name "WslFeaturesEnabled" -Default ""
 Write-Info "InstallPhase: '$installPhase'"
+Write-Info "WslFeaturesEnabled: '$wslFeaturesEnabled'"
 
 if ($installPhase -eq "" -and $wslCode -ne 0) {
     # First run and WSL not ready: enable WSL features and reboot.
@@ -495,6 +500,12 @@ if (Test-UbuntuInstalled) {
         Install-UbuntuRootfs -WslVersion 2 -TarPath $tarPath
         $wslVersion = 2
     } else {
+        if ($wslFeaturesEnabled -ne "1") {
+            # WSL components were never fully prepared — run Enable-WslFeatures and reboot.
+            Write-Warn "WSL2 is not available and WSL components have not been fully set up."
+            Enable-WslFeatures
+            # Always exits (prompts reboot)
+        }
         Write-Info "[main] WSL2 unavailable, falling back to WSL1..."
         Install-UbuntuRootfs -WslVersion 1 -TarPath $tarPath
         $wslVersion = 1
