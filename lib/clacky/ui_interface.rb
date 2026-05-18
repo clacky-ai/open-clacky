@@ -120,6 +120,6 @@ module Clacky
 
     # === Path redaction (for encrypted brand skill tmpdirs) ===
     # === Lifecycle ===
-    def stop; end
+    def stop(clear_screen: false); end
   end
 end
