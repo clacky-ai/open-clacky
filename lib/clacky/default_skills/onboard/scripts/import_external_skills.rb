@@ -172,7 +172,7 @@ class OpenClawImporter < ExternalSkillsImporter
   end
 
   private def source_available?
-    @openclaw_dir.exist?
+    openclaw_dirs.any?(&:exist?)
   end
 
   # Returns all directories that may contain OpenClaw skills.
@@ -182,12 +182,56 @@ class OpenClawImporter < ExternalSkillsImporter
   #   - ~/.openclaw/workspace/skills/             (workspace skills)
   #   - ~/.openclaw/skills/                        (managed/shared skills)
   #   - ~/.openclaw/workspace/.agents/skills/      (project-level shared skills)
+  #
+  # On WSL, also scans the Windows-native %USERPROFILE%\.openclaw directory.
   private def source_dirs
-    [
-      @openclaw_dir.join('workspace', 'skills'),
-      @openclaw_dir.join('skills'),
-      @openclaw_dir.join('workspace', '.agents', 'skills')
-    ].select(&:exist?)
+    openclaw_dirs.flat_map do |root|
+      [
+        root.join('workspace', 'skills'),
+        root.join('skills'),
+        root.join('workspace', '.agents', 'skills')
+      ]
+    end.select(&:exist?)
+  end
+
+  # All candidate OpenClaw root directories.
+  # On WSL, includes both ~/.openclaw and the Windows-native path.
+  private def openclaw_dirs
+    dirs = [@openclaw_dir]
+    win_home = windows_home
+    dirs << win_home.join('.openclaw') if win_home && win_home.join('.openclaw') != @openclaw_dir
+    dirs
+  end
+
+  # True when running inside WSL.
+  # Mirrors EnvironmentDetector#wsl? — reads /proc/version for "microsoft".
+  private def wsl?
+    return @wsl if defined?(@wsl)
+
+    @wsl = File.exist?('/proc/version') &&
+           File.read('/proc/version').downcase.include?('microsoft')
+  rescue StandardError
+    @wsl = false
+  end
+
+  # Resolve the Windows %USERPROFILE% as a WSL-accessible Pathname.
+  # Uses powershell.exe (standard in WSL) then wslpath for conversion,
+  # mirroring the approach in EnvironmentDetector#wsl_desktop_path.
+  # Returns nil when not on WSL or when the path cannot be resolved.
+  private def windows_home
+    return nil unless wsl?
+    return nil if `which powershell.exe 2>/dev/null`.strip.empty?
+
+    win_path = `powershell.exe -NoProfile -Command '$env:USERPROFILE' 2>/dev/null`.strip.tr("\r\n", '')
+    return nil if win_path.empty?
+
+    linux_path = `wslpath '#{win_path}' 2>/dev/null`.strip
+    return nil if linux_path.empty?
+
+    path = Pathname.new(linux_path)
+    path.exist? ? path : nil
+  rescue StandardError
+    nil
   end
 
   private def discover_skills

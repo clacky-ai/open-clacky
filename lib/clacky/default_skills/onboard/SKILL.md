@@ -221,8 +221,12 @@ then parse the last stdout line as JSON and read `installed` as N.
 
 ### A.10. Import external skills (optional)
 
-Run `test -d ~/.openclaw && echo yes || echo no`. If `no`, skip silently.
-If `yes`:
+Check if OpenClaw is installed:
+- Run `test -d ~/.openclaw && echo yes || echo no`
+- If `no` and on WSL (i.e. `/proc/version` contains `microsoft`), also run:
+  `powershell.exe -NoProfile -Command '$env:USERPROFILE' 2>/dev/null | tr -d '\r'` to get the Windows home, then check `test -d "$(wslpath '<win_home>')/.openclaw" && echo yes || echo no`
+- If all checks return `no`, skip silently.
+If any check returns `yes`:
 1. `ruby "SKILL_DIR/scripts/import_external_skills.rb" --source openclaw --dry-run`
 2. Parse the skill count N.
 3. Ask via `request_user_feedback`:
