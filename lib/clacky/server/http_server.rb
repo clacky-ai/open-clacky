@@ -240,6 +240,17 @@ module Clacky
         shutdown_proc = proc do
           next if shutdown_once
           shutdown_once = true
+          # Save all agent sessions synchronously BEFORE starting the
+          # forced-exit timer. The timer runs in a separate thread; if
+          # session save is slow (many sessions / slow disk), we must
+          # not let the timer kill the process mid-write.
+          @registry.each_agent do |session_id, s|
+            begin
+              @session_manager.save(s[:agent].to_session_data(status: :interrupted))
+            rescue => e
+              Clacky::Logger.warn("[HttpServer] Failed to save session #{session_id} during shutdown: #{e.message}")
+            end
+          end
           Thread.new do
             sleep 2
             Clacky::Logger.warn("[HttpServer] Forced exit after graceful shutdown timeout.")
@@ -1304,7 +1315,17 @@ module Clacky
           sleep 0.5  # Let WEBrick flush the HTTP response
 
           if @master_pid
-            # Worker mode: tell master to hot-restart, then exit cleanly.
+            # Worker mode: save all sessions, then tell master to hot-restart.
+            # Worker is self-sufficient — it persists its own state instead of
+            # relying on master's TERM to trigger shutdown_proc (which risks
+            # zombie workers if master crashes or never sends TERM).
+            @registry.each_agent do |session_id, s|
+              begin
+                @session_manager.save(s[:agent].to_session_data(status: :interrupted))
+              rescue => e
+                Clacky::Logger.warn("[HttpServer] Failed to save session #{session_id} during restart: #{e.message}")
+              end
+            end
             Clacky::Logger.info("[Restart] Sending USR1 to master (PID=#{@master_pid})")
             begin
               Process.kill("USR1", @master_pid)

@@ -122,6 +122,16 @@ module Clacky
         @mutex.synchronize { @sessions[session_id]&.dup }
       end
 
+      # Yield [session_id, session_hash] for every registered session that has an agent.
+      def each_agent
+        @mutex.synchronize do
+          @sessions.each do |id, s|
+            next unless s[:agent]
+            yield id, s
+          end
+        end
+      end
+
       # Update arbitrary runtime fields of a session (status, error, pending_*, etc.).
       def update(session_id, **fields)
         @mutex.synchronize do
