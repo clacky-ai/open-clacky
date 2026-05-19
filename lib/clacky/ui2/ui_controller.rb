@@ -1384,8 +1384,10 @@ module Clacky
           # Add action buttons
           choices << { name: "─" * 50, disabled: true }
           choices << { name: "[+] Add New Model", value: { action: :add } }
-          choices << { name: "[*] Edit Current Model", value: { action: :edit } }
-          choices << { name: "[-] Delete Model", value: { action: :delete } } if current_config.models.length > 1
+          if current_config.models.length > 0
+            choices << { name: "[*] Edit Current Model", value: { action: :edit } }
+            choices << { name: "[-] Delete Model", value: { action: :delete } } if current_config.models.length > 1
+          end
           choices << { name: "[X] Close", value: { action: :close } }
           
           # Show menu
