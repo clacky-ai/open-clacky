@@ -25,7 +25,10 @@ RSpec.describe Clacky::BedrockStreamAggregator do
     expect(result["output"]["message"]["content"]).to eq([{ "text" => "Hello world" }])
     expect(result["stopReason"]).to eq("end_turn")
     expect(result["usage"]["inputTokens"]).to eq(10)
-    expect(progress_events).to eq([[10, 2]])
+    # Streaming deltas emit incremental output-token estimates (chars/4),
+    # then the final metadata frame emits the authoritative usage numbers.
+    expect(progress_events.last).to eq([10, 2])
+    expect(progress_events[0..-2]).to all(satisfy { |inp, out| inp == 0 && out > 0 })
   end
 
   it "concatenates streamed tool_use input fragments and parses final JSON" do
