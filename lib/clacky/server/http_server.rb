@@ -3372,9 +3372,8 @@ module Clacky
         return unless agent
 
         # Auto-name the session from the first user message (before agent starts running).
-        # Check messages.empty? only — agent.name may already hold a default placeholder
-        # like "Session 1" assigned at creation time, so it's not a reliable signal.
-        if agent.history.empty?
+        # Skip if the name looks like it was set by the user (not a system-generated "Session N").
+        if agent.history.empty? && agent.name.match?(/\ASession \d+\z/)
           auto_name = content.gsub(/\s+/, " ").strip[0, 30]
           auto_name += "…" if content.strip.length > 30
           agent.rename(auto_name)
