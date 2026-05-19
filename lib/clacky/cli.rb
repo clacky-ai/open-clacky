@@ -163,6 +163,7 @@ module Clacky
         end
       ensure
         Dir.chdir(original_dir)
+        Clacky::BrowserManager.instance.stop rescue nil
       end
     end
 
