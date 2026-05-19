@@ -471,8 +471,13 @@ module Clacky
 
         case msg[:role].to_s
         when "assistant"
-          # Text content
+          # Text content — prepend reasoning/thinking content wrapped in <think> tags
+          # so the Web UI renders it as a collapsible thinking block
           text = extract_text_from_content(msg[:content]).to_s.strip
+          reasoning = msg[:reasoning_content]
+          if reasoning && !reasoning.to_s.strip.empty?
+            text = "<think>\n#{reasoning}\n</think>\n#{text}"
+          end
           ui.show_assistant_message(text, files: []) unless text.empty?
 
           # Tool calls embedded in assistant message

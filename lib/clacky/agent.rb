@@ -427,7 +427,7 @@ module Clacky
               tool_calls_count: (response[:tool_calls] || []).size
             )
             if response[:content] && !response[:content].empty?
-              emit_assistant_message(response[:content])
+              emit_assistant_message(response[:content], reasoning_content: response[:reasoning_content])
             end
 
             # Show token usage after the assistant message so WebUI renders it below the bubble
@@ -448,7 +448,7 @@ module Clacky
 
           # Show assistant message if there's content before tool calls
           if response[:content] && !response[:content].empty?
-            emit_assistant_message(response[:content])
+            emit_assistant_message(response[:content], reasoning_content: response[:reasoning_content])
           end
 
           # Show token usage after assistant message (or immediately if no message).
@@ -1532,8 +1532,16 @@ module Clacky
     # and cannot load file:// directly) and must stay scoped to the Web UI
     # controller. IM channel subscribers need the original file:// markdown so
     # parse_file_links can extract paths and deliver images as native attachments.
-    private def emit_assistant_message(content)
-      return if content.nil? || content.empty?
+    private def emit_assistant_message(content, reasoning_content: nil)
+      # Prepend reasoning/thinking content (from thinking-mode providers like
+      # DeepSeek V4, Kimi K2) wrapped in <think> tags so the Web UI renders it
+      # as a collapsible thinking block (see sessions.js _renderMarkdown).
+      full_content = content
+      if reasoning_content && !reasoning_content.to_s.strip.empty?
+        full_content = "<think>\n#{reasoning_content}\n</think>\n#{content}"
+      end
+
+      return if full_content.nil? || full_content.to_s.strip.empty?
 
       parsed = parse_file_links(content)
       @ui&.show_assistant_message(parsed[:text], files: parsed[:files])
