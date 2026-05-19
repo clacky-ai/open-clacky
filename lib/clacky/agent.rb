@@ -1536,15 +1536,16 @@ module Clacky
       # Prepend reasoning/thinking content (from thinking-mode providers like
       # DeepSeek V4, Kimi K2) wrapped in <think> tags so the Web UI renders it
       # as a collapsible thinking block (see sessions.js _renderMarkdown).
-      full_content = content
       if reasoning_content && !reasoning_content.to_s.strip.empty?
         full_content = "<think>\n#{reasoning_content}\n</think>\n#{content}"
+      else
+        full_content = content
       end
 
       return if full_content.nil? || full_content.to_s.strip.empty?
 
       parsed = parse_file_links(content)
-      @ui&.show_assistant_message(parsed[:text], files: parsed[:files])
+      @ui&.show_assistant_message(full_content, files: parsed[:files])
     end
 
     # Track modified files for Time Machine snapshots

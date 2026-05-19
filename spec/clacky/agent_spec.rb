@@ -1594,4 +1594,50 @@ RSpec.describe Clacky::Agent do
       end
     end
   end
+
+  describe "#emit_assistant_message" do
+    let(:ui_collector) do
+      Class.new do
+        attr_reader :messages
+        def initialize; @messages = []; end
+        def show_assistant_message(content, files:)
+          @messages << { content: content, files: files }
+        end
+      end.new
+    end
+
+    before do
+      agent.instance_variable_set(:@ui, ui_collector)
+    end
+
+    it "sends content as-is when no reasoning_content is provided" do
+      agent.send(:emit_assistant_message, "Hello, world!")
+      expect(ui_collector.messages.first[:content]).to eq("Hello, world!")
+    end
+
+    it "prepends think-wrapped reasoning when reasoning_content is present" do
+      agent.send(:emit_assistant_message, "Final answer.", reasoning_content: "Let me think...")
+      msg = ui_collector.messages.first[:content]
+      expect(msg).to start_with("<think>\nLet me think...\n</think>\n")
+      expect(msg).to end_with("Final answer.")
+    end
+
+    it "treats whitespace-only reasoning_content the same as absent" do
+      agent.send(:emit_assistant_message, "Clean output.", reasoning_content: "   ")
+      expect(ui_collector.messages.first[:content]).to eq("Clean output.")
+    end
+
+    it "does NOT emit message when both content and reasoning are empty" do
+      agent.send(:emit_assistant_message, "", reasoning_content: nil)
+      expect(ui_collector.messages).to be_empty
+    end
+
+    it "preserves file links extracted from original content" do
+      agent.send(:emit_assistant_message, "See ![img](file:///tmp/photo.png).",
+                 reasoning_content: "Checking the file...")
+      msg = ui_collector.messages.first
+      expect(msg[:files]).not_to be_empty
+      expect(msg[:files].first[:name]).to eq("photo.png")
+    end
+  end
 end
