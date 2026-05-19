@@ -943,8 +943,8 @@ module Clacky
         $ clacky server
         $ clacky server --port 8080
     LONGDESC
-    option :host, type: :string, default: "127.0.0.1", desc: "Bind host (default: 127.0.0.1)"
-    option :port, type: :numeric, default: 7070, desc: "Listen port (default: 7070)"
+    option :host, type: :string, aliases: ["-b", "--bind"], default: "127.0.0.1", desc: "Bind host (default: 127.0.0.1)"
+    option :port, type: :numeric, aliases: "-p", default: 7070, desc: "Listen port (default: 7070)"
     option :brand_test, type: :boolean, default: false,
            desc: "Enable brand test mode: mock license activation without calling remote API"
     option :no_compression, type: :boolean, default: false,
@@ -955,7 +955,13 @@ module Clacky
            desc: "Disable prompt caching"
     option :no_skill_evolution, type: :boolean, default: false,
            desc: "Disable automatic skill evolution"
+    option :help, type: :boolean, aliases: "-h", desc: "Show this help message"
     def server
+      if options[:help]
+        invoke :help, ["server"]
+        return
+      end
+
       # ── Security gate ──────────────────────────────────────────────────────
       # Binding to 0.0.0.0 exposes the server to the public network.
       # Refuse to start unless CLACKY_ACCESS_KEY env var is set.
