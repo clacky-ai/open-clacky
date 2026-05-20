@@ -26,6 +26,7 @@ module Clacky
       filename = generate_filename(session_data[:session_id], session_data[:created_at])
       filepath = File.join(@sessions_dir, filename)
 
+      FileUtils.mkdir_p(@sessions_dir)
       File.write(filepath, JSON.pretty_generate(session_data))
       FileUtils.chmod(0o600, filepath)
 

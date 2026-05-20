@@ -125,12 +125,12 @@ module Clacky
 
       # Spawn a fresh Ruby process that loads the (possibly updated) gem from disk.
       # The listen socket is inherited via its file descriptor number.
-      def spawn_worker
+      def spawn_worker(extra_env: {})
         env = {
           "CLACKY_WORKER"      => "1",
           "CLACKY_INHERIT_FD"  => @socket.fileno.to_s,
           "CLACKY_MASTER_PID"  => Process.pid.to_s
-        }
+        }.merge(extra_env)
         # Keep the socket fd open across exec — mark it as non-CLOEXEC.
         @socket.close_on_exec = false
 
@@ -163,7 +163,7 @@ module Clacky
         old_pid = @worker_pid
         Clacky::Logger.info("[Master] Hot restart: spawning new worker (old PID=#{old_pid})...")
 
-        new_pid = spawn_worker
+        new_pid = spawn_worker(extra_env: { "CLACKY_PREVIOUS_WORKER_PID" => old_pid.to_s })
         @worker_pid = new_pid
 
         # Give the new worker time to bind and start serving
