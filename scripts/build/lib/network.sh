@@ -1,7 +1,7 @@
 # network.sh — network region detection, mirror variables, URL probing
 # Depends-On: colors.sh
 # Requires-Vars: (none)
-# Sets-Vars: $USE_CN_MIRRORS $NETWORK_REGION $CN_CDN_BASE_URL $CN_RUBYGEMS_URL $CN_NODE_MIRROR_URL $CN_NPM_REGISTRY $CN_MISE_INSTALL_URL $CN_RUBY_PRECOMPILED_URL $MISE_INSTALL_URL $NODE_MIRROR_URL $NPM_REGISTRY_URL $RUBY_VERSION_SPEC $DEFAULT_RUBYGEMS_URL $DEFAULT_MISE_INSTALL_URL $DEFAULT_NPM_REGISTRY
+# Sets-Vars: $USE_CN_MIRRORS $NETWORK_REGION $CN_CDN_BASE_URL $CN_ALIYUN_MIRROR $CN_RUBYGEMS_URL $CN_NODE_MIRROR_URL $CN_NPM_REGISTRY $CN_MISE_INSTALL_URL $CN_RUBY_PRECOMPILED_URL $MISE_INSTALL_URL $NODE_MIRROR_URL $NPM_REGISTRY_URL $RUBY_VERSION_SPEC $DEFAULT_RUBYGEMS_URL $DEFAULT_MISE_INSTALL_URL $DEFAULT_NPM_REGISTRY
 # Include via: @include lib/network.sh
 
 # --------------------------------------------------------------------------
@@ -17,9 +17,10 @@ DEFAULT_NPM_REGISTRY="https://registry.npmjs.org"
 DEFAULT_MISE_INSTALL_URL="https://mise.run"
 
 CN_CDN_BASE_URL="https://oss.1024code.com"
+CN_ALIYUN_MIRROR="https://mirrors.aliyun.com"
 CN_MISE_INSTALL_URL="${CN_CDN_BASE_URL}/mise.sh"
 CN_RUBY_PRECOMPILED_URL="${CN_CDN_BASE_URL}/ruby/ruby-{version}.{platform}.tar.gz"
-CN_RUBYGEMS_URL="https://mirrors.aliyun.com/rubygems/"
+CN_RUBYGEMS_URL="${CN_ALIYUN_MIRROR}/rubygems/"
 CN_NPM_REGISTRY="https://registry.npmmirror.com"
 CN_NODE_MIRROR_URL="https://cdn.npmmirror.com/binaries/node/"
 CN_GEM_BASE_URL="${CN_CDN_BASE_URL}/openclacky"
