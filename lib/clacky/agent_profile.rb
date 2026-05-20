@@ -21,12 +21,13 @@ module Clacky
     DEFAULT_AGENTS_DIR = File.expand_path("../default_agents", __FILE__).freeze
     USER_AGENTS_DIR = File.expand_path("~/.clacky/agents").freeze
 
-    attr_reader :name, :description
+    attr_reader :name, :description, :allowed_tools
 
     def initialize(name)
       @name = name.to_s
       profile_data = load_profile_yml
       @description = profile_data["description"] || ""
+      @allowed_tools = normalize_allowed_tools(profile_data["allowed_tools"])
       @system_prompt_content = load_agent_file("system_prompt.md")
     end
 
@@ -55,6 +56,14 @@ module Clacky
     # @return [String] user profile content (user override → built-in default)
     def user_profile
       load_global_file("USER.md")
+    end
+
+    # @param tool_name [String]
+    # @return [Boolean] true when the tool is allowed for this profile
+    def tool_allowed?(tool_name)
+      return true if @allowed_tools.nil? || @allowed_tools.include?("all")
+
+      @allowed_tools.include?(tool_name.to_s)
     end
 
     private def load_profile_yml
@@ -107,6 +116,19 @@ module Clacky
 
     private def default_agent_dir
       File.join(DEFAULT_AGENTS_DIR, @name)
+    end
+
+    private def normalize_allowed_tools(raw)
+      return ["all"] if raw.nil?
+
+      values =
+        case raw
+        when Array then raw
+        else [raw]
+        end
+
+      normalized = values.map { |value| value.to_s.strip }.reject(&:empty?)
+      normalized.empty? ? ["all"] : normalized
     end
   end
 end

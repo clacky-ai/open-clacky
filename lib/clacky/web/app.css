@@ -1486,9 +1486,46 @@ body {
   justify-content: center;
   gap: 16px;
   color: var(--color-text-secondary);
+  text-align: center;
 }
 .welcome-icon { font-size: 48px; }
 .centered h2  { color: var(--color-text-primary); font-size: 22px; }
+.centered p {
+  max-width: 560px;
+  margin: 0;
+  line-height: 1.6;
+}
+.welcome-prompts,
+.chat-empty-prompts {
+  display: grid;
+  gap: 8px;
+  width: min(520px, calc(100vw - 48px));
+}
+.welcome-prompt-btn,
+.chat-empty-prompt-btn {
+  appearance: none;
+  width: 100%;
+  border: 1px solid var(--color-border-primary);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-card);
+  color: var(--color-text-primary);
+  padding: 10px 12px;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.45;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast);
+}
+.welcome-prompt-btn:hover,
+.chat-empty-prompt-btn:hover {
+  background: var(--color-bg-hover);
+  border-color: var(--color-border-strong);
+}
+.welcome-support {
+  color: var(--color-text-tertiary);
+  font-size: 13px;
+}
 #btn-welcome-new {
   background: var(--color-button-primary);
   color: var(--color-button-primary-text);
@@ -1556,7 +1593,6 @@ body {
   text-align: center;
   color: var(--color-text-secondary);
   user-select: none;
-  pointer-events: none;        /* purely decorative — don't block clicks/scroll */
   opacity: 0.85;
 }
 .chat-empty-hint .chat-empty-icon {
@@ -1573,8 +1609,17 @@ body {
 .chat-empty-hint .chat-empty-subtitle {
   color: var(--color-text-secondary);
   font-size: 13px;
-  margin-bottom: 18px;
+  margin-bottom: 14px;
   opacity: 0.85;
+}
+.chat-empty-hint .chat-empty-prompts {
+  width: min(420px, calc(100vw - 64px));
+  margin-bottom: 16px;
+  pointer-events: auto;
+}
+.chat-empty-hint .chat-empty-prompt-btn {
+  font-size: 13px;
+  text-align: center;
 }
 .chat-empty-hint .chat-empty-tips {
   list-style: none;
@@ -7668,5 +7713,4 @@ body.setup-mode[data-theme="dark"] {
   flex-direction: column;
   gap: 10px;
 }
-
 

@@ -1,2 +1,18 @@
 name: general
 description: A versatile digital employee living on your computer
+allowed_tools:
+  - terminal
+  - file_reader
+  - write
+  - edit
+  - glob
+  - grep
+  - web_search
+  - web_fetch
+  - todo_manager
+  - request_user_feedback
+  - invoke_skill
+  - undo_task
+  - redo_task
+  - list_tasks
+  - browser

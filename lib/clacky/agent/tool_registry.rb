@@ -139,6 +139,12 @@ module Clacky
              .map(&:to_function_definition)
     end
 
+    def allowed?(name, allowed_tools = nil)
+      return true if allowed_tools.nil? || allowed_tools.include?("all")
+
+      allowed_tools.include?(name.to_s)
+    end
+
     def tool_names
       @tools.keys
     end

@@ -130,4 +130,37 @@ RSpec.describe Clacky::ToolRegistry do
       expect(registry.all).to contain_exactly(mock_tool, mock_tool2)
     end
   end
+
+  describe "#allowed_definitions" do
+    it "returns all tools when allowed_tools includes all" do
+      registry = described_class.new
+      registry.register(mock_tool)
+      registry.register(mock_tool2)
+
+      expect(registry.allowed_definitions(["all"]).size).to eq(2)
+    end
+
+    it "filters definitions by allowed tool names" do
+      registry = described_class.new
+      registry.register(mock_tool)
+      registry.register(mock_tool2)
+
+      definitions = registry.allowed_definitions(["file_reader"])
+      expect(definitions.size).to eq(1)
+      expect(definitions.first).to eq({})
+    end
+  end
+
+  describe "#allowed?" do
+    it "allows all tools when allowlist is nil" do
+      registry = described_class.new
+      expect(registry.allowed?("terminal", nil)).to be true
+    end
+
+    it "checks whether a tool name is present in the allowlist" do
+      registry = described_class.new
+      expect(registry.allowed?("terminal", ["terminal"])).to be true
+      expect(registry.allowed?("terminal", ["file_reader"])).to be false
+    end
+  end
 end

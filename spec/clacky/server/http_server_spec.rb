@@ -411,6 +411,20 @@ RSpec.describe Clacky::Server::HttpServer do
       end
     end
 
+    it "forces the configured profile when CLACKY_FORCED_AGENT_PROFILE is set" do
+      with_env("CLACKY_FORCED_AGENT_PROFILE" => "admin") do
+        with_server(agent_config: agent_config) do |server|
+          req = fake_req(method: "POST", path: "/api/sessions",
+                         body: { name: "forced-admin", agent_profile: "coding" })
+          res = fake_res
+          dispatch(server, req, res)
+
+          expect(res.status).to eq(201)
+          expect(parsed_body(res)["session"]["agent_profile"]).to eq("admin")
+        end
+      end
+    end
+
     it "returns 400 when name is not provided" do
       with_server(agent_config: agent_config) do |server|
         req = fake_req(method: "POST", path: "/api/sessions", body: {})

@@ -784,6 +784,13 @@ module Clacky
           # Tool truly not found — let the rescue below handle it with a clear message
         end
 
+        unless @tool_registry.allowed?(call[:name], @agent_profile.allowed_tools)
+          message = "Tool #{call[:name]} is not allowed for agent profile #{@agent_profile.name}"
+          @ui&.show_warning(message)
+          results << build_error_result(call, message)
+          next
+        end
+
         # Hook: before_tool_use
         hook_result = @hooks.trigger(:before_tool_use, call)
         if hook_result[:action] == :deny
@@ -1120,6 +1127,7 @@ module Clacky
       @tool_registry.register(Tools::RedoTask.new)
       @tool_registry.register(Tools::ListTasks.new)
       @tool_registry.register(Tools::Browser.new)
+      @tool_registry.register(Tools::NoknoAdmin.new)
     end
 
     # Fork a subagent with specified configuration

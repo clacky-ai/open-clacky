@@ -202,6 +202,12 @@ module Clacky
           "show_cost" => true,
           "allow_model_switch" => true,
           "allow_working_dir_switch" => true
+        },
+        "welcome" => {
+          "title" => nil,
+          "subtitle" => nil,
+          "support_text" => nil,
+          "prompts" => []
         }
       }.freeze
 
@@ -600,8 +606,7 @@ module Clacky
         return json_response(res, 400, { error: "name is required" }) if name.nil? || name.strip.empty?
 
         # Optional agent_profile; defaults to "general" if omitted or invalid
-        profile = body["agent_profile"].to_s.strip
-        profile = "general" if profile.empty?
+        profile = requested_profile(body["agent_profile"])
 
         # Optional source; defaults to :manual. Accept "system" for skill-launched sessions
         # (e.g. /onboard, /browser-setup, /channel-manager).
@@ -2368,7 +2373,7 @@ module Clacky
       # endpoints let the Web UI read and edit those files.
 
       PROFILE_USER_AGENTS_DIR  = File.expand_path("~/.clacky/agents").freeze
-      PROFILE_DEFAULT_AGENTS_DIR = File.expand_path("../../default_agents", __dir__).freeze
+      PROFILE_DEFAULT_AGENTS_DIR = File.expand_path("../default_agents", __dir__).freeze
       PROFILE_MAX_BYTES = 50_000  # Hard limit; prevents runaway content.
 
       # GET /api/profile
@@ -3903,6 +3908,7 @@ module Clacky
       def build_session(name:, working_dir:, permission_mode: :confirm_all, profile: "general", source: :manual, model_id: nil)
         session_id = Clacky::SessionManager.generate_id
         @registry.create(session_id: session_id)
+        profile = requested_profile(profile)
 
         config = @agent_config.deep_copy
         config.permission_mode = permission_mode
@@ -3975,8 +3981,7 @@ module Clacky
         )
         # Restore the agent profile from the persisted session; fall back to "general"
         # for sessions saved before the agent_profile field was introduced.
-        profile = session_data[:agent_profile].to_s
-        profile = "general" if profile.empty?
+        profile = requested_profile(session_data[:agent_profile])
         agent = Clacky::Agent.from_session(client, config, session_data, ui: ui, profile: profile)
         idle_timer = build_idle_timer(original_id, agent)
 
@@ -4002,6 +4007,33 @@ module Clacky
         ) do |_success|
           broadcast_session_update(session_id)
         end
+      end
+
+      private def requested_profile(raw_profile)
+        forced = forced_agent_profile
+        return forced unless forced.nil? || forced.empty?
+
+        profile = raw_profile.to_s.strip
+        profile = "general" if profile.empty?
+        return profile if agent_profile_exists?(profile)
+
+        "general"
+      end
+
+      private def forced_agent_profile
+        profile = ENV.fetch("CLACKY_FORCED_AGENT_PROFILE", "").to_s.strip
+        return nil if profile.empty?
+        return profile if agent_profile_exists?(profile)
+
+        nil
+      end
+
+      private def agent_profile_exists?(name)
+        return false if name.to_s.strip.empty?
+
+        user_dir = File.join(PROFILE_USER_AGENTS_DIR, name.to_s)
+        default_dir = File.join(PROFILE_DEFAULT_AGENTS_DIR, name.to_s)
+        File.directory?(user_dir) || File.directory?(default_dir)
       end
 
       # Mask API key for display: show first 8 + last 4 chars, middle replaced with ****

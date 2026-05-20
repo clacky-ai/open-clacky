@@ -49,7 +49,7 @@ module Clacky
         # Transition :fallback_active → :probing if cooling-off has expired.
         @config.maybe_start_probing
 
-        tools_to_send = @tool_registry.all_definitions
+        tools_to_send = @tool_registry.allowed_definitions(@agent_profile.allowed_tools)
 
         max_retries = 10
         retry_delay = 5

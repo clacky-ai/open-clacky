@@ -1,2 +1,18 @@
 name: coding
 description: AI coding assistant and technical co-founder
+allowed_tools:
+  - terminal
+  - file_reader
+  - write
+  - edit
+  - glob
+  - grep
+  - web_search
+  - web_fetch
+  - todo_manager
+  - request_user_feedback
+  - invoke_skill
+  - undo_task
+  - redo_task
+  - list_tasks
+  - browser

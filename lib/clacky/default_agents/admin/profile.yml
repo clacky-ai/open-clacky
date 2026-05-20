@@ -1,0 +1,12 @@
+name: admin
+description: Internal nokno control-plane operator for release and runtime management
+allowed_tools:
+  - nokno_admin
+  - file_reader
+  - glob
+  - grep
+  - web_fetch
+  - web_search
+  - todo_manager
+  - request_user_feedback
+  - invoke_skill
