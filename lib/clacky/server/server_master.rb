@@ -167,11 +167,13 @@ module Clacky
         @worker_pid = new_pid
 
         # Give the new worker time to bind and start serving
+        Clacky::Logger.info("[Master] Sleeping #{NEW_WORKER_BOOT_WAIT}s before TERMing old worker PID=#{old_pid}")
         sleep NEW_WORKER_BOOT_WAIT
 
         # Gracefully stop old worker — TERM the whole process group first so
         # grandchildren (node MCP, etc.) also get a chance to shut down cleanly.
         begin
+          Clacky::Logger.info("[Master] Sending TERM to old worker process group -#{old_pid}")
           Process.kill("TERM", -old_pid)
           # Reap it (non-blocking loop so we don't block the monitor)
           deadline = Time.now + 5
