@@ -16,24 +16,51 @@ RSpec.describe Clacky::Tools::WebSearch do
       expect(result[:error]).to include("cannot be empty")
     end
 
-    # Note: Actual web search tests would require network access or mocking
-    # For now, we test the basic structure and error handling
-    it "handles network errors gracefully" do
-      allow_any_instance_of(Net::HTTP).to receive(:request).and_raise(StandardError.new("Network error"))
+    it "returns diagnostics when all providers raise errors" do
+      allow(tool).to receive(:active_providers).and_return(%i[duckduckgo bing])
+      allow(tool).to receive(:search_duckduckgo).and_raise(StandardError.new("ddg down"))
+      allow(tool).to receive(:search_bing).and_raise(StandardError.new("bing down"))
 
       result = tool.execute(query: "test query")
 
-      # All providers failed — should return an error message
+      expect(result[:results]).to eq([])
+      expect(result[:provider]).to be_nil
       expect(result[:error]).to include("All search providers failed")
-      expect(result[:results]).to be_empty
+      expect(result[:error]).to include("duckduckgo: error")
+      expect(result[:error]).to include("bing: error")
+      expect(result[:diagnostics].size).to eq(2)
+      expect(result[:diagnostics].all? { |d| d[:status] == "error" }).to be(true)
     end
 
-    it "respects max_results parameter" do
-      result = tool.execute(query: "ruby programming", max_results: 5)
+    it "returns no_results message when providers succeed but return empty" do
+      allow(tool).to receive(:active_providers).and_return(%i[duckduckgo bing])
+      allow(tool).to receive(:search_duckduckgo).and_return([[], { http_status: 200, body_size: 100 }])
+      allow(tool).to receive(:search_bing).and_return([[], { http_status: 200, body_size: 120 }])
 
-      expect(result[:query]).to eq("ruby programming")
-      # Count should not exceed max_results
-      expect(result[:count]).to be <= 5
+      result = tool.execute(query: "no result query")
+
+      expect(result[:results]).to eq([])
+      expect(result[:provider]).to be_nil
+      expect(result[:error]).to include("No search results from providers")
+      expect(result[:diagnostics].size).to eq(2)
+      expect(result[:diagnostics].all? { |d| d[:status] == "no_results" }).to be(true)
+    end
+
+    it "returns first successful provider with diagnostics" do
+      allow(tool).to receive(:active_providers).and_return(%i[duckduckgo bing])
+      allow(tool).to receive(:search_duckduckgo).and_return([
+        [{ title: "Hello", url: "https://example.com", snippet: "world" }],
+        { http_status: 200, body_size: 256 }
+      ])
+
+      result = tool.execute(query: "ok query", max_results: 5)
+
+      expect(result[:error]).to be_nil
+      expect(result[:provider]).to eq("duckduckgo")
+      expect(result[:count]).to eq(1)
+      expect(result[:diagnostics].size).to eq(1)
+      expect(result[:diagnostics].first[:status]).to eq("ok")
+      expect(result[:diagnostics].first[:http_status]).to eq(200)
     end
   end
 

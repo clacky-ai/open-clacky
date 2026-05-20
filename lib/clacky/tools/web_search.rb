@@ -39,36 +39,51 @@ module Clacky
         end
 
         last_error = nil
+        diagnostics = []
 
         providers = active_providers
         providers.each do |provider|
           begin
-            results = send(:"search_#{provider}", query, max_results)
-            # Consider it a success only if we got real results
-            next if results.empty? || results.first[:url].include?("duckduckgo.com") && results.first[:title] == "Web search results"
+            results, provider_meta = send(:"search_#{provider}", query, max_results)
+            filtered_results = filter_placeholder_results(provider, results)
+
+            diagnostics << provider_diagnostic(
+              provider: provider,
+              status: filtered_results.empty? ? "no_results" : "ok",
+              result_count: filtered_results.length,
+              meta: provider_meta
+            )
 
             return {
               query: query,
-              results: results,
-              count: results.length,
+              results: filtered_results,
+              count: filtered_results.length,
               provider: provider.to_s,
+              diagnostics: diagnostics,
               error: nil
-            }
+            } unless filtered_results.empty?
           rescue StandardError => e
             # DuckDuckGo failed — suppress it for 10 minutes
             @ddg_unavailable_until = Time.now + 600 if provider == :duckduckgo
             last_error = e
+            diagnostics << provider_diagnostic(
+              provider: provider,
+              status: "error",
+              result_count: 0,
+              error: e.message
+            )
             next
           end
         end
 
-        # All providers failed
+        # All providers failed or returned no results
         {
           query: query,
           results: [],
           count: 0,
           provider: nil,
-          error: "All search providers failed. Last error: #{last_error&.message}"
+          diagnostics: diagnostics,
+          error: build_failure_message(diagnostics, last_error)
         }
       end
 
@@ -87,9 +102,10 @@ module Clacky
         encoded_query = CGI.escape(query)
         url = URI("https://html.duckduckgo.com/html/?q=#{encoded_query}")
         response = http_get(url)
-        return [] unless response.is_a?(Net::HTTPSuccess)
+        meta = { http_status: response&.code.to_i, body_size: response&.body&.bytesize.to_i }
+        return [[], meta] unless response.is_a?(Net::HTTPSuccess)
 
-        parse_duckduckgo_html(response.body, max_results)
+        [parse_duckduckgo_html(response.body, max_results), meta]
       end
 
       private def parse_duckduckgo_html(html, max_results)
@@ -126,9 +142,10 @@ module Clacky
         # follow_redirects ensures both environments work with the same code path.
         url = URI("https://cn.bing.com/search?q=#{encoded_query}&count=#{max_results}")
         response = http_get(url, accept_language: "zh-CN,zh;q=0.9,en;q=0.8", follow_redirects: 2)
-        return [] unless response.is_a?(Net::HTTPSuccess)
+        meta = { http_status: response&.code.to_i, body_size: response&.body&.bytesize.to_i }
+        return [[], meta] unless response.is_a?(Net::HTTPSuccess)
 
-        parse_bing_html(response.body, max_results)
+        [parse_bing_html(response.body, max_results), meta]
       end
 
       private def parse_bing_html(html, max_results)
@@ -185,6 +202,50 @@ module Clacky
         decoded.force_encoding("UTF-8").valid_encoding? ? decoded : url
       rescue StandardError
         url
+      end
+
+      private def filter_placeholder_results(provider, results)
+        return results unless provider == :duckduckgo
+        return [] if results.empty?
+
+        first = results.first
+        if first[:url].include?("duckduckgo.com") && first[:title] == "Web search results"
+          return []
+        end
+
+        results
+      end
+
+      private def provider_diagnostic(provider:, status:, result_count:, meta: {}, error: nil)
+        {
+          provider: provider.to_s,
+          status: status,
+          result_count: result_count,
+          http_status: meta[:http_status],
+          body_size: meta[:body_size],
+          error: error
+        }
+      end
+
+      private def build_failure_message(diagnostics, last_error)
+        summary = diagnostics.map do |item|
+          fragment = "#{item[:provider]}: #{item[:status]}"
+          fragment += "(http=#{item[:http_status]})" if item[:http_status]
+          fragment += " error=#{item[:error]}" if item[:error]
+          fragment
+        end.join(", ")
+
+        suffix = if summary.empty?
+          "no provider diagnostics"
+        else
+          summary
+        end
+
+        if diagnostics.any? { |item| item[:status] == "no_results" }
+          "No search results from providers. Details: #{suffix}"
+        else
+          "All search providers failed. Details: #{suffix}. Last error: #{last_error&.message}"
+        end
       end
 
       # ── Shared HTTP helper ─────────────────────────────────────────────────
@@ -246,3 +307,4 @@ module Clacky
     end
   end
 end
+
