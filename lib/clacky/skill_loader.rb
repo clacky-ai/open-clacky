@@ -2,6 +2,7 @@
 
 require "pathname"
 require "fileutils"
+require "json"
 require "clacky"
 
 module Clacky
@@ -50,6 +51,7 @@ module Clacky
       clear
 
       load_default_skills
+      load_builtin_skills
       load_global_clacky_skills
       
       # Only load project-level skills when working_dir is explicitly provided.
@@ -121,11 +123,113 @@ module Clacky
       @shadowed_by_local || {}
     end
 
-    # Load skills from ~/.clacky/skills/ (user global)
+    # Load skills from ~/.clacky/skills/ — user-installed plain skills only.
+    # Builtin skills (installed by the onboard flow and tracked in
+    # builtin_skills.json) are loaded earlier by #load_builtin_skills, so
+    # we skip directories that are already registered to keep the loader
+    # idempotent and avoid duplicate-skill warnings.
     # @return [Array<Skill>]
     def load_global_clacky_skills
       global_clacky_dir = Pathname.new(ENV.fetch("HOME", "~")).join(".clacky", "skills")
-      load_skills_from_directory(global_clacky_dir, :global_clacky)
+      load_skills_from_directory(global_clacky_dir, :global_clacky, skip_existing: true)
+    end
+
+    # Load builtin skills installed by the onboard flow.
+    #
+    # Mirrors #load_default_skills in style: system-managed skills get their
+    # own dedicated loader, separate from user-installed global skills. The
+    # canonical source of truth is builtin_skills.json (the registry written
+    # by install_builtin_skills.rb) — we iterate the registry instead of
+    # globbing the directory so user-installed skills under the same
+    # ~/.clacky/skills/ root are never mistaken for builtins.
+    #
+    # i18n display fields (name_zh / description_zh) come from the registry
+    # and are overlaid onto the Skill via cached_metadata.
+    # @return [Array<Skill>]
+    private def load_builtin_skills
+      skills_dir = Pathname.new(Dir.home).join(".clacky", "skills")
+      return [] unless skills_dir.exist?
+
+      installed_metadata = self.class.cached_builtin_skills_metadata
+      return [] if installed_metadata.empty?
+
+      source_path = Pathname.new(Dir.home).join(".clacky")
+
+      installed_metadata.each_key do |skill_name|
+        skill_dir = skills_dir.join(skill_name)
+        next unless skill_dir.join("SKILL.md").exist?
+
+        cached_metadata = installed_metadata[skill_name]
+        load_single_skill(skill_dir, source_path, skill_name, :global_clacky, cached_metadata: cached_metadata)
+      end
+    end
+
+    # Read the local builtin_skills.json registry, cross-validated against the
+    # actual file system. A skill is only considered installed when:
+    #   1. It has an entry in builtin_skills.json, AND
+    #   2. Its skill directory exists under ~/.clacky/skills/, AND
+    #   3. That directory contains a SKILL.md.
+    #
+    # If the JSON record exists but the directory is missing or empty the entry
+    # is silently dropped from the result and the JSON file is cleaned up so
+    # subsequent loads start from a clean state.
+    #
+    # Returns a hash keyed by name: { "name" => ..., "name_zh" => ..., ... }
+    def self.cached_builtin_skills_metadata
+      skills_dir = File.join(Dir.home, ".clacky", "skills")
+      path = File.join(skills_dir, "builtin_skills.json")
+      return {} unless File.exist?(path)
+
+      raw = JSON.parse(File.read(path))
+
+      valid   = {}
+      changed = false
+
+      raw.each do |name, meta|
+        skill_dir = File.join(skills_dir, name)
+        has_files = Dir.exist?(skill_dir) && File.exist?(File.join(skill_dir, "SKILL.md"))
+
+        if has_files
+          valid[name] = meta
+        else
+          # JSON record exists but files are missing — mark for cleanup.
+          changed = true
+        end
+      end
+
+      if changed
+        File.write(path, JSON.generate(valid))
+      end
+
+      valid
+    rescue StandardError
+      {}
+    end
+
+    # Record a single installed builtin skill into builtin_skills.json — the
+    # canonical write path for builtin skill metadata. Mirrors
+    # BrandConfig#record_installed_skill so future callers (e.g. a cloud skill
+    # platform) can persist metadata uniformly.
+    # @param name [String] Skill slug (must match the on-disk directory name)
+    # @param description [String, nil] English description from the platform
+    # @param name_zh [String, nil] Chinese display name
+    # @param description_zh [String, nil] Chinese description
+    def self.record_installed_builtin_skill(name, description: nil, name_zh: nil, description_zh: nil)
+      slug = name.to_s.strip
+      return if slug.empty?
+
+      skills_dir = File.join(Dir.home, ".clacky", "skills")
+      FileUtils.mkdir_p(skills_dir)
+      path = File.join(skills_dir, "builtin_skills.json")
+      installed = cached_builtin_skills_metadata
+      installed[slug] = {
+        "name"           => slug,
+        "name_zh"        => name_zh.to_s,
+        "description"    => description.to_s,
+        "description_zh" => description_zh.to_s,
+        "installed_at"   => Time.now.utc.iso8601
+      }
+      File.write(path, JSON.generate(installed))
     end
 
     # Load skills from .clacky/skills/ (project-level, highest priority)
@@ -284,7 +388,16 @@ module Clacky
     end
 
 
-    def load_skills_from_directory(dir, source_type)
+    # Load skills from a directory tree.
+    #
+    # @param dir [Pathname] Root directory to scan
+    # @param source_type [Symbol] :global_clacky / :project_clacky / etc.
+    # @param skip_existing [Boolean] When true, skip skill names that are
+    #   already registered in @skills. Used by #load_global_clacky_skills to
+    #   avoid re-loading builtin skills that were already loaded by
+    #   #load_builtin_skills (and to avoid the duplicate-skill warning that
+    #   #register_skill would otherwise emit).
+    def load_skills_from_directory(dir, source_type, skip_existing: false)
       return [] unless dir.exist?
 
       source_path = case source_type
@@ -300,7 +413,10 @@ module Clacky
       dir.children.select(&:directory?).each do |entry|
         if entry.join("SKILL.md").exist?
           # Direct skill directory
-          skill = load_single_skill(entry, source_path, entry.basename.to_s, source_type)
+          skill_name = entry.basename.to_s
+          next if skip_existing && @skills.key?(skill_name)
+
+          skill = load_single_skill(entry, source_path, skill_name, source_type)
           skills << skill if skill
         else
           # Treat as a category directory — scan one level deeper for skills.
@@ -309,7 +425,10 @@ module Clacky
           entry.children.select(&:directory?).each do |skill_dir|
             next unless skill_dir.join("SKILL.md").exist?
 
-            skill = load_single_skill(skill_dir, source_path, skill_dir.basename.to_s, source_type)
+            skill_name = skill_dir.basename.to_s
+            next if skip_existing && @skills.key?(skill_name)
+
+            skill = load_single_skill(skill_dir, source_path, skill_name, source_type)
             skills << skill if skill
           end
         end
@@ -344,8 +463,8 @@ module Clacky
       nil
     end
 
-    private def load_single_skill(skill_dir, source_path, skill_name, source_type)
-      skill = Skill.new(skill_dir, source_path: source_path)
+    private def load_single_skill(skill_dir, source_path, skill_name, source_type, cached_metadata: nil)
+      skill = Skill.new(skill_dir, source_path: source_path, cached_metadata: cached_metadata)
       register_skill(skill, source: source_type)
       skill
     rescue Clacky::AgentError => e

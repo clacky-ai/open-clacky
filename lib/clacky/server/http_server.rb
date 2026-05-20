@@ -390,6 +390,7 @@ module Clacky
         when ["POST",   "/api/browser/toggle"]    then api_browser_toggle(res)
         when ["POST",   "/api/onboard/complete"]  then api_onboard_complete(req, res)
         when ["POST",   "/api/onboard/skip-soul"] then api_onboard_skip_soul(req, res)
+        when ["POST",   "/api/onboard/builtin-skills-meta"] then api_onboard_builtin_skills_meta(req, res)
         when ["GET",    "/api/store/skills"]          then api_store_skills(res)
         when ["GET",    "/api/brand/status"]      then api_brand_status(res)
         when ["POST",   "/api/brand/activate"]    then api_brand_activate(req, res)
@@ -664,6 +665,37 @@ module Clacky
           File.write(soul_path, soul_content)
         end
         json_response(res, 200, { ok: true })
+      end
+
+      # POST /api/onboard/builtin-skills-meta
+      # Called by the install_builtin_skills.rb child process after each batch
+      # of builtin skills is installed to ~/.clacky/skills/. The child posts the
+      # list of skills it just installed (with EN/ZH name+description harvested
+      # from the platform response); this handler persists each entry to
+      # ~/.clacky/skills/builtin_skills.json via SkillLoader.record_installed_builtin_skill.
+      #
+      # Mirrors the brand_skills.json registry shape so SkillLoader#load_global_clacky_skills
+      # can later overlay zh display fields without re-parsing every SKILL.md.
+      def api_onboard_builtin_skills_meta(req, res)
+        body = parse_json_body(req)
+        meta = body["meta"]
+        unless meta.is_a?(Array)
+          json_response(res, 400, { ok: false, error: "meta must be an array" })
+          return
+        end
+
+        meta.each do |entry|
+          next unless entry.is_a?(Hash)
+          name = entry["name"].to_s
+          next if name.empty?
+          SkillLoader.record_installed_builtin_skill(
+            name,
+            description:    entry["description"].to_s,
+            name_zh:        entry["name_zh"].to_s,
+            description_zh: entry["description_zh"].to_s,
+          )
+        end
+        json_response(res, 200, { ok: true, count: meta.size })
       end
 
       # ── Brand API ─────────────────────────────────────────────────────────────

@@ -406,6 +406,21 @@ module Clacky
 
       content = skill_file.read
       parse_frontmatter(content)
+
+      # Overlay display fields from the cached builtin_skills.json registry.
+      # The registry holds platform-authoritative name / description /
+      # name_zh / description_zh collected during onboard, so it is treated as
+      # the source of truth for what the user sees — SKILL.md frontmatter may
+      # be unnormalized (mixed zh/en, user-authored variants) and only acts as
+      # a fallback when the registry has no entry. Behavior fields parsed from
+      # frontmatter (user_invocable / agent / fork_agent / model / etc.) are
+      # left untouched.
+      if @cached_metadata
+        @name           = @cached_metadata["name"]           if @cached_metadata["name"].to_s.length.positive?
+        @name_zh        = @cached_metadata["name_zh"]        if @cached_metadata["name_zh"].to_s.length.positive?
+        @description    = @cached_metadata["description"]    if @cached_metadata["description"].to_s.length.positive?
+        @description_zh = @cached_metadata["description_zh"] if @cached_metadata["description_zh"].to_s.length.positive?
+      end
     end
 
     # Load a brand (encrypted) skill from SKILL.md.enc.
