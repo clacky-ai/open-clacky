@@ -3289,6 +3289,14 @@ body {
 .custom-select-trigger:hover {
   border-color: var(--color-text-muted);
 }
+/* Focus: same accent border as `.open` so users see "this is where to start"
+   without the dropdown auto-expanding. Used by onboard step 2 and the
+   settings "add model" flow to nudge users to pick a provider first. */
+.custom-select-trigger:focus,
+.custom-select-trigger:focus-visible {
+  outline: none;
+  border-color: var(--color-accent-primary);
+}
 .custom-select-trigger.open {
   border-color: var(--color-accent-primary);
 }
