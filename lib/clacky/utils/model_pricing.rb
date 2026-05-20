@@ -22,7 +22,7 @@ module Clacky
           read: 0.50                  # $0.50/MTok cache read
         }
       },
-      
+
       "claude-sonnet-4.5" => {
         input: {
           default: 3.00,              # $3/MTok for prompts ≤ 200K tokens
@@ -39,7 +39,7 @@ module Clacky
           read_over_200k: 0.60        # $0.60/MTok cache read (> 200K)
         }
       },
-      
+
       "claude-haiku-4.5" => {
         input: {
           default: 1.00,              # $1/MTok
@@ -122,7 +122,7 @@ module Clacky
         },
         cache: {
           write: 0.14,                    # DeepSeek doesn't charge extra for writes; bill at miss rate
-          read: 0.028                     # $0.028/MTok cache hit
+          read: 0.0028                     # $0.0028/MTok cache hit
         }
       },
 
@@ -137,7 +137,7 @@ module Clacky
         },
         cache: {
           write: 1.74,                    # no separate write charge; bill at miss rate
-          read: 0.145                     # $0.145/MTok cache hit
+          read: 0.0145                     # $0.0145/MTok cache hit
         }
       },
 
@@ -352,6 +352,58 @@ module Clacky
         cache:  { write: 0.30, read: 0.06 }
       },
 
+      # Qwen (Alibaba DashScope) — USD per 1M tokens, Singapore region list price.
+      # Source: Alibaba Cloud Model Studio international pricing.
+      # Cache convention (mirrors DeepSeek/Kimi/GLM "displayed ≤ actual"):
+      #   - DashScope has two cache modes; implicit is auto-on, explicit is opt-in.
+      #     Implicit: write @ 100% input, read @ 20% input (no setup, no guarantee)
+      #     Explicit: write @ 125% input, read @ 10% input (cache_control marker)
+      #   - We bill writes at the regular input rate (matches implicit, and avoids
+      #     surprising users with the explicit 25% surcharge).
+      #   - We bill reads at 20% (implicit rate) — the conservative side; users on
+      #     explicit caching will see real bills slightly *lower* than displayed.
+      "qwen3.6-plus" => {
+        input:  { default: 0.40, over_200k: 0.40 },
+        output: { default: 2.40, over_200k: 2.40 },
+        cache:  { write: 0.40, read: 0.08 }
+      },
+
+      "qwen3.6-max" => {
+        input:  { default: 1.20, over_200k: 1.20 },
+        output: { default: 6.00, over_200k: 6.00 },
+        cache:  { write: 1.20, read: 0.24 }
+      },
+
+      "qwen3.6-27b" => {
+        input:  { default: 0.20, over_200k: 0.20 },
+        output: { default: 0.80, over_200k: 0.80 },
+        cache:  { write: 0.20, read: 0.04 }
+      },
+
+      "qwen3.6-flash" => {
+        input:  { default: 0.15, over_200k: 0.15 },
+        output: { default: 0.90, over_200k: 0.90 },
+        cache:  { write: 0.15, read: 0.03 }
+      },
+
+      "qwen-plus-latest" => {
+        input:  { default: 0.40, over_200k: 0.40 },
+        output: { default: 1.20, over_200k: 1.20 },
+        cache:  { write: 0.40, read: 0.08 }
+      },
+
+      "qwen-vl-plus" => {
+        input:  { default: 0.14, over_200k: 0.14 },
+        output: { default: 0.41, over_200k: 0.41 },
+        cache:  { write: 0.14, read: 0.028 }
+      },
+
+      "qwen-vl-max" => {
+        input:  { default: 0.52, over_200k: 0.52 },
+        output: { default: 2.08, over_200k: 2.08 },
+        cache:  { write: 0.52, read: 0.104 }
+      },
+
     }.freeze
 
     # Threshold for tiered pricing (200K tokens)
@@ -361,7 +413,7 @@ module Clacky
 
     class << self
       # Calculate cost for the given model and usage
-      # 
+      #
       # @param model [String] Model identifier
       # @param usage [Hash] Usage statistics containing:
       #   - prompt_tokens: number of input tokens
@@ -384,24 +436,24 @@ module Clacky
         completion_tokens = usage[:completion_tokens] || 0
         cache_write_tokens = usage[:cache_creation_input_tokens] || 0
         cache_read_tokens = usage[:cache_read_input_tokens] || 0
-        
+
         # Determine if we're in the over_200k tier
         # Note: prompt_tokens includes cache_read_tokens but NOT cache_write_tokens
         # cache_write_tokens are additional tokens that were written to cache
         total_input_tokens = prompt_tokens + cache_write_tokens
         over_threshold = total_input_tokens > TIERED_PRICING_THRESHOLD
-        
+
         # Calculate regular input cost (non-cached tokens)
         # prompt_tokens already includes cache_read_tokens, so we need to subtract them
         # cache_write_tokens are not part of prompt_tokens, so they're handled separately in cache_cost
         regular_input_tokens = prompt_tokens - cache_read_tokens
         input_rate = over_threshold ? pricing[:input][:over_200k] : pricing[:input][:default]
         input_cost = (regular_input_tokens / 1_000_000.0) * input_rate
-        
+
         # Calculate output cost
         output_rate = over_threshold ? pricing[:output][:over_200k] : pricing[:output][:default]
         output_cost = (completion_tokens / 1_000_000.0) * output_rate
-        
+
         # Calculate cache costs
         cache_cost = calculate_cache_cost(
           pricing: pricing,
@@ -409,24 +461,24 @@ module Clacky
           cache_read_tokens: cache_read_tokens,
           over_threshold: over_threshold
         )
-        
+
         {
           cost: input_cost + output_cost + cache_cost,
           source: source
         }
       end
-      
+
       # Get pricing for a specific model
       # Falls back to default pricing if model not found
-      # 
+      #
       # @param model [String] Model identifier
       # @return [Hash] Pricing structure for the model
       def get_pricing(model)
         get_pricing_with_source(model)[:pricing]
       end
-      
+
       # Get pricing with source information
-      # 
+      #
       # @param model [String] Model identifier
       # @return [Hash] Hash containing:
       #   - pricing: Pricing structure or nil if model is unknown
@@ -446,18 +498,18 @@ module Clacky
           { pricing: nil, source: nil }
         end
       end
-      
-      
+
+
       # Normalize model name to match pricing table keys.
       # Returns the canonical key on match, or nil when no pricing is available.
       def normalize_model_name(model)
         return nil if model.nil? || model.empty?
-        
+
         model = model.downcase.strip
-        
+
         # Direct match
         return model if PRICING_TABLE.key?(model)
-        
+
         # Check for Claude model variations
         # Support both dot and dash separators (e.g., "4.5", "4-5", "4-6")
         # Also handles Bedrock cross-region prefixes (e.g. "jp.anthropic.claude-sonnet-4-6")
@@ -514,6 +566,25 @@ module Clacky
         when /^minimax-m2\.7$/i
           "minimax-m2.7"
 
+        # Qwen (Alibaba DashScope) — strict anchored match per registered
+        # model id in providers.rb. qwen3.6-* are the new flagship line;
+        # qwen-plus-latest is the rolling alias for the latest Qwen-Plus
+        # release; qwen-vl-* are the multimodal SKUs.
+        when /^qwen3\.6-plus$/i
+          "qwen3.6-plus"
+        when /^qwen3\.6-max$/i
+          "qwen3.6-max"
+        when /^qwen3\.6-27b$/i
+          "qwen3.6-27b"
+        when /^qwen3\.6-flash$/i
+          "qwen3.6-flash"
+        when /^qwen-plus-latest$/i
+          "qwen-plus-latest"
+        when /^qwen-vl-plus$/i
+          "qwen-vl-plus"
+        when /^qwen-vl-max$/i
+          "qwen-vl-max"
+
         # OpenAI GPT-5.x models — match various dashed/dotted/compact forms
         # (e.g. "gpt-5.5", "gpt-5-5", "gpt5.5", "gpt55")
         when /^gpt-?5\.?5$/i, /^gpt-?5[\.-]?5$/i
@@ -533,11 +604,11 @@ module Clacky
           nil  # No pricing available for this model — cost will show as N/A
         end
       end
-      
+
       # Calculate cache-related costs
       def calculate_cache_cost(pricing:, cache_write_tokens:, cache_read_tokens:, over_threshold:)
         cache_cost = 0.0
-        
+
         # Cache write cost
         if cache_write_tokens > 0
           write_rate = if pricing[:cache].key?(:write)
@@ -549,10 +620,10 @@ module Clacky
                        else
                          pricing[:cache][:write_default]
                        end
-          
+
           cache_cost += (cache_write_tokens / 1_000_000.0) * write_rate
         end
-        
+
         # Cache read cost
         if cache_read_tokens > 0
           read_rate = if pricing[:cache].key?(:read)
@@ -564,10 +635,10 @@ module Clacky
                       else
                         pricing[:cache][:read_default]
                       end
-          
+
           cache_cost += (cache_read_tokens / 1_000_000.0) * read_rate
         end
-        
+
         cache_cost
       end
     end

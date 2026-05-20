@@ -1394,7 +1394,11 @@ module Clacky
           sleep 0.5  # Let WEBrick flush the HTTP response
 
           if @master_pid
-            # Worker mode: tell master to hot-restart, then exit cleanly.
+            # Worker mode: tell master to hot-restart. Master will TERM us after the
+            # new worker boots; our trap("TERM") then runs shutdown_proc, which detaches
+            # the inherited listen socket before WEBrick shutdown. Do NOT exit(0) here —
+            # that bypasses trap handlers and lets the OS close(fd) on a socket shared
+            # with master+new worker, corrupting the listener on Linux/WSL.
             Clacky::Logger.info("[Restart] Sending USR1 to master (PID=#{@master_pid})")
             begin
               Process.kill("USR1", @master_pid)
@@ -1402,7 +1406,6 @@ module Clacky
               Clacky::Logger.warn("[Restart] Master PID=#{@master_pid} not found, falling back to exec.")
               standalone_exec_restart
             end
-            exit(0)
           else
             # Standalone mode (no master): fall back to the original exec approach.
             standalone_exec_restart

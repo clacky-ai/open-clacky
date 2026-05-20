@@ -795,6 +795,20 @@ module Clacky
         @legacy_progress_handles[type] = start_progress(message: display, style: style)
       end
 
+      # Stream-only update for the live thinking progress. Unlike
+      # +show_progress(progress_type: "thinking", phase: "active")+, this
+      # NEVER creates a new handle — if no thinking handle is currently
+      # alive (e.g. we're inside an idle-compression call_llm where only
+      # the quiet "Compressing..." handle is on the stack), the streamed
+      # token counts are silently dropped instead of spawning a primary
+      # spinner that would push the compression progress off-screen.
+      def stream_thinking_progress(input_tokens:, output_tokens:)
+        @legacy_progress_handles ||= {}
+        existing = @legacy_progress_handles["thinking"]
+        return unless existing&.running?
+        existing.update(metadata: { input_tokens: input_tokens, output_tokens: output_tokens })
+      end
+
       # ---------------------------------------------------------------------
       # (Legacy dead-code removed: the old imperative show_progress body
       # used to live here and is now superseded by the shim + owner

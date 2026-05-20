@@ -36,6 +36,20 @@ module Clacky
     # metadata: extensible hash (e.g., {attempt: 3, total: 10} for retries)
     def show_progress(message = nil, prefix_newline: true, progress_type: "thinking", phase: "active", metadata: {}); end
 
+    # Update the live "thinking" progress with streamed token counts.
+    # This is *purely decorative*: it must NEVER start a new progress
+    # indicator. If no thinking progress is currently active (e.g. during
+    # idle compression, where only a quiet "Compressing..." progress is
+    # live), the call is a no-op. UI2 overrides this; other UIs delegate
+    # to show_progress.
+    def stream_thinking_progress(input_tokens:, output_tokens:)
+      show_progress(
+        progress_type: "thinking",
+        phase: "active",
+        metadata: { input_tokens: input_tokens, output_tokens: output_tokens }
+      )
+    end
+
     # === Progress (v2: owned handles) ===
     #
     # Start a new progress indicator and return an owned handle. The caller

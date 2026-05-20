@@ -2113,7 +2113,6 @@ body {
   list-style: none;
   color: var(--color-text-tertiary);
   font-size: 12px;
-  font-style: italic;
   transition: color 0.15s;
 }
 .thinking-summary::-webkit-details-marker { display: none; }
@@ -2137,9 +2136,6 @@ body {
   font-size: 12px;
   line-height: 1.5;
   color: var(--color-text-tertiary);
-  white-space: pre-wrap;
-  word-break: break-word;
-  font-style: italic;
 }
 
 /* Inline image thumbnails inside user message bubbles */
@@ -3334,6 +3330,14 @@ body {
 .custom-select-trigger:hover {
   border-color: var(--color-text-muted);
 }
+/* Focus: same accent border as `.open` so users see "this is where to start"
+   without the dropdown auto-expanding. Used by onboard step 2 and the
+   settings "add model" flow to nudge users to pick a provider first. */
+.custom-select-trigger:focus,
+.custom-select-trigger:focus-visible {
+  outline: none;
+  border-color: var(--color-accent-primary);
+}
 .custom-select-trigger.open {
   border-color: var(--color-accent-primary);
 }
@@ -4341,6 +4345,11 @@ body {
 }
 .skill-toggle:hover::after {
   opacity: 1;
+}
+/* Flip tooltip below when near top of scroll container */
+.skill-toggle-flip::after {
+  bottom: auto;
+  top: calc(100% + 8px);
 }
 .skill-toggle-disabled {
   cursor: not-allowed;

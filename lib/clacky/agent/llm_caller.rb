@@ -763,11 +763,7 @@ module Clacky
           now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
           return if now - last_emit_at < min_interval && output_tokens > 0
           last_emit_at = now
-          @ui.show_progress(
-            progress_type: "thinking",
-            phase: "active",
-            metadata: { input_tokens: input_tokens, output_tokens: output_tokens }
-          )
+          @ui.stream_thinking_progress(input_tokens: input_tokens, output_tokens: output_tokens)
         }
       end
     end

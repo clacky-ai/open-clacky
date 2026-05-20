@@ -121,47 +121,43 @@ The script runs all steps sequentially and stops on any failure. Monitor the out
 
 ### 4. Present release summary
 
-After the script completes successfully, present this summary:
+After the script completes successfully, present a concise summary. The output will often be read in WeChat, so keep it compact and avoid template-like formatting that triggers message folding.
 
-```
-🎉 v{version} released successfully!
-
-✨ Highlight: [One sentence — the biggest user-visible change, verb + value phrasing]
-
-📦 What's new for users:
-
-**New Features**
-- [translate each "Added" item into plain user-facing language]
-
-**Improvements**
-- [translate each "Improved" item into plain user-facing language]
-
-**Bug Fixes**
-- [translate each "Fixed" item into plain user-facing language]
-
-🧪 Testing suggestions:
-| Feature | How to verify |
-|---------|--------------|
-| [key new feature] | [concrete steps to test] |
-
-🔗 Links:
-- RubyGems: https://rubygems.org/gems/openclacky/versions/{version}
-- GitHub Release: https://github.com/clacky-ai/openclacky/releases/tag/v{version}
-
-⬆️ Upgrade:
-- In the Clacky UI, click "Upgrade" in the bottom-left → detect new version → click upgrade → done
-- Manual upgrade (CLI): gem update openclacky
-
-🆕 Fresh install:
-/bin/bash -c "$(curl -sSL https://raw.githubusercontent.com/clacky-ai/openclacky/main/scripts/install.sh)"
-```
-
-Summary writing rules:
-- Write from the user's perspective — what they can now do, or what problem is fixed
-- Avoid technical jargon; explain what things mean
+Rules:
+- No emojis
+- No tables (use a compact list if you need to list items)
+- No multi-line code blocks
+- Write as a natural, flowing message — not a structured report
 - Skip "More" / chore items unless they directly affect users
-- Keep each bullet to one sentence, action-oriented
-- Testing suggestions: 3–8 items with concrete, actionable verification steps
+- Write from the user's perspective — what they can now do, or what problem is fixed
+- Translate technical terms into plain language
+- Keep each item one sentence, action-oriented
+
+Format (flexible — adapt as needed, but roughly):
+
+```
+v{version} released.
+
+[One sentence highlight — the biggest user-visible change.]
+
+Added:
+- [translate each "Added" item]
+- ...
+
+Improved:
+- [translate each "Improved" item]
+- ...
+
+Fixed:
+- [translate each "Fixed" item]
+- ...
+
+Upgrade: click "Upgrade" in Web UI bottom-left, or `gem update openclacky`
+Fresh install: curl -sSL https://raw.githubusercontent.com/clacky-ai/openclacky/main/scripts/install.sh | bash
+
+RubyGems: https://rubygems.org/gems/openclacky/versions/{version}
+GitHub: https://github.com/clacky-ai/openclacky/releases/tag/v{version}
+```
 
 ## Pre-Release Caveats
 

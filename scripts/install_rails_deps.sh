@@ -133,9 +133,10 @@ DEFAULT_NPM_REGISTRY="https://registry.npmjs.org"
 DEFAULT_MISE_INSTALL_URL="https://mise.run"
 
 CN_CDN_BASE_URL="https://oss.1024code.com"
+CN_ALIYUN_MIRROR="https://mirrors.aliyun.com"
 CN_MISE_INSTALL_URL="${CN_CDN_BASE_URL}/mise.sh"
 CN_RUBY_PRECOMPILED_URL="${CN_CDN_BASE_URL}/ruby/ruby-{version}.{platform}.tar.gz"
-CN_RUBYGEMS_URL="https://mirrors.aliyun.com/rubygems/"
+CN_RUBYGEMS_URL="${CN_ALIYUN_MIRROR}/rubygems/"
 CN_NPM_REGISTRY="https://registry.npmmirror.com"
 CN_NODE_MIRROR_URL="https://cdn.npmmirror.com/binaries/node/"
 CN_GEM_BASE_URL="${CN_CDN_BASE_URL}/openclacky"
@@ -282,20 +283,40 @@ setup_apt_mirror() {
 
     if [ "$USE_CN_MIRRORS" = true ]; then
         print_info "Region: China — configuring Aliyun apt mirror"
-        local codename="${VERSION_CODENAME:-jammy}"
-        local components="main restricted universe multiverse"
-        local arch; arch=$(dpkg --print-architecture 2>/dev/null || uname -m)
-        if [ "$arch" = "arm64" ] || [ "$arch" = "aarch64" ]; then
-            local mirror="https://mirrors.aliyun.com/ubuntu-ports/"
-        else
-            local mirror="https://mirrors.aliyun.com/ubuntu/"
+
+        if [ -f /etc/apt/sources.list ]; then
+            sudo cp /etc/apt/sources.list /etc/apt/sources.list.bak
+            print_info "Backed up /etc/apt/sources.list to sources.list.bak"
         fi
-        sudo tee /etc/apt/sources.list > /dev/null <<EOF
+
+        if [ "$DISTRO" = "debian" ]; then
+            local codename="${VERSION_CODENAME:-bookworm}"
+            local components="main contrib non-free non-free-firmware"
+            local mirror="${CN_ALIYUN_MIRROR}/debian/"
+            local security_mirror="${CN_ALIYUN_MIRROR}/debian-security/"
+            sudo tee /etc/apt/sources.list > /dev/null <<EOF
+deb ${mirror} ${codename} ${components}
+deb ${mirror} ${codename}-updates ${components}
+deb ${mirror} ${codename}-backports ${components}
+deb ${security_mirror} ${codename}-security ${components}
+EOF
+        else
+            local codename="${VERSION_CODENAME:-jammy}"
+            local components="main restricted universe multiverse"
+            local arch; arch=$(dpkg --print-architecture 2>/dev/null || uname -m)
+            if [ "$arch" = "arm64" ] || [ "$arch" = "aarch64" ]; then
+                local mirror="${CN_ALIYUN_MIRROR}/ubuntu-ports/"
+            else
+                local mirror="${CN_ALIYUN_MIRROR}/ubuntu/"
+            fi
+            sudo tee /etc/apt/sources.list > /dev/null <<EOF
 deb ${mirror} ${codename} ${components}
 deb ${mirror} ${codename}-updates ${components}
 deb ${mirror} ${codename}-backports ${components}
 deb ${mirror} ${codename}-security ${components}
 EOF
+        fi
+
         print_success "apt mirror set to Aliyun"
     else
         print_info "Region: global — using default apt sources"

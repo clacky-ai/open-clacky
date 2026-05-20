@@ -182,7 +182,23 @@ module Clacky
             func  = tc[:function] || tc
             name  = func[:name]  || tc[:name]
             raw_args = func[:arguments] || tc[:arguments]
-            input = raw_args.is_a?(String) ? JSON.parse(raw_args) : raw_args
+            input =
+              if raw_args.is_a?(String)
+                begin
+                  JSON.parse(raw_args)
+                rescue JSON::ParserError => e
+                  Clacky::Logger.warn("message_format.anthropic.tool_args_parse_failed",
+                    tool_name: name.to_s,
+                    tool_call_id: tc[:id].to_s,
+                    args_len: raw_args.length,
+                    args_head: raw_args[0, 120],
+                    error: e.message
+                  ) if defined?(Clacky::Logger)
+                  {}
+                end
+              else
+                raw_args
+              end
             blocks << { type: "tool_use", id: tc[:id], name: name, input: input || {} }
           end
 

@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.3] - 2026-05-20
+
+### Added
+- Qwen3.6 (qwen3.6) model provider
+- Provider dropdown auto-focuses when opening model config in onboarding and settings
+- Dockerfile for containerized deployment
+- Debian apt mirror support for CN users, with refactored mirror configuration
+
+### Fixed
+- History file parsing incorrectly handles certain message formats
+- DeepSeek model pricing and token counting
+- Compression progress bar display during message compression
+- DingTalk: markdown message rendering, file/image delivery failures, and inbound file message type handling
+
 ## [1.1.2] - 2026-05-20
 
 ### Added
