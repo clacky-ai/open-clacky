@@ -26,9 +26,11 @@ module Clacky
     # emitted by Agent#replay_history without broadcasting over WebSocket.
     # Implements the same show_* interface as WebUIController.
     class HistoryCollector
-      def initialize(session_id, events)
+      def initialize(session_id, events, show_tool_trace: true, show_token_usage: true)
         @session_id = session_id
         @events     = events
+        @show_tool_trace = show_tool_trace
+        @show_token_usage = show_token_usage
       end
 
       def show_user_message(content, created_at: nil, files: [])
@@ -58,11 +60,22 @@ module Clacky
         return if content.nil? || content.to_s.strip.empty?
 
         # Rewrite local image paths to /api/local-image proxy URLs for browser rendering
-        rewritten = Utils::FileProcessor.rewrite_local_image_urls(content.to_s)
+        visible_content = filter_thinking_tags(content.to_s)
+        return if visible_content.strip.empty?
+
+        rewritten = Utils::FileProcessor.rewrite_local_image_urls(visible_content)
         @events << { type: "assistant_message", session_id: @session_id, content: rewritten }
       end
 
+      private def filter_thinking_tags(content)
+        content
+          .gsub(%r{<think(?:ing)?>[\s\S]*?</think(?:ing)?>}mi, "")
+          .strip
+      end
+
       def show_tool_call(name, args)
+        return unless @show_tool_trace
+
         args_data = args.is_a?(String) ? (JSON.parse(args) rescue args) : args
         summary   = tool_call_summary(name, args_data)
         @events << { type: "tool_call", session_id: @session_id, name: name, args: args_data, summary: summary }
@@ -80,10 +93,13 @@ module Clacky
       end
 
       def show_tool_result(result)
+        return unless @show_tool_trace
+
         @events << { type: "tool_result", session_id: @session_id, result: result }
       end
 
       def show_token_usage(token_data)
+        return unless @show_token_usage
         return unless token_data.is_a?(Hash)
 
         @events << { type: "token_usage", session_id: @session_id }.merge(token_data)
@@ -147,6 +163,47 @@ module Clacky
         - 耐心细致地调试复杂问题
         - 将大目标拆解为可执行的小步骤
       MD
+
+      HOSTED_UI_POLICY_DEFAULT = {
+        "locale" => {
+          "code" => "en",
+          "editable" => true
+        },
+        "views" => {
+          "welcome" => true,
+          "chat" => true,
+          "settings" => true,
+          "skills" => true,
+          "tasks" => true,
+          "channels" => true,
+          "profile" => true,
+          "trash" => true,
+          "creator" => true
+        },
+        "actions" => {
+          "edit_models" => true,
+          "manage_skills" => true,
+          "manage_profile" => true,
+          "manage_memories" => true,
+          "manage_tasks" => true,
+          "manage_channels" => true,
+          "manage_brand" => true,
+          "manage_browser" => true,
+          "manage_session_model" => true,
+          "manage_working_dir" => true,
+          "manage_upgrade" => true
+        },
+        "chat" => {
+          "show_slash_button" => true,
+          "show_skill_autocomplete" => true,
+          "show_session_info_bar" => true,
+          "show_tool_trace" => true,
+          "show_token_usage" => true,
+          "show_cost" => true,
+          "allow_model_switch" => true,
+          "allow_working_dir_switch" => true
+        }
+      }.freeze
 
       def initialize(host: "127.0.0.1", port: 7070, agent_config:, client_factory:, brand_test: false, sessions_dir: nil, socket: nil, master_pid: nil)
         @host           = host
@@ -298,8 +355,13 @@ module Clacky
 
         server.mount_proc("/") do |req, res|
           if req.path == "/" || req.path == "/index.html"
-            product_name = Clacky::BrandConfig.load.product_name || "OpenClacky"
-            html = File.read(index_html_path).gsub("{{BRAND_NAME}}", product_name)
+            product_name = Clacky::BrandConfig.load.product_name || ENV.fetch("NOKNO_BRAND_NAME", "OpenClacky")
+            hosted_flag = hosted_ui_enabled?
+            hosted_policy_script = "<script>window.CLACKY_UI_POLICY=#{JSON.generate(hosted_ui_policy)};</script>"
+            hosted_script = "<script>window.NOKNO_HOSTED_MODE=#{hosted_flag};</script>"
+            html = File.read(index_html_path)
+                       .gsub("{{BRAND_NAME}}", product_name)
+                       .sub("</head>", "  #{hosted_script}\n  #{hosted_policy_script}\n</head>")
             res.status                = 200
             res["Content-Type"]       = "text/html; charset=utf-8"
             res["Cache-Control"]      = "no-store"
@@ -372,6 +434,11 @@ module Clacky
       def _dispatch_rest(req, res)
         path   = req.path
         method = req.request_method
+
+        hosted_action = hosted_action_for_request(method, path)
+        if hosted_action && !ui_action_allowed?(hosted_action)
+          return forbid_hosted_action(res, hosted_action)
+        end
 
         case [method, path]
         when ["GET",    "/api/sessions"]      then api_list_sessions(req, res)
@@ -543,6 +610,9 @@ module Clacky
 
         raw_dir = body["working_dir"].to_s.strip
         working_dir = raw_dir.empty? ? default_working_dir : File.expand_path(raw_dir)
+        unless hosted_workspace_allowed?(working_dir)
+          return json_response(res, 403, { error: "working_dir is outside NOKNO_WORKSPACE_DIR" })
+        end
 
         # Optional model override — passed as a stable model id (matches the
         # id returned by GET /api/config). Name-based override was removed:
@@ -1016,6 +1086,17 @@ module Clacky
       # Returns current version and latest version from RubyGems (cached for 1 hour).
       def api_get_version(res)
         current = Clacky::VERSION
+        if ENV.fetch("NOKNO_DISABLE_WEB_UPGRADE", "false") == "true"
+          return json_response(res, 200, {
+            current:      current,
+            latest:       current,
+            needs_update: false,
+            launcher:     "nokno-nas",
+            cli_command:  "openclacky",
+            upgrade_disabled: true
+          })
+        end
+
         latest  = fetch_latest_version_cached
         brand   = Clacky::BrandConfig.load
         cli_cmd = brand.branded? && brand.package_name && !brand.package_name.empty? ? brand.package_name : "openclacky"
@@ -1033,6 +1114,10 @@ module Clacky
       # If the user's gem source is the official RubyGems, use `gem update`.
       # Otherwise (e.g. Aliyun mirror) download the .gem from OSS CDN to bypass mirror lag.
       def api_upgrade_version(req, res)
+        if ENV.fetch("NOKNO_DISABLE_WEB_UPGRADE", "false") == "true"
+          return json_response(res, 403, { ok: false, error: "Web upgrade is disabled in nokno NAS hosted mode" })
+        end
+
         json_response(res, 202, { ok: true, message: "Upgrade started" })
 
         Thread.new do
@@ -2918,7 +3003,12 @@ module Clacky
 
         # Collect events emitted by replay_history via a lightweight collector UI
         collected = []
-        collector = HistoryCollector.new(session_id, collected)
+        collector = HistoryCollector.new(
+          session_id,
+          collected,
+          show_tool_trace: ui_chat_enabled?("show_tool_trace"),
+          show_token_usage: ui_chat_enabled?("show_token_usage")
+        )
         result    = agent.replay_history(collector, limit: limit, before: before)
 
         json_response(res, 200, { events: collected, has_more: result[:has_more] })
@@ -3099,6 +3189,9 @@ module Clacky
 
         # Expand ~ to home directory
         expanded_dir = File.expand_path(new_dir)
+        unless hosted_workspace_allowed?(expanded_dir)
+          return json_response(res, 403, { error: "working_dir is outside NOKNO_WORKSPACE_DIR" })
+        end
         
         # Validate directory exists
         unless Dir.exist?(expanded_dir)
@@ -3645,7 +3738,159 @@ module Clacky
       # ── Helpers ───────────────────────────────────────────────────────────────
 
       def default_working_dir
+        configured = ENV.fetch("NOKNO_WORKSPACE_DIR", "").strip
+        return File.expand_path(configured) unless configured.empty?
+
         File.expand_path("~/clacky_workspace")
+      end
+
+      def hosted_ui_enabled?
+        compat_hosted_mode? || !hosted_ui_policy_file.empty?
+      end
+
+      def hosted_ui_policy
+        @hosted_ui_policy ||= begin
+          merged = JSON.parse(JSON.generate(HOSTED_UI_POLICY_DEFAULT))
+          file = hosted_ui_policy_file
+          if !file.empty? && File.file?(file)
+            loaded = YAML.safe_load(File.read(file), permitted_classes: [], permitted_symbols: [], aliases: false) || {}
+            deep_merge_policy!(merged, normalize_policy_hash(loaded))
+          elsif !file.empty?
+            Clacky::Logger.warn("[HttpServer] Hosted UI policy file not found: #{file}")
+          end
+          merged
+        rescue StandardError => e
+          Clacky::Logger.warn("[HttpServer] Failed to load hosted UI policy: #{e.class}: #{e.message}")
+          JSON.parse(JSON.generate(HOSTED_UI_POLICY_DEFAULT))
+        end
+      end
+
+      def ui_view_enabled?(name)
+        value = hosted_ui_policy.dig("views", name.to_s)
+        value.nil? ? true : !!value
+      end
+
+      def ui_action_allowed?(name)
+        return true unless hosted_ui_enabled?
+
+        value = hosted_ui_policy.dig("actions", name.to_s)
+        value.nil? ? true : !!value
+      end
+
+      def ui_chat_enabled?(name)
+        value = hosted_ui_policy.dig("chat", name.to_s)
+        value.nil? ? true : !!value
+      end
+
+      def hosted_action_for_request(method, path)
+        case
+        when method == "POST" && path == "/api/config/models"
+          "edit_models"
+        when method == "POST" && path == "/api/config/test"
+          "edit_models"
+        when method == "POST" && path.match?(%r{^/api/config/models/[^/]+/default$})
+          "edit_models"
+        when method == "PATCH" && path.match?(%r{^/api/config/models/[^/]+$})
+          "edit_models"
+        when method == "DELETE" && path.match?(%r{^/api/config/models/[^/]+$})
+          "edit_models"
+        when method == "PATCH" && path.match?(%r{^/api/skills/[^/]+/toggle$})
+          "manage_skills"
+        when method == "POST" && path.match?(%r{^/api/brand/skills/[^/]+/install$})
+          "manage_skills"
+        when method == "POST" && path.match?(%r{^/api/my-skills/[^/]+/publish$})
+          "manage_skills"
+        when method == "PUT" && path == "/api/profile"
+          "manage_profile"
+        when method == "POST" && path == "/api/memories"
+          "manage_memories"
+        when method == "PUT" && path.match?(%r{^/api/memories/[^/]+$})
+          "manage_memories"
+        when method == "DELETE" && path.match?(%r{^/api/memories/[^/]+$})
+          "manage_memories"
+        when method == "POST" && path == "/api/cron-tasks"
+          "manage_tasks"
+        when method == "POST" && path.match?(%r{^/api/cron-tasks/[^/]+/run$})
+          "manage_tasks"
+        when method == "PATCH" && path.match?(%r{^/api/cron-tasks/[^/]+$})
+          "manage_tasks"
+        when method == "DELETE" && path.match?(%r{^/api/cron-tasks/[^/]+$})
+          "manage_tasks"
+        when method == "POST" && path.start_with?("/api/channels/")
+          "manage_channels"
+        when method == "PATCH" && path.match?(%r{^/api/channels/[^/]+/enabled$})
+          "manage_channels"
+        when method == "DELETE" && path.start_with?("/api/channels/")
+          "manage_channels"
+        when method == "POST" && path == "/api/browser/configure"
+          "manage_browser"
+        when method == "POST" && path == "/api/browser/reload"
+          "manage_browser"
+        when method == "POST" && path == "/api/browser/toggle"
+          "manage_browser"
+        when method == "POST" && path == "/api/brand/activate"
+          "manage_brand"
+        when method == "DELETE" && path == "/api/brand/license"
+          "manage_brand"
+        when method == "PATCH" && path.match?(%r{^/api/sessions/[^/]+/model$})
+          "manage_session_model"
+        when method == "POST" && path.match?(%r{^/api/sessions/[^/]+/benchmark$})
+          "manage_session_model"
+        when method == "PATCH" && path.match?(%r{^/api/sessions/[^/]+/working_dir$})
+          "manage_working_dir"
+        when method == "POST" && path == "/api/version/upgrade"
+          "manage_upgrade"
+        when method == "POST" && path == "/api/restart"
+          "manage_upgrade"
+        end
+      end
+
+      def forbid_hosted_action(res, action)
+        json_response(res, 403, {
+          ok: false,
+          error: "Hosted UI policy forbids #{action}"
+        })
+      end
+
+      def hosted_ui_policy_file
+        ENV.fetch("CLACKY_UI_POLICY_FILE", "").strip
+      end
+
+      def compat_hosted_mode?
+        ENV.fetch("NOKNO_HOSTED_MODE", "false") == "true"
+      end
+
+      def normalize_policy_hash(obj)
+        case obj
+        when Hash
+          obj.each_with_object({}) do |(key, value), memo|
+            memo[key.to_s] = normalize_policy_hash(value)
+          end
+        when Array
+          obj.map { |value| normalize_policy_hash(value) }
+        else
+          obj
+        end
+      end
+
+      def deep_merge_policy!(target, source)
+        source.each do |key, value|
+          if target[key].is_a?(Hash) && value.is_a?(Hash)
+            deep_merge_policy!(target[key], value)
+          else
+            target[key] = value
+          end
+        end
+        target
+      end
+
+      def hosted_workspace_allowed?(path)
+        root = ENV.fetch("NOKNO_WORKSPACE_DIR", "").strip
+        return true if root.empty?
+
+        expanded_root = File.expand_path(root)
+        expanded_path = File.expand_path(path)
+        expanded_path == expanded_root || expanded_path.start_with?("#{expanded_root}#{File::SEPARATOR}")
       end
 
       # Create a session in the registry and wire up Agent + WebUIController.
@@ -3688,7 +3933,12 @@ module Clacky
         )
 
         broadcaster = method(:broadcast)
-        ui = WebUIController.new(session_id, broadcaster)
+        ui = WebUIController.new(
+          session_id,
+          broadcaster,
+          show_tool_trace: ui_chat_enabled?("show_tool_trace"),
+          show_token_usage: ui_chat_enabled?("show_token_usage")
+        )
         agent = Clacky::Agent.new(client, config, working_dir: working_dir, ui: ui, profile: profile,
                                   session_id: session_id, source: source)
         agent.rename(name) unless name.nil? || name.empty?
@@ -3717,7 +3967,12 @@ module Clacky
         config = @agent_config.deep_copy
         config.permission_mode = permission_mode
         broadcaster = method(:broadcast)
-        ui = WebUIController.new(original_id, broadcaster)
+        ui = WebUIController.new(
+          original_id,
+          broadcaster,
+          show_tool_trace: ui_chat_enabled?("show_tool_trace"),
+          show_token_usage: ui_chat_enabled?("show_token_usage")
+        )
         # Restore the agent profile from the persisted session; fall back to "general"
         # for sessions saved before the agent_profile field was introduced.
         profile = session_data[:agent_profile].to_s

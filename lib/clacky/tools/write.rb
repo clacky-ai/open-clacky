@@ -30,6 +30,9 @@ module Clacky
         begin
           # Expand ~ to home directory, resolve relative paths against working_dir
           path = expand_path(path, working_dir: working_dir)
+          if (guard_error = write_guard_error(path))
+            return { error: guard_error }
+          end
 
           # Ensure parent directory exists
           dir = File.dirname(path)

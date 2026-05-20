@@ -44,6 +44,24 @@ module Clacky
         path
       end
 
+      # Optional hosted-mode write guard. When NOKNO_WRITE_ROOTS is set, file write
+      # tools may only mutate files under one of those roots. This keeps a hosted
+      # OpenClacky instance inside the current user's workspace and per-user
+      # .clacky data directory without changing local developer defaults.
+      private def write_guard_error(path)
+        roots = ENV.fetch("NOKNO_WRITE_ROOTS", "").split(File::PATH_SEPARATOR).map(&:strip).reject(&:empty?)
+        return nil if roots.empty?
+
+        expanded = File.expand_path(path)
+        allowed = roots.any? do |root|
+          expanded_root = File.expand_path(root)
+          expanded == expanded_root || expanded.start_with?("#{expanded_root}#{File::SEPARATOR}")
+        end
+        return nil if allowed
+
+        "Write denied by NOKNO_WRITE_ROOTS: #{expanded}"
+      end
+
       # Format tool call for display - can be overridden by subclasses
       # @param args [Hash] The arguments passed to the tool
       # @return [String] Formatted call description (e.g., "Read(file.rb)")

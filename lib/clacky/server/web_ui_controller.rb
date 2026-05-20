@@ -17,10 +17,12 @@ module Clacky
 
       attr_reader :session_id
 
-      def initialize(session_id, broadcaster)
+      def initialize(session_id, broadcaster, show_tool_trace: true, show_token_usage: true)
         @session_id  = session_id
         @broadcaster = broadcaster   # callable: broadcaster.call(session_id, event_hash)
         @mutex       = Mutex.new
+        @show_tool_trace = show_tool_trace
+        @show_token_usage = show_token_usage
 
         # Pending confirmation state: { id => ConditionVariable, result => value }
         @pending_confirmations = {}
@@ -87,14 +89,23 @@ module Clacky
       def show_assistant_message(content, files:)
         return if (content.nil? || content.to_s.strip.empty?) && files.empty?
 
+        visible_content = filter_thinking_tags(content.to_s)
+        return if visible_content.strip.empty? && files.empty?
+
         # Rewrite local image paths (file:// and bare absolute) to /api/local-image
         # proxy URLs only for the browser, which runs on http://localhost and is
         # blocked by browser security policy from loading file:// directly.
         # Channel subscribers receive the original content so they can deliver
         # local images as native attachments via send_file().
-        web_content = Clacky::Utils::FileProcessor.rewrite_local_image_urls(content.to_s)
+        web_content = Clacky::Utils::FileProcessor.rewrite_local_image_urls(visible_content)
         emit("assistant_message", content: web_content, files: files)
         forward_to_subscribers { |sub| sub.show_assistant_message(content, files: files) }
+      end
+
+      private def filter_thinking_tags(content)
+        content
+          .gsub(%r{<think(?:ing)?>[\s\S]*?</think(?:ing)?>}mi, "")
+          .strip
       end
 
       def show_tool_call(name, args)
@@ -124,19 +135,19 @@ module Clacky
         # when a browser tab re-subscribes after switching sessions.
         @live_tool_call = { name: name, args: args_data, summary: summary }
 
-        emit("tool_call", name: name, args: args_data, summary: summary)
+        emit("tool_call", name: name, args: args_data, summary: summary) if @show_tool_trace
         forward_to_subscribers { |sub| sub.show_tool_call(name, args_data) }
       end
 
       def show_tool_result(result)
         @live_tool_call = nil   # tool finished — no longer in-flight
-        emit("tool_result", result: result)
+        emit("tool_result", result: result) if @show_tool_trace
         forward_to_subscribers { |sub| sub.show_tool_result(result) }
       end
 
       def show_tool_error(error)
         error_msg = error.is_a?(Exception) ? error.message : error.to_s
-        emit("tool_error", error: error_msg)
+        emit("tool_error", error: error_msg) if @show_tool_trace
         forward_to_subscribers { |sub| sub.show_tool_error(error) }
       end
 
@@ -171,7 +182,7 @@ module Clacky
       end
 
       def show_token_usage(token_data)
-        emit("token_usage", **token_data)
+        emit("token_usage", **token_data) if @show_token_usage
         # Token usage is internal detail — intentionally not forwarded
       end
 
@@ -272,7 +283,7 @@ module Clacky
         return if lines.nil? || lines.empty?
         @live_stdout_buffer ||= []
         @live_stdout_buffer.concat(lines)
-        emit("tool_stdout", lines: lines)
+        emit("tool_stdout", lines: lines) if @show_tool_trace
         # Not forwarded to IM subscribers — too noisy
       end
 
@@ -307,7 +318,7 @@ module Clacky
         )
 
         buf = @live_stdout_buffer
-        emit("tool_stdout", lines: buf) if buf && !buf.empty?
+        emit("tool_stdout", lines: buf) if @show_tool_trace && buf && !buf.empty?
       end
 
       # === State updates ===
