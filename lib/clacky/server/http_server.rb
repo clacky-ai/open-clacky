@@ -610,13 +610,26 @@ module Clacky
 
       # POST /api/browser/configure
       # Called by browser-setup skill to write browser.yml and hot-reload the daemon.
-      # Body: { chrome_version: "146" }
+      # Body: { chrome_version: "146", wsl_browser_mode: "windows", chrome_port: 9223, auto_launch: true }
       def api_browser_configure(req, res)
         body          = JSON.parse(req.body.to_s) rescue {}
         chrome_version = body["chrome_version"].to_s.strip
         return json_response(res, 422, { ok: false, error: "chrome_version is required" }) if chrome_version.empty?
 
-        @browser_manager.configure(chrome_version: chrome_version)
+        wsl_browser_mode = body["wsl_browser_mode"].to_s.strip
+        wsl_browser_mode = nil if wsl_browser_mode.empty?
+
+        chrome_port = body["chrome_port"]&.to_i
+        chrome_port = nil if chrome_port && chrome_port <= 0
+
+        auto_launch = body.key?("auto_launch") ? body["auto_launch"] : nil
+
+        @browser_manager.configure(
+          chrome_version: chrome_version,
+          wsl_browser_mode: wsl_browser_mode,
+          chrome_port: chrome_port,
+          auto_launch: auto_launch
+        )
         json_response(res, 200, { ok: true })
       rescue StandardError => e
         json_response(res, 500, { ok: false, error: e.message })
