@@ -1,7 +1,5 @@
 # frozen_string_literal: true
 
-warn "[LOAD-PROBE] http_server.rb loaded from #{__FILE__} (pid=#{Process.pid})"
-
 require "webrick"
 require "websocket"
 require "socket"
@@ -240,7 +238,6 @@ module Clacky
         # before this worker exits — otherwise it becomes an orphan and holds port 7070.
         shutdown_once = false
         shutdown_proc = proc do
-          Clacky::Logger.info("[HttpServer PID=#{Process.pid}] shutdown_proc ENTER (already_run=#{shutdown_once})")
           next if shutdown_once
           shutdown_once = true
           Thread.new do
@@ -253,34 +250,22 @@ module Clacky
           # it — that would propagate to every process sharing the underlying
           # kernel socket (Master + new worker), breaking subsequent accept()
           # on Linux. macOS's BSD stack tolerates this; Linux does not.
-          begin
-            ls_before = server.listeners.map { |s| (s.fileno rescue -1) }
-            inh_fd = @inherited_socket&.fileno
-            inh_in_listeners = @inherited_socket && server.listeners.include?(@inherited_socket)
-            Clacky::Logger.info("[HttpServer PID=#{Process.pid}] pre-detach listeners=#{ls_before.inspect} inherited_fd=#{inh_fd.inspect} include?=#{inh_in_listeners.inspect} inherited_obj_id=#{@inherited_socket&.object_id}")
-          rescue => e
-            Clacky::Logger.warn("[HttpServer PID=#{Process.pid}] pre-detach inspect failed: #{e.class}: #{e.message}")
-          end
           if @inherited_socket && server.listeners.include?(@inherited_socket)
             server.listeners.delete(@inherited_socket)
-            Clacky::Logger.info("[HttpServer PID=#{Process.pid}] detached inherited socket fd=#{@inherited_socket.fileno} before shutdown listeners_now=#{server.listeners.map { |s| s.fileno rescue -1 }.inspect}")
-          else
-            Clacky::Logger.warn("[HttpServer PID=#{Process.pid}] DETACH SKIPPED — include? returned false; cleanup_listener will SHUT_RDWR our shared fd")
+            Clacky::Logger.info("[HttpServer PID=#{Process.pid}] detached inherited socket fd=#{@inherited_socket.fileno} before shutdown")
           end
           t1 = Thread.new { @channel_manager.stop rescue nil }
           t2 = Thread.new { Clacky::BrowserManager.instance.stop rescue nil }
           t1.join(1.5)
           t2.join(1.5)
-          Clacky::Logger.info("[HttpServer PID=#{Process.pid}] calling server.shutdown")
           server.shutdown rescue nil
-          Clacky::Logger.info("[HttpServer PID=#{Process.pid}] server.shutdown returned")
         end
         trap("INT")  { shutdown_proc.call }
         trap("TERM") { shutdown_proc.call }
 
         if @inherited_socket
           server.listeners << @inherited_socket
-          Clacky::Logger.info("[HttpServer PID=#{Process.pid}] injected inherited fd=#{@inherited_socket.fileno} obj_id=#{@inherited_socket.object_id} listeners=#{server.listeners.map(&:fileno).inspect}")
+          Clacky::Logger.info("[HttpServer PID=#{Process.pid}] injected inherited fd=#{@inherited_socket.fileno} listeners=#{server.listeners.map(&:fileno).inspect}")
         else
           Clacky::Logger.info("[HttpServer PID=#{Process.pid}] standalone, WEBrick listeners=#{server.listeners.map(&:fileno).inspect}")
         end
@@ -340,9 +325,7 @@ module Clacky
         # Start browser MCP daemon if browser.yml is configured (non-blocking)
         @browser_manager.start
 
-        Clacky::Logger.info("[HttpServer PID=#{Process.pid}] entering server.start (accept loop)")
         server.start
-        Clacky::Logger.info("[HttpServer PID=#{Process.pid}] server.start returned")
       end
 
 
