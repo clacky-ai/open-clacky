@@ -965,7 +965,7 @@ module Clacky
       # ── Security gate ──────────────────────────────────────────────────────
       # Binding to 0.0.0.0 exposes the server to the public network.
       # Refuse to start unless CLACKY_ACCESS_KEY env var is set.
-      if options[:host] == "0.0.0.0" && ENV.fetch("CLACKY_ACCESS_KEY", "").strip.empty?
+      if options[:host] == "0.0.0.0" && !ENV.key?("CLACKY_ACCESS_KEY")
         puts <<~MSG
           ╔══════════════════════════════════════════════════════════════╗
           ║  ⚠️  Security Warning: Refusing to start                      ║
