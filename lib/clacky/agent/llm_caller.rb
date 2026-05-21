@@ -755,11 +755,16 @@ module Clacky
       # plumbing entirely. Callback throttles UI updates to avoid flooding the
       # progress handle on fast streams.
       private def build_progress_on_chunk
-        return nil unless @ui
-
+        # Always return a callback so cooperative cancellation can fire even
+        # when no UI is attached. The lambda raises AgentInterrupted on the
+        # next streamed chunk if the agent has been asked to cancel — this
+        # short-circuits cases where Thread#raise delivery is delayed by a
+        # blocking socket read between chunks.
         last_emit_at = 0.0
         min_interval = 0.25
         ->(input_tokens:, output_tokens:) {
+          raise Clacky::AgentInterrupted, "Cancelled" if cancelled?
+          return unless @ui
           now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
           return if now - last_emit_at < min_interval && output_tokens > 0
           last_emit_at = now

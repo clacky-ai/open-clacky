@@ -1064,6 +1064,22 @@ module Clacky
       !@start_time.nil?
     end
 
+    # Cooperative cancellation signal.
+    #
+    # Set by interrupt_all_agents (worker shutdown) BEFORE Thread#raise, so that
+    # streaming HTTP callbacks (build_progress_on_chunk) can short-circuit on
+    # their next invocation — useful when Thread#raise delivery is delayed by
+    # a blocking syscall but on_data chunks are still being received.
+    #
+    # Boolean read/write under the GVL is atomic in MRI, so no mutex needed.
+    def cancel!
+      @cancelled = true
+    end
+
+    def cancelled?
+      @cancelled == true
+    end
+
     private def build_result(status = :success, error: nil)
       task_iterations = @iterations - (@task_start_iterations || 0)
       task_cost = @total_cost - (@task_start_cost || 0)

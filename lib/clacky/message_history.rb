@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "monitor"
+
 module Clacky
   # MessageHistory wraps the conversation message list and exposes
   # business-meaningful operations instead of raw array manipulation.
@@ -17,6 +19,10 @@ module Clacky
 
     def initialize(messages = [])
       @messages = messages.dup
+      # Re-entrant lock: many public methods call private helpers that also
+      # touch @messages (e.g. append → drop_dangling_tool_calls! → pending_tool_calls?).
+      # A plain Mutex would deadlock; Monitor allows the same thread to re-acquire.
+      @mutex = Monitor.new
     end
 
     # ─────────────────────────────────────────────
@@ -31,10 +37,12 @@ module Clacky
     # when a previous task ended before observe() could append tool results
     # (e.g. subagent crash, interrupt, or error).
     def append(message)
-      if message[:role] == "user"
-        drop_dangling_tool_calls!
+      @mutex.synchronize do
+        if message[:role] == "user"
+          drop_dangling_tool_calls!
+        end
+        @messages << deep_sanitize_utf8(message)
       end
-      @messages << deep_sanitize_utf8(message)
       self
     end
 
@@ -42,24 +50,28 @@ module Clacky
     # Used by session_serializer#refresh_system_prompt.
     def replace_system_prompt(content, **extra)
       msg = { role: "system", content: content }.merge(extra)
-      idx = @messages.index { |m| m[:role] == "system" }
-      if idx
-        @messages[idx] = msg
-      else
-        @messages.unshift(msg)
+      @mutex.synchronize do
+        idx = @messages.index { |m| m[:role] == "system" }
+        if idx
+          @messages[idx] = msg
+        else
+          @messages.unshift(msg)
+        end
       end
       self
     end
 
     # Replace the entire message list (used by compression rebuild).
     def replace_all(new_messages)
-      @messages = new_messages.map { |m| deep_sanitize_utf8(m) }
+      @mutex.synchronize do
+        @messages = new_messages.map { |m| deep_sanitize_utf8(m) }
+      end
       self
     end
 
     # Remove and return the last message.
     def pop_last
-      @messages.pop
+      @mutex.synchronize { @messages.pop }
     end
 
     # Remove all messages matching the block in-place.
@@ -67,21 +79,23 @@ module Clacky
     # strip transient/system-injected messages out of the persisted
     # history (e.g. compaction, rollback on 400 errors).
     def delete_where(&block)
-      @messages.reject!(&block)
+      @mutex.synchronize { @messages.reject!(&block) }
       self
     end
 
     # Mutate the last message matching the predicate lambda in-place.
     # Used by execute_skill_with_subagent to update instruction messages.
     def mutate_last_matching(predicate, &block)
-      msg = @messages.reverse.find { |m| predicate.call(m) }
-      block.call(msg) if msg
+      @mutex.synchronize do
+        msg = @messages.reverse.find { |m| predicate.call(m) }
+        block.call(msg) if msg
+      end
       self
     end
 
     # Remove all messages from index onward (used by restore_session on error).
     def truncate_from(index)
-      @messages = @messages[0...index]
+      @mutex.synchronize { @messages = @messages[0...index] }
       self
     end
 
@@ -89,10 +103,12 @@ module Clacky
     # Removes the message and anything appended after it.
     # Used to undo a failed speculative append (e.g. compression message that errored).
     def rollback_before(message)
-      idx = @messages.index { |m| m.equal?(message) }
-      return self unless idx
+      @mutex.synchronize do
+        idx = @messages.index { |m| m.equal?(message) }
+        next unless idx
 
-      @messages = @messages[0...idx]
+        @messages = @messages[0...idx]
+      end
       self
     end
 
@@ -105,55 +121,60 @@ module Clacky
     # before the system prompt has been built (which would cause the
     # guard in run() to skip building it altogether).
     def has_system_prompt?
-      @messages.any? { |m| m[:role] == "system" }
+      @mutex.synchronize { @messages.any? { |m| m[:role] == "system" } }
     end
 
     # True when the last assistant message has tool_calls but no
     # tool_result has been appended yet (would cause a 400 from the API).
     def pending_tool_calls?
-      return false if @messages.empty?
+      @mutex.synchronize do
+        next false if @messages.empty?
 
-      last = @messages.last
-      return false unless last[:role] == "assistant" && last[:tool_calls]&.any?
+        last = @messages.last
+        next false unless last[:role] == "assistant" && last[:tool_calls]&.any?
 
-      # Check that there is no tool result message after this assistant message
-      last_assistant_idx = @messages.rindex { |m| m == last }
-      @messages[(last_assistant_idx + 1)..].none? { |m| m[:role] == "tool" || m[:tool_results] }
+        last_assistant_idx = @messages.rindex { |m| m == last }
+        @messages[(last_assistant_idx + 1)..].none? { |m| m[:role] == "tool" || m[:tool_results] }
+      end
     end
 
     # Return the session_date value from the most recent session_context message.
     # Used by inject_session_context_if_needed to avoid re-injecting on the same date.
     def last_session_context_date
-      msg = @messages.reverse.find { |m| m[:session_context] }
-      msg&.dig(:session_date)
+      @mutex.synchronize do
+        msg = @messages.reverse.find { |m| m[:session_context] }
+        msg&.dig(:session_date)
+      end
     end
 
     # Return the chunk_count from the most recently injected chunk index message.
     # Used by inject_chunk_index_if_needed to avoid re-injecting when nothing changed.
     def last_injected_chunk_count
-      msg = @messages.reverse.find { |m| m[:chunk_index] }
-      msg&.dig(:chunk_count) || 0
+      @mutex.synchronize do
+        msg = @messages.reverse.find { |m| m[:chunk_index] }
+        msg&.dig(:chunk_count) || 0
+      end
     end
 
     # Return only real (non-system-injected) user messages.
     def real_user_messages
-      @messages.select { |m| m[:role] == "user" && !m[:system_injected] }
+      @mutex.synchronize { @messages.select { |m| m[:role] == "user" && !m[:system_injected] } }
     end
 
     # Return the index of the last real (non-system-injected) user message.
     # Used by restore_session to trim back to a clean state on error.
     def last_real_user_index
-      @messages.rindex { |m| m[:role] == "user" && !m[:system_injected] }
+      @mutex.synchronize { @messages.rindex { |m| m[:role] == "user" && !m[:system_injected] } }
     end
 
     # Return the message with :subagent_instructions set.
     def subagent_instruction_message
-      @messages.find { |m| m[:subagent_instructions] }
+      @mutex.synchronize { @messages.find { |m| m[:subagent_instructions] } }
     end
 
     # Return all messages where task_id <= given id (Time Machine support).
     def for_task(task_id)
-      @messages.select { |m| !m[:task_id] || m[:task_id] <= task_id }
+      @mutex.synchronize { @messages.select { |m| !m[:task_id] || m[:task_id] <= task_id } }
     end
 
     # ─────────────────────────────────────────────
@@ -161,18 +182,18 @@ module Clacky
     # ─────────────────────────────────────────────
 
     def size
-      @messages.size
+      @mutex.synchronize { @messages.size }
     end
 
     def empty?
-      @messages.empty?
+      @mutex.synchronize { @messages.empty? }
     end
 
     # Estimate total token count for all messages.
     # Uses the ~4 chars/token heuristic (works well for English/code).
     # Handles string content, array content blocks, and tool_calls.
     def estimate_tokens
-      @messages.sum { |m| estimate_message_tokens(m) }
+      @mutex.synchronize { @messages.sum { |m| estimate_message_tokens(m) } }
     end
 
     # ─────────────────────────────────────────────
@@ -193,7 +214,7 @@ module Clacky
     #   thinking inline (e.g. MiniMax: <think>...</think> in content), so
     #   this bypass lets us recover on the retry without a server restart.
     def to_api(force_reasoning_content_pad: false)
-      msgs = @messages.map { |m| strip_for_api(m) }
+      msgs = @mutex.synchronize { @messages.map { |m| strip_for_api(m) } }
       ensure_reasoning_content_consistency(msgs, force: force_reasoning_content_pad)
     end
 
@@ -202,7 +223,7 @@ module Clacky
     # current session but must not be persisted to session.json.
     # For serialization, compression, and cloning.
     def to_a
-      @messages.reject { |m| m[:transient] }.dup
+      @mutex.synchronize { @messages.reject { |m| m[:transient] }.dup }
     end
 
     # Estimate token count for a single message (role overhead + content).
