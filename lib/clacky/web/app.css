@@ -1840,12 +1840,17 @@ body {
   border-radius: 0 4px 4px 0;
 }
 .msg-assistant blockquote p { margin: 0; }
+.msg-assistant .table-wrapper {
+  overflow-x: auto;
+  margin: 0.5em 0;
+  border-radius: 6px;
+  border: 1px solid var(--color-border-primary);
+}
 .msg-assistant table {
   border-collapse: collapse;
-  margin: 0.5em 0;
   font-size: 0.9em;
-  width: auto;
-  max-width: 100%;
+  width: 100%;
+  margin: 0;
 }
 .msg-assistant th, .msg-assistant td {
   border: 1px solid var(--color-border-primary);
@@ -1994,6 +1999,16 @@ body {
 .msg-success   { color: var(--color-success); align-self: flex-start; font-size: 0.8125rem; }
 .tool-name     { color: var(--color-warning); font-weight: 600; }
 .progress-msg  { color: var(--color-accent-primary); font-size: 0.75rem; align-self: center; }
+.progress-msg::after {
+  content: "▍";
+  display: inline-block;
+  animation: blink-cursor 0.8s steps(2) infinite;
+  margin-left: 2px;
+}
+@keyframes blink-cursor {
+  0%   { opacity: 1; }
+  100% { opacity: 0; }
+}
 
 /* ── Token usage line ────────────────────────────────────────────────────── */
 .token-usage-line {
