@@ -1766,6 +1766,60 @@ body {
   font-size: inherit;
   border-radius: 0;
 }
+
+/* ── Code block with header (syntax highlight + copy) ─────────────────── */
+.msg-assistant .code-block {
+  position: relative;
+  margin: 0.5em 0;
+  border: 1px solid var(--color-border-primary);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.msg-assistant .code-block pre {
+  margin: 0;
+  border: none;
+  border-radius: 0;
+  padding: 12px 14px;
+}
+.msg-assistant .code-block pre code {
+  padding: 0;
+}
+.code-block-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 12px;
+  background: var(--color-bg-tertiary);
+  border-bottom: 1px solid var(--color-border-primary);
+  min-height: 28px;
+}
+.code-block-lang {
+  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font-size: 0.75em;
+  color: var(--color-text-tertiary);
+  text-transform: lowercase;
+  user-select: none;
+}
+.code-block-copy {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.code-block-copy:hover {
+  background: var(--color-bg-secondary);
+  color: var(--color-text-primary);
+}
+.code-block-copy .code-copy-icon-check { display: none; }
+.code-block-copy.is-copied .code-copy-icon { display: none; }
+.code-block-copy.is-copied .code-copy-icon-check { display: block; color: var(--color-success, #22c55e); }
 .msg-assistant blockquote {
   border-left: 3px solid var(--color-accent-primary);
   margin: 0.5em 0;
