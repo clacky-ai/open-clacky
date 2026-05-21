@@ -381,15 +381,19 @@ module Clacky
         render_all
       end
 
-      def cleanup_screen
+      def cleanup_screen(clear_screen: false)
         @render_mutex.synchronize do
-          fixed_start = fixed_area_start_row
-          (fixed_start...screen.height).each do |row|
-            screen.move_cursor(row, 0)
-            screen.clear_line
+          if clear_screen
+            screen.clear_screen(mode: :reset)
+          else
+            fixed_start = fixed_area_start_row
+            (fixed_start...screen.height).each do |row|
+              screen.move_cursor(row, 0)
+              screen.clear_line
+            end
+            screen.move_cursor([@output_row, 0].max, 0)
+            print "\r"
           end
-          screen.move_cursor([@output_row, 0].max, 0)
-          print "\r"
           screen.show_cursor
           screen.flush
         end

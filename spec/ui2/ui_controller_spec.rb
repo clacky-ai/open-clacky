@@ -3,6 +3,18 @@
 require 'spec_helper'
 
 RSpec.describe Clacky::UI2::UIController do
+  describe '#stop' do
+    it 'passes clear_screen through to layout cleanup' do
+      controller = described_class.new
+      layout = instance_double(Clacky::UI2::LayoutManager)
+      controller.instance_variable_set(:@layout, layout)
+
+      expect(layout).to receive(:cleanup_screen).with(clear_screen: true)
+
+      controller.stop(clear_screen: true)
+    end
+  end
+
   describe '#filter_thinking_tags' do
     let(:controller) { described_class.new }
 

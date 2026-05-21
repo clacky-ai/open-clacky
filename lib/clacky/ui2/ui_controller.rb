@@ -150,9 +150,9 @@ module Clacky
       end
 
       # Stop the UI controller
-      def stop
+      def stop(clear_screen: false)
         @running = false
-        @layout.cleanup_screen
+        @layout.cleanup_screen(clear_screen: clear_screen)
       end
 
       # Clear the input area

@@ -132,7 +132,7 @@ RSpec.describe Clacky::CLI, "UI2 slash commands" do
   describe "/exit" do
     it "stops the UI and exits" do
       allow(ui_controller).to receive(:stop)
-      expect(ui_controller).to receive(:stop)
+      expect(ui_controller).to receive(:stop).with(clear_screen: true)
       expect { send_input("/exit") }.to raise_error(SystemExit) { |e| expect(e.status).to eq(0) }
     end
   end
@@ -140,7 +140,7 @@ RSpec.describe Clacky::CLI, "UI2 slash commands" do
   describe "/quit" do
     it "stops the UI and exits (alias for /exit)" do
       allow(ui_controller).to receive(:stop)
-      expect(ui_controller).to receive(:stop)
+      expect(ui_controller).to receive(:stop).with(clear_screen: true)
       expect { send_input("/quit") }.to raise_error(SystemExit) { |e| expect(e.status).to eq(0) }
     end
   end
