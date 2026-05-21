@@ -194,4 +194,39 @@ RSpec.describe Clacky::Server::SessionRegistry do
       end
     end
   end
+
+  describe "#each_live_agent" do
+    it "yields [id, agent, thread] only for sessions with an agent attached" do
+      registry = described_class.new(agent_config: default_config)
+      agent_a = double("agent_a")
+      thread_a = double("thread_a")
+      agent_b = double("agent_b")
+
+      registry.create(session_id: "with_agent_a")
+      registry.with_session("with_agent_a") { |s| s[:agent] = agent_a; s[:thread] = thread_a }
+
+      registry.create(session_id: "with_agent_b")
+      registry.with_session("with_agent_b") { |s| s[:agent] = agent_b }
+
+      registry.create(session_id: "no_agent")  # agent stays nil
+
+      seen = []
+      registry.each_live_agent { |id, agent, thread| seen << [id, agent, thread] }
+
+      expect(seen).to contain_exactly(
+        ["with_agent_a", agent_a, thread_a],
+        ["with_agent_b", agent_b, nil]
+      )
+    end
+
+    it "yields nothing when no sessions have agents" do
+      registry = described_class.new(agent_config: default_config)
+      registry.create(session_id: "empty")
+
+      seen = []
+      registry.each_live_agent { |id, agent, thread| seen << [id, agent, thread] }
+
+      expect(seen).to be_empty
+    end
+  end
 end

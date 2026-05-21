@@ -980,4 +980,153 @@ RSpec.describe Clacky::Server::HttpServer do
       expect(result).not_to eq("short")
     end
   end
+
+  # ── interrupt_all_agents (private) ───────────────────────────────────────
+  #
+  # Worker shutdown path. The `:interrupted` rescue branch in run_agent_task
+  # (http_server.rb) is what writes session JSON on a clean Thread#raise. When
+  # the agent thread refuses to die in 2s, interrupt_all_agents must fall back
+  # to a manual save so the in-flight @history isn't lost.
+
+  describe "#interrupt_all_agents (private)" do
+    let(:sessions_dir) { Dir.mktmpdir("clacky_interrupt_spec_sessions") }
+
+    after { FileUtils.rm_rf(sessions_dir) }
+
+    def build_server
+      described_class.new(
+        agent_config:   agent_config,
+        client_factory: -> { double("client") },
+        sessions_dir:   sessions_dir
+      )
+    end
+
+    # Stand-in for Clacky::Agent. We only need the surface that
+    # interrupt_all_agents touches: cancel! and to_session_data.
+    def fake_agent(session_id)
+      a = double("Agent[#{session_id}]", session_id: session_id)
+      cancelled_ref = [false]
+      allow(a).to receive(:cancel!) { cancelled_ref[0] = true }
+      allow(a).to receive(:cancelled?) { cancelled_ref[0] }
+      allow(a).to receive(:to_session_data) do |status: nil, error_message: nil|
+        { session_id: session_id, created_at: Time.now.iso8601, name: "T", last_status: status&.to_s }
+      end
+      a
+    end
+
+    # Spawn an agent-like thread that mimics run_agent_task's rescue block.
+    # Crucially, waits until the thread is sleeping inside the begin scope
+    # before returning — otherwise Thread#raise can fire before the rescue
+    # handler is established, and the thread dies with an unhandled exception.
+    def spawn_interruptible_agent_thread(&work)
+      ready = Queue.new
+      t = Thread.new do
+        Thread.current.report_on_exception = false
+        begin
+          ready << :in_rescue_scope
+          (work || -> { sleep 5 }).call
+        rescue Clacky::AgentInterrupted
+          :exited_cleanly
+        end
+      end
+      ready.pop
+      # Spin until the thread is actually blocked in sleep (not just past `ready << ...`).
+      sleep 0.005 until t.status == "sleep"
+      t
+    end
+
+    # Spawn a thread that swallows Thread#raise so interrupt_all_agents'
+    # join(2) is forced to time out and exercise the manual-save fallback.
+    def spawn_uninterruptible_thread
+      ready = Queue.new
+      t = Thread.new do
+        Thread.current.report_on_exception = false
+        Thread.handle_interrupt(Exception => :never) do
+          ready << :in_handle_interrupt
+          sleep 10
+        end
+      end
+      ready.pop
+      sleep 0.005 until t.status == "sleep"
+      t
+    end
+
+    it "does not manual-save sessions whose threads exit within 2s" do
+      server   = build_server
+      registry = server.instance_variable_get(:@registry)
+      agent    = fake_agent("clean-1")
+
+      registry.create(session_id: "clean-1")
+      thread = spawn_interruptible_agent_thread
+      registry.with_session("clean-1") { |s| s[:agent] = agent; s[:thread] = thread }
+
+      expect(agent).not_to receive(:to_session_data)
+
+      server.send(:interrupt_all_agents)
+
+      # Thread should be gone shortly after the raise.
+      expect(thread.join(1)).to eq(thread)
+    end
+
+    it "falls back to manual save when a thread refuses to die in 2s" do
+      server   = build_server
+      registry = server.instance_variable_get(:@registry)
+      sm       = server.instance_variable_get(:@session_manager)
+      agent    = fake_agent("stuck-1")
+
+      registry.create(session_id: "stuck-1")
+      stuck_thread = spawn_uninterruptible_thread
+      registry.with_session("stuck-1") { |s| s[:agent] = agent; s[:thread] = stuck_thread }
+
+      expect(sm).to receive(:save).with(hash_including(session_id: "stuck-1")).once
+
+      server.send(:interrupt_all_agents)
+
+      stuck_thread.kill
+      stuck_thread.join
+    end
+
+    it "sets the agent cancel flag before raising on the thread" do
+      server   = build_server
+      registry = server.instance_variable_get(:@registry)
+      agent    = fake_agent("cancel-1")
+
+      registry.create(session_id: "cancel-1")
+      thread = spawn_interruptible_agent_thread
+      registry.with_session("cancel-1") { |s| s[:agent] = agent; s[:thread] = thread }
+
+      server.send(:interrupt_all_agents)
+
+      expect(agent).to have_received(:cancel!)
+      thread.join(1)
+    end
+
+    it "waits in parallel — total wall time is bounded by per-thread timeout, not N × timeout" do
+      server   = build_server
+      registry = server.instance_variable_get(:@registry)
+      sm       = server.instance_variable_get(:@session_manager)
+
+      # Three unresponsive threads — serial would take ≥ 6s, parallel ≈ 2s.
+      stuck_threads = []
+      3.times do |i|
+        sid   = "stuck-#{i}"
+        agent = fake_agent(sid)
+        registry.create(session_id: sid)
+        t = spawn_uninterruptible_thread
+        registry.with_session(sid) { |s| s[:agent] = agent; s[:thread] = t }
+        stuck_threads << t
+      end
+
+      allow(sm).to receive(:save)
+
+      started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      server.send(:interrupt_all_agents)
+      elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
+
+      expect(elapsed).to be < 3.5
+
+      stuck_threads.each(&:kill)
+      stuck_threads.each(&:join)
+    end
+  end
 end

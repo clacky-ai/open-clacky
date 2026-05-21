@@ -148,14 +148,15 @@ module Clacky
         - 将大目标拆解为可执行的小步骤
       MD
 
-      def initialize(host: "127.0.0.1", port: 7070, agent_config:, client_factory:, brand_test: false, sessions_dir: nil, socket: nil, master_pid: nil)
+      def initialize(host: "127.0.0.1", port: 7070, agent_config:, client_factory:, brand_test: false, sessions_dir: nil, socket: nil, master_pid: nil, previous_worker_pid: nil)
         @host           = host
         @port           = port
         @agent_config   = agent_config
         @client_factory = client_factory  # callable: -> { Clacky::Client.new(...) }
         @brand_test     = brand_test      # when true, skip remote API calls for license activation
-        @inherited_socket = socket        # TCPServer socket passed from Master (nil = standalone mode)
-        @master_pid       = master_pid    # Master PID so we can send USR1 on upgrade/restart
+        @inherited_socket  = socket        # TCPServer socket passed from Master (nil = standalone mode)
+        @master_pid        = master_pid    # Master PID so we can send USR1 on upgrade/restart
+        @previous_worker_pid = previous_worker_pid
         # Capture the absolute path of the entry script and original ARGV at startup,
         # so api_restart can re-exec the correct binary even if cwd changes later.
         @restart_script = File.expand_path($0)
@@ -241,12 +242,12 @@ module Clacky
           next if shutdown_once
           shutdown_once = true
           Thread.new do
-            sleep 2
+            sleep 10
             Clacky::Logger.warn("[HttpServer] Forced exit after graceful shutdown timeout.")
             exit!(0)
           end
-          # Detach the inherited (shared) listen socket BEFORE shutdown so that
-          # WEBrick's cleanup_listener does not call shutdown(SHUT_RDWR)+close on
+          # Detach the inherited (shared) listen socket BEFORE WEBrick.shutdown
+          # so that cleanup_listener does not call shutdown(SHUT_RDWR)+close on
           # it — that would propagate to every process sharing the underlying
           # kernel socket (Master + new worker), breaking subsequent accept()
           # on Linux. macOS's BSD stack tolerates this; Linux does not.
@@ -254,6 +255,7 @@ module Clacky
             server.listeners.delete(@inherited_socket)
             Clacky::Logger.info("[HttpServer PID=#{Process.pid}] detached inherited socket fd=#{@inherited_socket.fileno} before shutdown")
           end
+          interrupt_all_agents
           t1 = Thread.new { @channel_manager.stop rescue nil }
           t2 = Thread.new { Clacky::BrowserManager.instance.stop rescue nil }
           t1.join(1.5)
@@ -311,6 +313,10 @@ module Clacky
             res["Pragma"]        = "no-cache"
           end
         end
+
+        # If we're replacing a previous worker, wait for it to exit so it can
+        # persist its in-memory sessions to disk before we load from disk.
+        wait_for_previous_worker
 
         # Auto-create a default session on startup
         create_default_session
@@ -3549,6 +3555,90 @@ module Clacky
         return unless agent
 
         run_agent_task(session_id, agent) { agent.run(prompt) }
+      end
+
+      # Block until the previous worker process exits (if any), so its
+      # shutdown_proc has time to persist in-memory sessions to disk before
+      # we restore them.
+      private def wait_for_previous_worker
+        return unless @previous_worker_pid && @previous_worker_pid > 0
+
+        Clacky::Logger.info("[HttpServer PID=#{Process.pid}] waiting for previous worker PID=#{@previous_worker_pid} to exit...")
+        deadline = Time.now + 10
+        loop do
+          begin
+            Process.kill(0, @previous_worker_pid)
+          rescue Errno::ESRCH
+            Clacky::Logger.info("[HttpServer PID=#{Process.pid}] previous worker PID=#{@previous_worker_pid} exited, proceeding")
+            return
+          end
+          if Time.now > deadline
+            Clacky::Logger.warn("[HttpServer PID=#{Process.pid}] previous worker PID=#{@previous_worker_pid} still alive after 10s, proceeding anyway")
+            return
+          end
+          sleep 0.1
+        end
+      end
+
+      # Interrupt every running agent thread and persist its session state.
+      # Each thread's AgentInterrupted rescue block already calls save; we
+      # join to let it finish. For threads that don't exit in time, we save
+      # their state directly as a safety net.
+      private def interrupt_all_agents
+        return unless @registry && @session_manager
+
+        threads = []
+        @registry.each_live_agent do |id, agent, thread|
+          next unless thread&.alive?
+          # Set the cooperative cancel flag BEFORE Thread#raise. If the agent
+          # is mid-stream, its on_chunk callback will see the flag on the next
+          # chunk and raise AgentInterrupted itself — covering cases where
+          # Thread#raise delivery is delayed by a blocking syscall.
+          agent.cancel! if agent.respond_to?(:cancel!)
+          begin
+            thread.raise(Clacky::AgentInterrupted, "Worker shutting down")
+            Clacky::Logger.info("[shutdown] interrupted session=#{id}")
+          rescue => e
+            Clacky::Logger.error("[shutdown] interrupt failed for session=#{id}: #{e.message}")
+          end
+          threads << [id, agent, thread]
+        end
+
+        # Wait for each agent thread in parallel so total wall time is bounded
+        # by the per-thread timeout (~2s), not 2s × N. Each waiter either
+        # observes a clean exit (the AgentInterrupted rescue block at
+        # run_agent_task already persisted) or falls back to a manual save.
+        saved_mutex = Mutex.new
+        saved = 0
+        waiters = threads.map do |id, agent, thread|
+          Thread.new do
+            joined =
+              begin
+                thread.join(2)
+              rescue Exception => e
+                # Thread#join re-raises any exception that terminated the joined
+                # thread. The agent thread's run_agent_task rescue block normally
+                # absorbs AgentInterrupted, but defensively treat any propagated
+                # exception here as "thread exited" so the waiter itself doesn't
+                # die and prevent waiters.each(&:join) from completing.
+                Clacky::Logger.debug("[shutdown] session=#{id} join raised #{e.class}: #{e.message}")
+                thread
+              end
+            if joined
+              Clacky::Logger.info("[shutdown] session=#{id} thread exited cleanly")
+            else
+              Clacky::Logger.warn("[shutdown] session=#{id} thread did not exit in 2s, saving manually")
+              begin
+                @session_manager.save(agent.to_session_data(status: :interrupted))
+                saved_mutex.synchronize { saved += 1 }
+              rescue => e
+                Clacky::Logger.error("[shutdown] save failed for session=#{id}: #{e.message}")
+              end
+            end
+          end
+        end
+        waiters.each(&:join)
+        Clacky::Logger.info("[shutdown] interrupt_all_agents manual_saves=#{saved}")
       end
 
       # Run an agent task in a background thread, handling status updates,
