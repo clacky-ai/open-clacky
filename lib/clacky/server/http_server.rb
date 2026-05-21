@@ -407,7 +407,7 @@ module Clacky
         when ["GET",    "/api/channels"]          then api_list_channels(res)
         when ["POST",   "/api/tool/browser"]      then api_tool_browser(req, res)
         when ["POST",   "/api/upload"]            then api_upload_file(req, res)
-        when ["POST",   "/api/open-file"]         then api_open_file(req, res)
+        when ["POST",   "/api/file-action"]       then api_file_action(req, res)
         when ["GET",    "/api/local-image"]       then api_serve_local_image(req, res)
         when ["GET",    "/api/version"]           then api_get_version(res)
         when ["POST",   "/api/version/upgrade"]   then api_upgrade_version(req, res)
@@ -1552,12 +1552,16 @@ module Clacky
         json_response(res, 500, { ok: false, error: e.message })
       end
 
-      # POST /api/open-file
-      # Opens a local file or directory using the OS default handler.
-      # Used by the Web UI to handle file:// links — browsers block direct
-      # file:// navigation from http:// pages for security reasons.
-      def api_open_file(req, res)
-        path = parse_json_body(req)["path"]
+      # POST /api/file-action
+      # Unified file action endpoint — open locally or download.
+      # Body: { path: String, action: "open" | "download" }
+      #   open:     opens the file with the OS default handler (local deployments).
+      #   download: returns the file as a download (remote deployments).
+      def api_file_action(req, res)
+        body = parse_json_body(req)
+        path = body["path"]
+        action = body["action"] || "open"
+
         return json_response(res, 400, { error: "path is required" }) unless path && !path.empty?
 
         # Expand ~ to the user's home directory (e.g. "~/Desktop/file.pdf").
@@ -1570,11 +1574,31 @@ module Clacky
 
         return json_response(res, 404, { error: "file not found" }) unless File.exist?(linux_path)
 
-        result = Utils::EnvironmentDetector.open_file(linux_path)
-        return json_response(res, 501, { error: "unsupported OS" }) if result.nil?
-        json_response(res, 200, { ok: true })
+        case action
+        when "open"
+          result = Utils::EnvironmentDetector.open_file(linux_path)
+          return json_response(res, 501, { error: "unsupported OS" }) if result.nil?
+          json_response(res, 200, { ok: true })
+        when "download"
+          serve_file_download(res, linux_path)
+        else
+          json_response(res, 400, { error: "invalid action. Must be 'open' or 'download'" })
+        end
       rescue => e
         json_response(res, 500, { ok: false, error: e.message })
+      end
+
+      # Stream a file to the client as a download.
+      # Content-Type is always application/octet-stream — the browser determines
+      # file type and handling from the filename extension in Content-Disposition.
+      def serve_file_download(res, path)
+        filename = File.basename(path)
+
+        res.status                  = 200
+        res["Content-Type"]         = "application/octet-stream"
+        res["Content-Disposition"]  = "attachment; filename=\"#{filename}\""
+        res["Content-Length"]       = File.size(path).to_s
+        res.body = File.binread(path)
       end
 
       # GET /api/local-image?path=file:///path/to/image.png
