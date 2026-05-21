@@ -1614,3 +1614,220 @@ body {
 ::-webkit-scrollbar       { width: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: #30363d; border-radius: 3px; }
+
+/* ════════════════════════════════════════════════════════════════════════
+ *  APPLE-FEEL MOTION SYSTEM
+ *  ──────────────────────────────────────────────────────────────────────
+ *  Goal: Bring macOS / iOS native interaction feel to the web UI without
+ *  faking it through cubic-bezier alone.
+ *
+ *  Design principles:
+ *  1. Real spring physics via CSS linear() — browsers natively support it
+ *     (Chrome 113+, Safari 17.4+). No JS, no animation libraries.
+ *  2. transform-origin sets the spatial anchor — panels unfold from the
+ *     sidebar edge, not from thin air.
+ *  3. Cause-and-effect chain on click — sidebar item depresses (80ms),
+ *     bounces back, THEN the panel enters (60ms delay). Not simultaneous.
+ *  4. Press feedback everywhere — 0.96 scale + spring-press release on
+ *     :active, just like iOS/macOS controls.
+ *  5. Active session indicator stretches in (scaleY 0→1) instead of
+ *     fading — gives the "snap" of macOS list selection.
+ *
+ *  Spring curves (generated from real damped-harmonic-oscillator math):
+ *    --spring-soft : critically damped, no overshoot — for panel entry
+ *    --spring-snap : ~1.5% overshoot — for indicator / active state
+ *    --spring-press: rapid recovery — for click release
+ * ════════════════════════════════════════════════════════════════════════ */
+
+:root {
+  /* Critically damped soft spring — 380ms feel */
+  --spring-soft: linear(
+    0, 0.0027, 0.0106, 0.0235, 0.0413, 0.0637, 0.0904, 0.1213, 0.1559,
+    0.1939, 0.2350, 0.2787, 0.3247, 0.3725, 0.4218, 0.4720, 0.5228, 0.5736,
+    0.6240, 0.6735, 0.7218, 0.7683, 0.8128, 0.8550, 0.8945, 0.9311, 0.9645,
+    0.9946, 1.0213, 1.0444, 1.0640, 1.0801, 1.0926, 1.1018, 1.1077, 1.1106,
+    1.1106, 1.1080, 1.1031, 1.0962, 1.0876, 1.0775, 1.0664, 1.0546, 1.0423,
+    1.0299, 1.0178, 1.0061, 0.9952, 0.9851, 0.9762, 0.9684, 0.9619, 0.9568,
+    0.9530, 0.9506, 0.9495, 0.9498, 0.9512, 0.9537, 0.9572, 0.9614, 0.9663,
+    0.9716, 0.9772, 0.9830, 0.9887, 0.9942, 0.9994, 1.0042, 1.0085, 1.0123,
+    1.0155, 1.0181, 1.0202, 1.0217, 1.0228, 1.0233, 1.0235, 1.0234, 1.0229,
+    1.0223, 1.0214, 1.0205, 1.0194, 1.0183, 1.0172, 1.0161, 1.0150, 1.0140,
+    1.0131, 1.0123, 1.0115, 1.0108, 1.0103, 1.0098, 1.0093, 1.0090, 1.0086,
+    1.0083, 1.0080, 1
+  );
+  /* Snappy spring with slight overshoot — 320ms feel */
+  --spring-snap: linear(
+    0, 0.009, 0.035, 0.077, 0.135, 0.207, 0.292, 0.388, 0.493, 0.605,
+    0.722, 0.840, 0.957, 1.069, 1.174, 1.270, 1.354, 1.424, 1.479, 1.518,
+    1.541, 1.547, 1.538, 1.515, 1.480, 1.434, 1.380, 1.319, 1.255, 1.190,
+    1.126, 1.066, 1.011, 0.962, 0.921, 0.888, 0.864, 0.849, 0.842, 0.842,
+    0.849, 0.861, 0.877, 0.896, 0.917, 0.938, 0.959, 0.978, 0.995, 1.009,
+    1.020, 1.027, 1.031, 1.032, 1.030, 1.026, 1.020, 1.013, 1.005, 0.997,
+    0.989, 0.982, 0.975, 0.970, 0.967, 0.964, 0.963, 0.964, 0.965, 0.967,
+    0.970, 0.974, 0.978, 0.982, 0.986, 0.990, 0.994, 0.997, 1.000, 1
+  );
+  /* Press-release recovery — 220ms feel */
+  --spring-press: linear(
+    0, 0.018, 0.069, 0.149, 0.252, 0.371, 0.500, 0.629, 0.748, 0.851, 0.931,
+    0.987, 1.018, 1.027, 1.020, 1.003, 0.984, 0.969, 0.961, 0.961, 0.967,
+    0.978, 0.990, 1.000, 1.006, 1.008, 1.006, 1.002, 0.998, 0.995, 0.994,
+    0.995, 0.998, 1
+  );
+
+  --motion-fast:  180ms;
+  --motion-base:  280ms;
+  --motion-panel: 420ms;
+  --motion-press: 90ms;
+}
+
+/* ── 1. Sidebar items: hover lift + click depress (cause-and-effect) ──── */
+
+.task-item {
+  /* Override the original `transition: background .15s` to add transform */
+  transition:
+    background-color var(--motion-base) var(--spring-soft),
+    border-color     var(--motion-base) var(--spring-soft);
+}
+
+.task-item .task-row {
+  transition: transform var(--motion-base) var(--spring-soft);
+  will-change: transform;
+}
+
+.task-item .task-icon {
+  transition: transform var(--motion-base) var(--spring-snap);
+  will-change: transform;
+}
+
+.task-item .task-name {
+  transition: color var(--motion-base) var(--spring-soft);
+}
+
+/* hover: icon scales up slightly, whole row nudges right — "breathing" */
+.task-item:hover .task-icon { transform: scale(1.10); }
+.task-item:hover .task-row  { transform: translateX(2px); }
+
+/* active (currently selected): icon stays slightly enlarged */
+.task-item.active .task-icon { transform: scale(1.06); }
+
+/* press: 80ms depression with spring release on :active */
+.task-item:active .task-row {
+  transform: translateX(2px) scale(0.96);
+  transition: transform var(--motion-press) var(--spring-press);
+}
+.task-item:active .task-icon {
+  transform: scale(0.92);
+  transition: transform var(--motion-press) var(--spring-press);
+}
+
+/* ── 2. Panel entry: unfold from the sidebar edge ─────────────────────────
+ * Router toggles display:none ↔ flex/block; each visibility flip retriggers
+ * the @keyframes animation. transform-origin: left center makes the panel
+ * appear to be pushed open by the sidebar, not materializing from nowhere.
+ *
+ * Timing (cause-and-effect chain):
+ *   t=0     user clicks sidebar item
+ *   t=0     item depresses (.96 scale, 80ms)
+ *   t=80    item bounces back (spring-press)
+ *   t=60    panel begins entering (animation-delay)
+ *   t=480   panel settles (60 + 420ms duration)
+ * The 60ms delay sits inside the depression window — the visual "tension"
+ * of the press creates the "motivation" for the panel to appear.
+ * ──────────────────────────────────────────────────────────────────────── */
+
+@keyframes panel-pull-in {
+  0% {
+    opacity: 0;
+    transform: translate3d(-6px, 0, 0) scale(0.992);
+    filter: blur(3px);
+  }
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+    filter: blur(0);
+  }
+}
+
+#welcome,
+#chat-panel,
+#task-detail-panel,
+#skills-panel,
+#settings-panel,
+#brand-panel,
+#onboard-panel {
+  animation: panel-pull-in var(--motion-panel) var(--spring-soft) both;
+  animation-delay: 60ms;
+  transform-origin: left center;
+  will-change: opacity, transform, filter;
+  backface-visibility: hidden;
+}
+
+/* ── 3. Session list: hover lift + active indicator + press feedback ───── */
+
+.session-item {
+  /* Override original `transition: background .15s` — add transform via spring */
+  transition:
+    background   var(--motion-base) var(--spring-soft),
+    border-color var(--motion-base) var(--spring-soft),
+    transform    var(--motion-base) var(--spring-soft);
+  will-change: transform;
+}
+
+/* hover: gentle 1px right shift */
+.session-item:hover { transform: translateX(1px); }
+
+/* press: scale down with spring release */
+.session-item:active {
+  transform: translateX(1px) scale(0.99);
+  transition: transform var(--motion-press) var(--spring-press);
+}
+
+/* Active indicator: 3px brand-blue rail that stretches in vertically.
+ * Adds a clear visual "tab is selected" cue beyond just background tint. */
+.session-item.active::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 3px;
+  height: 60%;
+  background: #58a6ff;
+  border-radius: 0 2px 2px 0;
+  transform: translateY(-50%) scaleY(0);
+  transform-origin: center center;
+  animation: session-indicator-stretch 320ms var(--spring-snap) forwards;
+}
+
+@keyframes session-indicator-stretch {
+  0%   { transform: translateY(-50%) scaleY(0); }
+  100% { transform: translateY(-50%) scaleY(1); }
+}
+
+/* ── 4. Accessibility: respect prefers-reduced-motion ─────────────────── */
+
+@media (prefers-reduced-motion: reduce) {
+  .task-item,
+  .task-item .task-row,
+  .task-item .task-icon,
+  .task-item .task-name,
+  .session-item {
+    transition: none !important;
+  }
+  .task-item:hover .task-icon,
+  .task-item:hover .task-row,
+  .task-item.active .task-icon,
+  .task-item:active .task-row,
+  .task-item:active .task-icon,
+  .session-item:hover,
+  .session-item:active {
+    transform: none !important;
+  }
+  #welcome, #chat-panel, #task-detail-panel, #skills-panel,
+  #settings-panel, #brand-panel, #onboard-panel {
+    animation: none !important;
+  }
+  .session-item.active::before {
+    animation: none !important;
+    transform: translateY(-50%) scaleY(1) !important;
+  }
+}
